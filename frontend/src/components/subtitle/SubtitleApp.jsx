@@ -1176,6 +1176,9 @@ export default function SubtitleApp({ onBackToHome }) {
                 setResumeChunk(lastBatchIndex + 1);
                 setTotalChunks(totalExpectedChunks);
               }
+              if (data.fallback) {
+                setProgressDetail(`Batch ${data.chunk_index}: Transcribed via local Whisper fallback ✓`);
+              }
               // Append / Merge Batch Events Progressively in Real-Time!
               const newBatchEvents = data.events || [];
               accumulatedEvents = [...accumulatedEvents, ...newBatchEvents];
@@ -1206,7 +1209,7 @@ export default function SubtitleApp({ onBackToHome }) {
               });
             } else if (data.type === 'batch_error') {
               console.warn(`[Subtitle Studio] Batch ${data.chunk_index} notice:`, data.error);
-              setProgressDetail(`Batch ${data.chunk_index} had an issue: continuing to next batch...`);
+              setProgressDetail(`Batch ${data.chunk_index} notice: ${data.error ? String(data.error).slice(0, 70) : 'issue processing'}`);
             } else if (data.type === 'stream_error') {
               console.error(`[Subtitle Studio] Fatal stream error reported:`, data.error);
               throw new Error(`Server generation error: ${data.error}`);
@@ -1236,9 +1239,15 @@ export default function SubtitleApp({ onBackToHome }) {
               setTotalWarnings(res.total_warnings || 0);
               setCpsStats(res.cps_stats || null);
               setProgressPercent(100);
-              setProgressStage('Complete');
-              setProgressDetail(`All ${finalEvents.length} subtitles generated and audited!`);
-              console.log("[Subtitle Studio] Subtitle generation completed successfully!");
+              if (finalEvents.length === 0) {
+                setProgressStage('No Dialogue Detected');
+                setProgressDetail(res.error || '0 subtitles found across recording.');
+                alert(res.error || `No Subtitles Generated: No audible dialogue was transcribed across all parts.\n\nTip: If you recently uploaded multiple files, your Gemini API key free tier quota may be temporarily rate-limited (429). The system also attempts local Whisper fallback.`);
+              } else {
+                setProgressStage('Complete');
+                setProgressDetail(`All ${finalEvents.length} subtitles generated and audited!`);
+                console.log("[Subtitle Studio] Subtitle generation completed successfully!");
+              }
             }
           } catch (e) {
             console.warn("SSE parse error:", e, jsonStr);

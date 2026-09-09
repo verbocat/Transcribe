@@ -90,7 +90,7 @@ def transcribe_audio_with_gemini(
         candidate_models.append(model_name)
     if GEMINI_MODEL and GEMINI_MODEL not in candidate_models and GEMINI_MODEL not in ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.5-flash", "gemini-2.5-pro", "gemini-pro-latest"]:
         candidate_models.append(GEMINI_MODEL)
-    for high_quality_model in ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-flash-latest"]:
+    for high_quality_model in ["gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.1-flash-lite", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.8-flash"]:
         if high_quality_model not in candidate_models:
             candidate_models.append(high_quality_model)
 

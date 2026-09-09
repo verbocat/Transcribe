@@ -112,6 +112,7 @@ app = FastAPI(
 
 # CORS configuration with explicit Vercel and local dev support
 DEFAULT_ALLOWED_ORIGINS = [
+    "https://transcribe-eight-eta.vercel.app",
     "https://transcribes.vercel.app",
     "http://localhost:5173",
     "http://localhost:3000",
