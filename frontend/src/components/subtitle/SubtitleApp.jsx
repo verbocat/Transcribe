@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { 
-  ArrowLeft, Upload, CheckCircle2, AlertCircle, Sparkles, RefreshCw, 
-  FileDown, Sliders, ShieldCheck, Film, Undo2, Redo2, 
-  SlidersHorizontal, Search, Split, Merge, Scissors, Trash2, Plus, 
-  ChevronDown, X, Play, Clock, Activity, FileText, Check, Settings, 
+import {
+  ArrowLeft, Upload, CheckCircle2, AlertCircle, Sparkles, RefreshCw,
+  FileDown, Sliders, ShieldCheck, Film, Undo2, Redo2,
+  SlidersHorizontal, Search, Split, Merge, Scissors, Trash2, Plus,
+  ChevronDown, X, Play, Clock, Activity, FileText, Check, Settings,
   Menu, Download, Eye, AlertTriangle, Layers, Type, Sun, Moon, Loader2, Globe
 } from 'lucide-react';
 import { API_BASE } from '../../config';
@@ -14,7 +14,16 @@ import NetflixQCPanel from './NetflixQCPanel';
 import SubtitleExportModal from './SubtitleExportModal';
 import SubtitleDiffModal from './SubtitleDiffModal';
 import SubtitleSettingsModal from './SubtitleSettingsModal';
+import CustomTimeResumeModal from './CustomTimeResumeModal';
 import { extractAudioFromMedia, computeWaveformPeaks } from '../../utils/audioExtractor';
+
+function formatTime(seconds) {
+  if (isNaN(seconds) || seconds == null) return "00:00.000";
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  const ms = Math.floor((seconds % 1) * 1000);
+  return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}.${ms.toString().padStart(3, '0')}`;
+}
 
 // Sliced multi-part chunked upload for files > 90MB (bypasses Cloudflare 100MB proxy limits)
 async function uploadFileInChunks(file, apiBase, onProgress) {
@@ -67,9 +76,9 @@ async function uploadFileInChunks(file, apiBase, onProgress) {
         lastErr = fetchErr;
         if (attempt < 4) {
           if (onProgress) {
-            onProgress({ 
-              percent: Math.round(((i) / totalChunks) * 100), 
-              detail: `Server connecting (attempt ${attempt}/4)... Retrying slice ${i + 1}/${totalChunks}...` 
+            onProgress({
+              percent: Math.round(((i) / totalChunks) * 100),
+              detail: `Server connecting (attempt ${attempt}/4)... Retrying slice ${i + 1}/${totalChunks}...`
             });
           }
           await new Promise(r => setTimeout(r, attempt * 2500));
@@ -100,7 +109,7 @@ export default function SubtitleApp({ onBackToHome }) {
   const isAudioFile = useMemo(() => {
     if (!selectedFile) return false;
     return Boolean(
-      selectedFile.type?.startsWith('audio/') || 
+      selectedFile.type?.startsWith('audio/') ||
       /\.(mp3|wav|m4a|aac|flac|ogg|opus|wma)$/i.test(selectedFile.name || '')
     );
   }, [selectedFile]);
@@ -137,13 +146,13 @@ export default function SubtitleApp({ onBackToHome }) {
         const audioCtx = new AudioContextClass();
         const buf = await fileToProcess.arrayBuffer();
         const decoded = await audioCtx.decodeAudioData(buf);
-        audioCtx.close().catch(() => {});
+        audioCtx.close().catch(() => { });
         const channel = decoded.getChannelData(0);
         const peaks = computeWaveformPeaks(channel, decoded.duration, 50);
         if (peaks.length > 0) {
           setInitialWaveformPeaks(peaks);
         }
-      } catch (_) {}
+      } catch (_) { }
     }
 
     // 2. Upload to backend (chunked if > 20MB or if direct upload fails)
@@ -222,10 +231,16 @@ export default function SubtitleApp({ onBackToHome }) {
 
   // Netflix Rules & QC Telemetry
   const [language, setLanguage] = useState(() => {
-    try { return localStorage.getItem('karya_sub_language') || 'hi'; } catch(_) { return 'hi'; }
+    try {
+      const saved = localStorage.getItem('karya_sub_language');
+      return (saved && saved !== 'hi') ? saved : 'en';
+    } catch (_) { return 'en'; }
   });
   const [script, setScript] = useState(() => {
-    try { return localStorage.getItem('karya_sub_script') || 'devanagari'; } catch(_) { return 'devanagari'; }
+    try {
+      const saved = localStorage.getItem('karya_sub_script');
+      return (saved && saved !== 'devanagari') ? saved : 'auto';
+    } catch (_) { return 'auto'; }
   });
   const [contentType, setContentType] = useState('adult'); // 'adult' (20 CPS) | 'children' (17 CPS)
   const [sdhMode, setSdhMode] = useState(false);
@@ -235,6 +250,11 @@ export default function SubtitleApp({ onBackToHome }) {
   const [totalErrors, setTotalErrors] = useState(0);
   const [totalWarnings, setTotalWarnings] = useState(0);
   const [cpsStats, setCpsStats] = useState(null);
+
+  // Resume / Continue Generation State
+  const [resumeChunk, setResumeChunk] = useState(null); // Next batch index to resume (e.g. 34)
+  const [totalChunks, setTotalChunks] = useState(null); // Total batches (e.g. 113)
+  const [canResume, setCanResume] = useState(false);
 
   // Generation & Streaming Progress State
   const [isGenerating, setIsGenerating] = useState(false);
@@ -255,6 +275,8 @@ export default function SubtitleApp({ onBackToHome }) {
   const [showQcDrawer, setShowQcDrawer] = useState(false);
   const [showSettingsDropdown, setShowSettingsDropdown] = useState(false);
   const [showFileDropdown, setShowFileDropdown] = useState(false);
+  const [showCustomTimeModal, setShowCustomTimeModal] = useState(false);
+  const [customStartTime, setCustomStartTime] = useState(0);
   const [autoSaveStatus, setAutoSaveStatus] = useState('');
   const [pendingDraft, setPendingDraft] = useState(null); // Previous autosaved draft detection
   const [backendConnected, setBackendConnected] = useState(null); // null = checking, true = online, false = offline
@@ -353,7 +375,7 @@ export default function SubtitleApp({ onBackToHome }) {
       localStorage.setItem('karya_sub_min_dur', minDuration);
       localStorage.setItem('karya_sub_max_dur', maxDuration);
       localStorage.setItem('karya_sub_autofix', geminiAutoFix);
-    } catch {}
+    } catch { }
   }, [cplLimit, cpsLimit, maxLines, minDuration, maxDuration, geminiAutoFix]);
 
   // Active Subtitle
@@ -402,6 +424,8 @@ export default function SubtitleApp({ onBackToHome }) {
           complianceScore,
           totalErrors,
           totalWarnings,
+          resumeChunk,
+          totalChunks,
           settings: { language, contentType, cplLimit, cpsLimit, frameRate, sdhMode },
           timestamp: new Date().toISOString()
         }));
@@ -412,7 +436,7 @@ export default function SubtitleApp({ onBackToHome }) {
       }
     }, 60000); // Once every 1 minute
     return () => clearInterval(interval);
-  }, [events, complianceScore, totalErrors, totalWarnings, selectedFile, language, contentType, cplLimit, cpsLimit, frameRate, sdhMode]);
+  }, [events, complianceScore, totalErrors, totalWarnings, selectedFile, language, contentType, cplLimit, cpsLimit, frameRate, sdhMode, resumeChunk, totalChunks]);
 
   // ── Mouse Drag Splitter Handlers for Resizable Panes ──
   const handleLeftSplitterDown = (e) => {
@@ -572,7 +596,7 @@ export default function SubtitleApp({ onBackToHome }) {
 
       const newEv1 = { ...ev, end_time: timeToSplit, end: timeToSplit, text: text1 };
       const newEv2 = { ...ev, id: Math.max(...prev.map(p => p.id || 0)) + 1, start_time: timeToSplit + 0.08, start: timeToSplit + 0.08, text: text2 };
-      
+
       editedEventIdsRef.current.add(ev.id);
       editedEventIdsRef.current.add(newEv2.id);
 
@@ -717,7 +741,7 @@ export default function SubtitleApp({ onBackToHome }) {
       setVideoUrl(url);
 
       const isAudio = Boolean(
-        file.type?.startsWith('audio/') || 
+        file.type?.startsWith('audio/') ||
         /\.(mp3|wav|m4a|aac|flac|ogg|opus|wma)$/i.test(file.name || '')
       );
 
@@ -736,6 +760,9 @@ export default function SubtitleApp({ onBackToHome }) {
       setTotalErrors(0);
       setTotalWarnings(0);
       setActiveEventId(null);
+      setCanResume(false);
+      setResumeChunk(null);
+      setTotalChunks(null);
 
       // Check if previous autosaved draft exists
       const saved = localStorage.getItem(`karya_subtitle_autosave_${file.name}`);
@@ -744,6 +771,11 @@ export default function SubtitleApp({ onBackToHome }) {
           const data = JSON.parse(saved);
           if (data.events && data.events.length > 0) {
             setPendingDraft(data);
+            if (data.resumeChunk && data.totalChunks && data.resumeChunk <= data.totalChunks) {
+              setResumeChunk(data.resumeChunk);
+              setTotalChunks(data.totalChunks);
+              setCanResume(true);
+            }
           } else {
             setPendingDraft(null);
           }
@@ -946,12 +978,12 @@ export default function SubtitleApp({ onBackToHome }) {
       fileInputRef.current?.click();
       return;
     }
-    
+
     // Clear old subtitles and draft for a clean fresh AI generation
     setPendingDraft(null);
     try {
       localStorage.removeItem(`karya_subtitle_autosave_${selectedFile.name}`);
-    } catch (_) {}
+    } catch (_) { }
     setEvents([]);
     setComplianceScore(100);
     setTotalErrors(0);
@@ -959,6 +991,9 @@ export default function SubtitleApp({ onBackToHome }) {
     setActiveEventId(null);
     editedEventIdsRef.current.clear();
     setQcNotification(null);
+    setResumeChunk(null);
+    setTotalChunks(null);
+    setCanResume(false);
 
     setIsGenerating(true);
     setProgressPercent(5);
@@ -986,7 +1021,7 @@ export default function SubtitleApp({ onBackToHome }) {
           if (ping.ok) {
             break;
           }
-        } catch (_) {}
+        } catch (_) { }
         if (attempt < 8) {
           setProgressDetail(`Server is waking up (Render boot: ${attempt * 5}s)... please wait`);
           await new Promise(r => setTimeout(r, 5000));
@@ -1051,7 +1086,7 @@ export default function SubtitleApp({ onBackToHome }) {
         setProgressPercent(14);
         setProgressStage('Re-synchronizing Media to Server');
         setProgressDetail('Cloud server session expired or restarted. Re-uploading audio track...');
-        
+
         videoId = await processAndUploadMedia(selectedFile, isAudioFile);
         if (!videoId) {
           throw new Error('Media re-upload failed after server session expired.');
@@ -1121,6 +1156,7 @@ export default function SubtitleApp({ onBackToHome }) {
               setProgressPercent(30);
               setProgressStage('Analyzing Audio & Dialogue Splits');
               totalExpectedChunks = data.total_chunks || 1;
+              setTotalChunks(totalExpectedChunks);
               setProgressDetail(`Splitting recording into ${data.total_chunks} audio batches...`);
               setBatchProgress({ current: 0, total: data.total_chunks });
             } else if (data.type === 'heartbeat') {
@@ -1136,6 +1172,10 @@ export default function SubtitleApp({ onBackToHome }) {
               setBatchProgress({ current: data.chunk_index, total: data.total_chunks });
             } else if (data.type === 'batch') {
               lastBatchIndex = data.chunk_index || lastBatchIndex;
+              if (lastBatchIndex < totalExpectedChunks) {
+                setResumeChunk(lastBatchIndex + 1);
+                setTotalChunks(totalExpectedChunks);
+              }
               // Append / Merge Batch Events Progressively in Real-Time!
               const newBatchEvents = data.events || [];
               accumulatedEvents = [...accumulatedEvents, ...newBatchEvents];
@@ -1172,6 +1212,8 @@ export default function SubtitleApp({ onBackToHome }) {
               throw new Error(`Server generation error: ${data.error}`);
             } else if (data.type === 'complete') {
               streamCompleted = true;
+              setCanResume(false);
+              setResumeChunk(null);
               const res = data.result || {};
               const finalEvents = (res.events || accumulatedEvents).map(e => ({
                 ...e,
@@ -1215,20 +1257,30 @@ export default function SubtitleApp({ onBackToHome }) {
           }));
           setEvents(finalEvents);
           pushToHistory(finalEvents);
+          if (lastBatchIndex < totalExpectedChunks) {
+            setCanResume(true);
+            setResumeChunk(lastBatchIndex + 1);
+            setTotalChunks(totalExpectedChunks);
+          }
           setProgressPercent(100);
-          setProgressStage('Generation Preserved');
-          setProgressDetail(`Stream finished. All ${finalEvents.length} subtitles preserved!`);
-          alert(`Subtitle Generation Complete: ${finalEvents.length} subtitles generated across ${lastBatchIndex || 1} batch(es) and saved to your timeline.`);
+          setProgressStage('Generation Paused');
+          setProgressDetail(`Stream paused at Batch ${lastBatchIndex}/${totalExpectedChunks}. All ${finalEvents.length} subtitles preserved!`);
+          alert(`Subtitle Generation Paused: ${finalEvents.length} subtitles generated across ${lastBatchIndex || 1} of ${totalExpectedChunks} batches and saved to your timeline.\n\nYou can click 'Continue (Batch ${(lastBatchIndex || 1) + 1}/${totalExpectedChunks})' anytime to resume from where it stopped without restarting!`);
         } else {
           throw new Error("Stream connection closed before subtitles could be generated. Please try again.");
         }
       }
     } catch (err) {
       console.error("Generation error:", err);
-      const isNetwork = err.message?.includes('Failed to fetch') || 
-                        err.message?.includes('NetworkError') || 
-                        err.message?.includes('Network error') ||
-                        err.message?.includes('Load failed');
+      if (lastBatchIndex > 0 && lastBatchIndex < totalExpectedChunks) {
+        setCanResume(true);
+        setResumeChunk(lastBatchIndex + 1);
+        setTotalChunks(totalExpectedChunks);
+      }
+      const isNetwork = err.message?.includes('Failed to fetch') ||
+        err.message?.includes('NetworkError') ||
+        err.message?.includes('Network error') ||
+        err.message?.includes('Load failed');
       if (isNetwork) {
         alert(
           `Connection Notice: Backend Server is currently unreachable or waking up.\n\n` +
@@ -1247,6 +1299,461 @@ export default function SubtitleApp({ onBackToHome }) {
       }, 2500);
     }
   };
+
+  // ── Continue / Resume Subtitle Generation from Last Processed Batch ──
+  const handleContinueGenerate = async () => {
+    if (!selectedFile) {
+      fileInputRef.current?.click();
+      return;
+    }
+
+    const chunkToStart = resumeChunk || 1;
+    const prevEventsCount = events.length;
+    const prevBatchEnd = events.length > 0 ? (events[events.length - 1].end_time ?? events[events.length - 1].end ?? 0.0) : 0.0;
+    const prevContext = events.slice(-3).map(e => e.text).filter(Boolean);
+
+    setIsGenerating(true);
+    setProgressPercent(Math.min(95, Math.floor(((chunkToStart - 1) / (totalChunks || chunkToStart)) * 100)));
+    setProgressStage(`Resuming from Batch ${chunkToStart} of ${totalChunks || '?'}`);
+    setProgressDetail(`Connecting to resume stream from ${prevEventsCount} existing subtitles...`);
+    setBatchProgress({ current: chunkToStart - 1, total: totalChunks || chunkToStart });
+    setElapsedSeconds(0);
+
+    const startTimer = Date.now();
+    elapsedTimerRef.current = setInterval(() => {
+      setElapsedSeconds(parseFloat(((Date.now() - startTimer) / 1000).toFixed(1)));
+    }, 200);
+
+    let lastBatchIndex = chunkToStart - 1;
+    let totalExpectedChunks = totalChunks || 1;
+
+    try {
+      let videoId = currentVideoId;
+      if (!videoId) {
+        setProgressDetail('Transferring media to server session...');
+        videoId = await processAndUploadMedia(selectedFile, isAudioFile);
+        if (videoId) {
+          setCurrentVideoId(videoId);
+        } else {
+          throw new Error('Could not transfer media to server.');
+        }
+      }
+
+      console.log(`[Subtitle Studio] Resuming stream for Video ID: ${videoId} starting at Batch ${chunkToStart}`);
+      let streamRes = await fetch(`${API_BASE}/api/subtitle/generate_stream`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          video_id: videoId,
+          language,
+          script,
+          content_type: contentType,
+          sdh_mode: sdhMode,
+          cpl_limit: cplLimit,
+          max_cps: cpsLimit,
+          max_lines: maxLines,
+          min_duration: minDuration,
+          max_duration: maxDuration,
+          gemini_auto_fix: geminiAutoFix,
+          start_time: prevBatchEnd,
+          start_chunk: chunkToStart,
+          prev_events_count: prevEventsCount,
+          prev_batch_end: prevBatchEnd,
+          prev_context: prevContext
+        })
+      });
+
+      if (streamRes.status === 404) {
+        console.warn(`[Subtitle Studio] Session for ${videoId} expired on server (404). Re-uploading media...`);
+        setCurrentVideoId(null);
+        videoId = await processAndUploadMedia(selectedFile, isAudioFile);
+        if (!videoId) {
+          throw new Error('Media re-upload failed after server session expired.');
+        }
+        setCurrentVideoId(videoId);
+
+        streamRes = await fetch(`${API_BASE}/api/subtitle/generate_stream`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            video_id: videoId,
+            language,
+            script,
+            content_type: contentType,
+            sdh_mode: sdhMode,
+            cpl_limit: cplLimit,
+            max_cps: cpsLimit,
+            max_lines: maxLines,
+            min_duration: minDuration,
+            max_duration: maxDuration,
+            gemini_auto_fix: geminiAutoFix,
+            start_time: prevBatchEnd,
+            start_chunk: chunkToStart,
+            prev_events_count: prevEventsCount,
+            prev_batch_end: prevBatchEnd,
+            prev_context: prevContext
+          })
+        });
+      }
+
+      if (!streamRes.ok) {
+        const errDetail = await streamRes.json().catch(() => null);
+        throw new Error(errDetail?.detail || `Stream request failed (Status: ${streamRes.status})`);
+      }
+
+      const reader = streamRes.body.getReader();
+      const decoder = new TextDecoder('utf-8');
+      let buffer = '';
+      let streamCompleted = false;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (trimmed.startsWith(':')) continue;
+          if (!trimmed.startsWith('data:')) continue;
+          const jsonStr = trimmed.replace(/^data:\s*/, '');
+          try {
+            const data = JSON.parse(jsonStr);
+
+            if (data.type === 'init') {
+              totalExpectedChunks = data.total_chunks || totalExpectedChunks;
+              setTotalChunks(totalExpectedChunks);
+              setProgressDetail(`Continuing batches ${data.start_chunk || chunkToStart} to ${totalExpectedChunks}...`);
+              setBatchProgress({ current: data.start_chunk || chunkToStart, total: totalExpectedChunks });
+            } else if (data.type === 'heartbeat') {
+              if (data.stage) setProgressDetail(data.stage);
+            } else if (data.type === 'progress') {
+              const pct = Math.floor((data.chunk_index / data.total_chunks) * 100);
+              setProgressPercent(pct);
+              setProgressStage(`Generating Batch ${data.chunk_index} of ${data.total_chunks}`);
+              setProgressDetail(data.stage || `Transcribing dialogue & applying Netflix rules for Batch ${data.chunk_index}...`);
+              setBatchProgress({ current: data.chunk_index, total: data.total_chunks });
+            } else if (data.type === 'batch') {
+              lastBatchIndex = data.chunk_index || lastBatchIndex;
+              const newBatchEvents = data.events || [];
+              setEvents(prev => {
+                const prevMap = new Map(prev.map(e => [e.id, e]));
+                const merged = [...prev];
+                for (const newEv of newBatchEvents) {
+                  if (!prevMap.has(newEv.id)) {
+                    merged.push(newEv);
+                  } else if (!editedEventIdsRef.current.has(newEv.id)) {
+                    const idx = merged.findIndex(e => e.id === newEv.id);
+                    if (idx !== -1) merged[idx] = newEv;
+                  }
+                }
+                return merged;
+              });
+              const nextToResume = lastBatchIndex + 1;
+              if (nextToResume <= (data.total_chunks || totalExpectedChunks)) {
+                setResumeChunk(nextToResume);
+                setTotalChunks(data.total_chunks || totalExpectedChunks);
+                setCanResume(true);
+              }
+              console.log(`[Subtitle Studio] Appended Batch ${data.chunk_index}/${data.total_chunks} (${newBatchEvents.length} new events).`);
+            } else if (data.type === 'batch_ready') {
+              setQcNotification({
+                message: data.message || `Part ${data.chunk_index} is complete!`,
+                chunkIndex: data.chunk_index,
+                totalChunks: data.total_chunks,
+                timestamp: Date.now()
+              });
+            } else if (data.type === 'batch_error') {
+              console.warn(`[Subtitle Studio] Batch ${data.chunk_index} issue:`, data.error);
+              setProgressDetail(`Batch ${data.chunk_index} had an issue: continuing to next batch...`);
+            } else if (data.type === 'stream_error') {
+              console.error(`[Subtitle Studio] Stream error:`, data.error);
+              throw new Error(`Server generation error: ${data.error}`);
+            } else if (data.type === 'complete') {
+              streamCompleted = true;
+              setCanResume(false);
+              setResumeChunk(null);
+              const res = data.result || {};
+              setComplianceScore(res.compliance_score || 100);
+              setTotalErrors(res.total_errors || 0);
+              setTotalWarnings(res.total_warnings || 0);
+              setCpsStats(res.cps_stats || null);
+              setProgressPercent(100);
+              setProgressStage('Complete');
+              setProgressDetail(`All batches generated and audited!`);
+              console.log("[Subtitle Studio] Continued subtitle generation completed successfully!");
+            }
+          } catch (e) {
+            console.warn("SSE parse error:", e, jsonStr);
+          }
+        }
+      }
+
+      if (!streamCompleted) {
+        console.warn(`[Subtitle Studio] Stream stopped at batch ${lastBatchIndex}/${totalExpectedChunks}.`);
+        if (lastBatchIndex < totalExpectedChunks) {
+          setResumeChunk(lastBatchIndex + 1);
+          setTotalChunks(totalExpectedChunks);
+          setCanResume(true);
+          alert(`Generation paused at batch ${lastBatchIndex} of ${totalExpectedChunks}. Existing subtitles are safely preserved.\n\nYou can click 'Continue (Batch ${lastBatchIndex + 1}/${totalExpectedChunks})' anytime to continue.`);
+        }
+      }
+    } catch (err) {
+      console.error("Resume error:", err);
+      if (lastBatchIndex > 0 && lastBatchIndex < totalExpectedChunks) {
+        setCanResume(true);
+        setResumeChunk(lastBatchIndex + 1);
+        setTotalChunks(totalExpectedChunks);
+      }
+      alert(`Error resuming subtitle generation: ${err.message}`);
+    } finally {
+      setIsGenerating(false);
+      if (elapsedTimerRef.current) clearInterval(elapsedTimerRef.current);
+      setTimeout(() => {
+        setProgressPercent(0);
+        setBatchProgress(null);
+      }, 2500);
+    }
+  };
+
+  // ── Open Custom Time Resume Modal ──
+  const handleOpenCustomTimeModal = useCallback((initialTime = null) => {
+    let t = initialTime;
+    if (t === 'lastSub' || (t === null && events.length > 0)) {
+      const lastEv = events[events.length - 1];
+      t = lastEv ? (lastEv.end_time ?? lastEv.end ?? 0) : currentTime;
+    } else if (t === null) {
+      t = currentTime;
+    }
+    setCustomStartTime(t);
+    setShowCustomTimeModal(true);
+  }, [currentTime, events]);
+
+  // ── Continue / Generate Subtitles From Custom Timestamp on Timeline ──
+  const handleStartGenerationFromCustomTime = useCallback(async (targetSec, shouldPreserve = true) => {
+    setShowCustomTimeModal(false);
+    if (!selectedFile) {
+      fileInputRef.current?.click();
+      return;
+    }
+
+    const t = Math.max(0, typeof targetSec === 'number' ? targetSec : parseFloat(targetSec) || 0);
+
+    // If shouldPreserve is true, keep events starting before t
+    const preservedEvents = shouldPreserve
+      ? events.filter(e => {
+        const st = e.start_time ?? e.start ?? 0;
+        return st < t;
+      })
+      : [];
+
+    setEvents(preservedEvents);
+    pushToHistory(preservedEvents);
+
+    const prevEventsCount = preservedEvents.length;
+    const prevBatchEnd = preservedEvents.length > 0
+      ? (preservedEvents[preservedEvents.length - 1].end_time ?? preservedEvents[preservedEvents.length - 1].end ?? t)
+      : t;
+    const prevContext = preservedEvents.slice(-3).map(e => e.text).filter(Boolean);
+
+    setIsGenerating(true);
+    setProgressPercent(Math.min(95, Math.floor((t / Math.max(1, videoDuration || t)) * 100)));
+    setProgressStage(`Generating from ${formatTime(t)}`);
+    setProgressDetail(`Starting stream from ${formatTime(t)} (${prevEventsCount} earlier subtitles preserved)...`);
+    setBatchProgress(null);
+    setElapsedSeconds(0);
+
+    const startTimer = Date.now();
+    elapsedTimerRef.current = setInterval(() => {
+      setElapsedSeconds(parseFloat(((Date.now() - startTimer) / 1000).toFixed(1)));
+    }, 200);
+
+    let lastBatchIndex = 0;
+    let totalExpectedChunks = 1;
+
+    try {
+      let videoId = currentVideoId;
+      if (!videoId) {
+        setProgressDetail('Transferring media to server session...');
+        videoId = await processAndUploadMedia(selectedFile, isAudioFile);
+        if (videoId) {
+          setCurrentVideoId(videoId);
+        } else {
+          throw new Error('Could not transfer media to server.');
+        }
+      }
+
+      console.log(`[Subtitle Studio] Starting stream from custom timestamp: ${t.toFixed(3)}s`);
+      let streamRes = await fetch(`${API_BASE}/api/subtitle/generate_stream`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          video_id: videoId,
+          language,
+          script,
+          content_type: contentType,
+          sdh_mode: sdhMode,
+          cpl_limit: cplLimit,
+          max_cps: cpsLimit,
+          max_lines: maxLines,
+          min_duration: minDuration,
+          max_duration: maxDuration,
+          gemini_auto_fix: geminiAutoFix,
+          start_time: t,
+          prev_events_count: prevEventsCount,
+          prev_batch_end: prevBatchEnd,
+          prev_context: prevContext
+        })
+      });
+
+      if (streamRes.status === 404) {
+        console.warn(`[Subtitle Studio] Session for ${videoId} expired on server (404). Re-uploading media...`);
+        setCurrentVideoId(null);
+        videoId = await processAndUploadMedia(selectedFile, isAudioFile);
+        if (!videoId) {
+          throw new Error('Media re-upload failed after server session expired.');
+        }
+        setCurrentVideoId(videoId);
+
+        streamRes = await fetch(`${API_BASE}/api/subtitle/generate_stream`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            video_id: videoId,
+            language,
+            script,
+            content_type: contentType,
+            sdh_mode: sdhMode,
+            cpl_limit: cplLimit,
+            max_cps: cpsLimit,
+            max_lines: maxLines,
+            min_duration: minDuration,
+            max_duration: maxDuration,
+            gemini_auto_fix: geminiAutoFix,
+            start_time: t,
+            prev_events_count: prevEventsCount,
+            prev_batch_end: prevBatchEnd,
+            prev_context: prevContext
+          })
+        });
+      }
+
+      if (!streamRes.ok) {
+        const errDetail = await streamRes.json().catch(() => null);
+        throw new Error(errDetail?.detail || `Stream request failed (Status: ${streamRes.status})`);
+      }
+
+      const reader = streamRes.body.getReader();
+      const decoder = new TextDecoder('utf-8');
+      let buffer = '';
+      let streamCompleted = false;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (trimmed.startsWith(':')) continue;
+          if (!trimmed.startsWith('data:')) continue;
+          const jsonStr = trimmed.replace(/^data:\s*/, '');
+          try {
+            const data = JSON.parse(jsonStr);
+
+            if (data.type === 'init') {
+              totalExpectedChunks = data.total_chunks || totalExpectedChunks;
+              setTotalChunks(totalExpectedChunks);
+              setProgressDetail(`Generating ${totalExpectedChunks} batches from ${formatTime(t)}...`);
+              setBatchProgress({ current: 0, total: totalExpectedChunks });
+            } else if (data.type === 'heartbeat') {
+              if (data.stage) setProgressDetail(data.stage);
+            } else if (data.type === 'progress') {
+              const pct = Math.floor((data.chunk_index / data.total_chunks) * 100);
+              setProgressPercent(pct);
+              setProgressStage(`Generating Batch ${data.chunk_index} of ${data.total_chunks}`);
+              setProgressDetail(data.stage || `Transcribing dialogue for Batch ${data.chunk_index}...`);
+              setBatchProgress({ current: data.chunk_index, total: data.total_chunks });
+            } else if (data.type === 'batch') {
+              lastBatchIndex = data.chunk_index || lastBatchIndex;
+              const newBatchEvents = data.events || [];
+              setEvents(prev => {
+                const prevMap = new Map(prev.map(e => [e.id, e]));
+                const merged = [...prev];
+                for (const newEv of newBatchEvents) {
+                  if (!prevMap.has(newEv.id)) {
+                    merged.push(newEv);
+                  } else if (!editedEventIdsRef.current.has(newEv.id)) {
+                    const idx = merged.findIndex(e => e.id === newEv.id);
+                    if (idx !== -1) merged[idx] = newEv;
+                  }
+                }
+                return merged;
+              });
+              const nextToResume = lastBatchIndex + 1;
+              if (nextToResume <= (data.total_chunks || totalExpectedChunks)) {
+                setResumeChunk(nextToResume);
+                setTotalChunks(data.total_chunks || totalExpectedChunks);
+                setCanResume(true);
+              }
+              console.log(`[Subtitle Studio] Appended Batch ${data.chunk_index}/${data.total_chunks} (${newBatchEvents.length} events from ${formatTime(t)}).`);
+            } else if (data.type === 'batch_ready') {
+              setQcNotification({
+                message: data.message || `Part ${data.chunk_index} is complete!`,
+                chunkIndex: data.chunk_index,
+                totalChunks: data.total_chunks,
+                timestamp: Date.now()
+              });
+            } else if (data.type === 'batch_error') {
+              console.warn(`[Subtitle Studio] Batch ${data.chunk_index} issue:`, data.error);
+              setProgressDetail(`Batch ${data.chunk_index} issue: continuing...`);
+            } else if (data.type === 'stream_error') {
+              console.error(`[Subtitle Studio] Stream error:`, data.error);
+              throw new Error(`Server generation error: ${data.error}`);
+            } else if (data.type === 'complete') {
+              streamCompleted = true;
+              setCanResume(false);
+              setResumeChunk(null);
+              const res = data.result || {};
+              setComplianceScore(res.compliance_score || 100);
+              setTotalErrors(res.total_errors || 0);
+              setTotalWarnings(res.total_warnings || 0);
+              setCpsStats(res.cps_stats || null);
+              setProgressPercent(100);
+              setProgressStage('Complete');
+              setProgressDetail(`All batches generated from ${formatTime(t)}!`);
+            }
+          } catch (e) {
+            console.warn("SSE parse error:", e, jsonStr);
+          }
+        }
+      }
+
+      if (!streamCompleted) {
+        if (lastBatchIndex < totalExpectedChunks) {
+          setResumeChunk(lastBatchIndex + 1);
+          setTotalChunks(totalExpectedChunks);
+          setCanResume(true);
+          alert(`Generation paused at batch ${lastBatchIndex} of ${totalExpectedChunks}. Subtitles are preserved. You can continue anytime.`);
+        }
+      }
+    } catch (err) {
+      console.error("Custom time generate error:", err);
+      alert(`Error generating subtitles from ${formatTime(t)}: ${err.message}`);
+    } finally {
+      setIsGenerating(false);
+      if (elapsedTimerRef.current) clearInterval(elapsedTimerRef.current);
+      setTimeout(() => {
+        setProgressPercent(0);
+        setBatchProgress(null);
+      }, 2500);
+    }
+  }, [selectedFile, events, videoDuration, currentVideoId, isAudioFile, processAndUploadMedia, language, script, contentType, sdhMode, cplLimit, cpsLimit, maxLines, minDuration, maxDuration, geminiAutoFix, pushToHistory]);
 
 
 
@@ -1398,34 +1905,34 @@ export default function SubtitleApp({ onBackToHome }) {
   return (
     <div className="h-screen w-screen overflow-hidden flex flex-col font-sans select-none transition-colors duration-150 bg-[#0e0f12] text-[#f1f2f6]">
       {/* Hidden File Upload Inputs */}
-      <input 
-        type="file" 
-        ref={fileInputRef} 
-        onChange={handleFileChange} 
-        accept="video/mp4,video/mkv,video/quicktime,video/webm,video/avi,audio/mp3,audio/wav,audio/m4a,audio/aac,audio/flac,audio/ogg,audio/mpeg,audio/opus,.mp4,.mkv,.mov,.webm,.avi,.mp3,.wav,.m4a,.aac,.flac,.ogg,.opus" 
-        className="hidden" 
+      <input
+        type="file"
+        ref={fileInputRef}
+        onChange={handleFileChange}
+        accept="video/mp4,video/mkv,video/quicktime,video/webm,video/avi,audio/mp3,audio/wav,audio/m4a,audio/aac,audio/flac,audio/ogg,audio/mpeg,audio/opus,.mp4,.mkv,.mov,.webm,.avi,.mp3,.wav,.m4a,.aac,.flac,.ogg,.opus"
+        className="hidden"
       />
-      <input 
-        type="file" 
-        ref={srtImportRef} 
-        onChange={handleImportSrt} 
-        accept=".srt,.vtt,.txt" 
-        className="hidden" 
+      <input
+        type="file"
+        ref={srtImportRef}
+        onChange={handleImportSrt}
+        accept=".srt,.vtt,.txt"
+        className="hidden"
       />
 
       {/* ── Top Header Bar (Sleek NLE Studio Menu) ── */}
       <nav ref={headerMenuRef} className="border-b border-[#262734] bg-[#121318] px-3 py-1 flex items-center justify-between shadow-xs shrink-0 z-40 transition-colors">
         {/* Left: Brand & Studio Title */}
         <div className="flex items-center gap-2">
-          <button 
-            onClick={onBackToHome} 
+          <button
+            onClick={onBackToHome}
             className="p-1 px-2 rounded transition-colors cursor-pointer flex items-center gap-1.5 text-xs font-semibold border border-[#262734] hover:bg-[#181920] text-slate-300 hover:text-white"
             title="Return to Hub"
           >
             <ArrowLeft className="w-3.5 h-3.5 text-[#00e5be]" />
             <span>Hub</span>
           </button>
-          
+
           <div className="h-4 w-px bg-[#262734]" />
 
           <div className="flex items-center gap-2">
@@ -1444,9 +1951,8 @@ export default function SubtitleApp({ onBackToHome }) {
 
           {selectedFile && (
             <span className="text-[10px] font-mono px-2 py-0.5 rounded border border-[#262734] truncate max-w-[220px] text-slate-300 bg-[#181920] flex items-center gap-1.5" title={selectedFile.name}>
-              <span className={`px-1 py-0.2 rounded text-[9px] font-bold ${
-                isAudioFile ? 'bg-cyan-500/20 text-[#00e5ff] border border-cyan-500/40' : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
-              }`}>
+              <span className={`px-1 py-0.2 rounded text-[9px] font-bold ${isAudioFile ? 'bg-cyan-500/20 text-[#00e5ff] border border-cyan-500/40' : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
+                }`}>
                 {isAudioFile ? '🎵 AUDIO' : '🎬 VIDEO'}
               </span>
               <span className="truncate">{selectedFile.name}</span>
@@ -1477,7 +1983,7 @@ export default function SubtitleApp({ onBackToHome }) {
           <div className="flex items-center gap-1">
             {/* File Dropdown */}
             <div className="relative">
-              <button 
+              <button
                 onClick={() => { setShowFileDropdown(!showFileDropdown); setShowSettingsDropdown(false); }}
                 className="px-2 py-1 rounded text-xs font-semibold flex items-center gap-1 transition-colors cursor-pointer border border-[#262734] hover:bg-[#181920] text-slate-300 hover:text-white"
               >
@@ -1487,14 +1993,14 @@ export default function SubtitleApp({ onBackToHome }) {
 
               {showFileDropdown && (
                 <div className="absolute top-full left-0 mt-1 w-56 rounded-lg shadow-xl border border-[#262734] p-1 z-50 animate-in fade-in zoom-in-95 duration-150 bg-[#181920] text-slate-200">
-                  <button 
+                  <button
                     onClick={() => { fileInputRef.current?.click(); setShowFileDropdown(false); }}
                     className="w-full text-left px-3 py-2 text-xs rounded flex items-center gap-2 cursor-pointer hover:bg-[#22232c] text-slate-200"
                   >
                     <Upload size={13} className="text-[#00e5be]" />
                     <span>Open Media (Video / Audio)...</span>
                   </button>
-                  <button 
+                  <button
                     onClick={() => { srtImportRef.current?.click(); setShowFileDropdown(false); }}
                     className="w-full text-left px-3 py-2 text-xs rounded flex items-center gap-2 cursor-pointer hover:bg-[#22232c] text-slate-200"
                   >
@@ -1502,7 +2008,7 @@ export default function SubtitleApp({ onBackToHome }) {
                     <span>Import Subtitle (SRT/VTT)...</span>
                   </button>
                   <div className="h-px my-1 bg-[#262734]" />
-                  <button 
+                  <button
                     onClick={() => { setShowExportModal(true); setShowFileDropdown(false); }}
                     className="w-full text-left px-3 py-2 text-xs rounded flex items-center gap-2 font-bold cursor-pointer hover:bg-[#22232c] text-[#00e5be]"
                   >
@@ -1510,14 +2016,14 @@ export default function SubtitleApp({ onBackToHome }) {
                     <span>Export Subtitles...</span>
                   </button>
                   <div className="h-px my-1 bg-[#262734]" />
-                  <button 
+                  <button
                     onClick={() => {
                       if (window.confirm("Clear all current subtitles and remove any saved draft for this video?")) {
                         try {
                           if (selectedFile?.name) {
                             localStorage.removeItem(`karya_subtitle_autosave_${selectedFile.name}`);
                           }
-                        } catch (_) {}
+                        } catch (_) { }
                         setEvents([]);
                         setComplianceScore(100);
                         setTotalErrors(0);
@@ -1537,7 +2043,7 @@ export default function SubtitleApp({ onBackToHome }) {
             </div>
 
             {/* Settings Modal Trigger Button */}
-            <button 
+            <button
               onClick={() => setShowSettingsModal(true)}
               className="px-2 py-1 rounded text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer border hover:bg-[#181920] text-slate-300 border-[#262734]"
               title="Configure CPL, CPS, Line Limits & AI Auto-Fix"
@@ -1551,16 +2057,16 @@ export default function SubtitleApp({ onBackToHome }) {
 
             {/* Undo / Redo */}
             <div className="flex items-center border border-[#262734] bg-[#14151a] rounded overflow-hidden">
-              <button 
-                onClick={handleUndo} 
+              <button
+                onClick={handleUndo}
                 disabled={historyIndex <= 0}
                 className="p-1.5 transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed hover:bg-[#1f2638] text-slate-300 hover:text-white"
                 title="Undo (Ctrl+Z)"
               >
                 <Undo2 size={13} />
               </button>
-              <button 
-                onClick={handleRedo} 
+              <button
+                onClick={handleRedo}
                 disabled={historyIndex >= history.length - 1}
                 className="p-1.5 transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed border-l border-[#262734] hover:bg-[#1f2638] text-slate-300 hover:text-white"
                 title="Redo (Ctrl+Y)"
@@ -1580,7 +2086,7 @@ export default function SubtitleApp({ onBackToHome }) {
               value={language}
               onChange={(e) => {
                 setLanguage(e.target.value);
-                try { localStorage.setItem('karya_sub_language', e.target.value); } catch(_) {}
+                try { localStorage.setItem('karya_sub_language', e.target.value); } catch (_) { }
               }}
               disabled={isGenerating}
               className="bg-transparent text-slate-200 font-semibold text-xs focus:outline-none cursor-pointer"
@@ -1613,7 +2119,7 @@ export default function SubtitleApp({ onBackToHome }) {
               value={script}
               onChange={(e) => {
                 setScript(e.target.value);
-                try { localStorage.setItem('karya_sub_script', e.target.value); } catch(_) {}
+                try { localStorage.setItem('karya_sub_script', e.target.value); } catch (_) { }
               }}
               disabled={isGenerating}
               className="bg-transparent text-[#00e5be] font-semibold text-xs focus:outline-none cursor-pointer"
@@ -1626,7 +2132,7 @@ export default function SubtitleApp({ onBackToHome }) {
           </div>
 
           {/* Auto-Fix Button */}
-          <button 
+          <button
             onClick={handleAutoFix}
             disabled={isGenerating || events.length === 0}
             className="px-2.5 py-1 rounded text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer border border-emerald-500/40 bg-[#181920] hover:bg-[#22232c] text-emerald-400 shadow-xs disabled:opacity-40 disabled:cursor-not-allowed"
@@ -1636,8 +2142,34 @@ export default function SubtitleApp({ onBackToHome }) {
             <span>Auto-Fix</span>
           </button>
 
+          {/* Continue Subtitle Generation Button - ALWAYS VISIBLE */}
+          <button
+            onClick={() => handleOpenCustomTimeModal('lastSub')}
+            disabled={isGenerating}
+            className={`px-3 py-1 rounded text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-xs ${
+              canResume || events.length > 0
+                ? 'bg-amber-500 hover:bg-amber-400 text-black shadow-[0_0_12px_rgba(245,158,11,0.35)]'
+                : 'bg-[#181920] hover:bg-[#22232c] border border-amber-500/50 text-amber-300'
+            } disabled:opacity-40 disabled:cursor-not-allowed`}
+            title={
+              canResume
+                ? `Continue generation from Batch ${resumeChunk} of ${totalChunks}`
+                : events.length > 0
+                  ? `Continue generating subtitles from where you left off (${formatTime(events[events.length - 1]?.end_time ?? events[events.length - 1]?.end ?? 0)}) or choose timeline time`
+                  : `Continue / start generating subtitles from specific timeline time`
+            }
+          >
+            <Play className={`w-3.5 h-3.5 ${canResume || events.length > 0 ? 'fill-black text-black' : 'fill-amber-300 text-amber-300'}`} />
+            <span>Continue</span>
+            {canResume ? (
+              <span className="text-[10px] font-mono opacity-90">(Batch {resumeChunk}/{totalChunks})</span>
+            ) : events.length > 0 ? (
+              <span className="text-[10px] font-mono opacity-85">({formatTime(events[events.length - 1]?.end_time ?? events[events.length - 1]?.end ?? 0).slice(0, 5)})</span>
+            ) : null}
+          </button>
+
           {/* Auto-Generate AI Button */}
-          <button 
+          <button
             onClick={handleGenerate}
             disabled={isGenerating}
             className="px-3 py-1 rounded text-xs font-semibold bg-[#22232c] hover:bg-[#2c2d38] border border-[#00e5be]/50 text-[#00e5be] flex items-center gap-1.5 transition-all shadow-xs cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
@@ -1657,7 +2189,7 @@ export default function SubtitleApp({ onBackToHome }) {
           </button>
 
           {/* Export Button (CapCut Signature Neon Turquoise Action) */}
-          <button 
+          <button
             onClick={() => setShowExportModal(true)}
             disabled={events.length === 0}
             className="px-3.5 py-1 rounded text-xs font-bold bg-[#00e5be] hover:bg-[#00c9a7] text-black flex items-center gap-1.5 transition-all shadow-[0_0_12px_rgba(0,229,190,0.25)] cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
@@ -1668,15 +2200,14 @@ export default function SubtitleApp({ onBackToHome }) {
           </button>
 
           {/* Netflix QC Score Capsule */}
-          <button 
+          <button
             onClick={() => setShowQcDrawer(!showQcDrawer)}
-            className={`px-2.5 py-1 rounded text-xs font-mono font-bold flex items-center gap-1.5 transition-colors cursor-pointer border ${
-              complianceScore >= 98 
-                ? 'bg-[#181920] border-emerald-500/50 text-emerald-400' 
-                : complianceScore >= 80 
-                ? 'bg-[#181920] border-amber-500/50 text-amber-400' 
-                : 'bg-[#181920] border-rose-500/50 text-rose-400'
-            }`}
+            className={`px-2.5 py-1 rounded text-xs font-mono font-bold flex items-center gap-1.5 transition-colors cursor-pointer border ${complianceScore >= 98
+                ? 'bg-[#181920] border-emerald-500/50 text-emerald-400'
+                : complianceScore >= 80
+                  ? 'bg-[#181920] border-amber-500/50 text-amber-400'
+                  : 'bg-[#181920] border-rose-500/50 text-rose-400'
+              }`}
             title="Open Netflix Quality Control Dashboard"
           >
             <ShieldCheck className="w-3.5 h-3.5" />
@@ -1733,11 +2264,17 @@ export default function SubtitleApp({ onBackToHome }) {
           <div className="flex items-center gap-2">
             <button
               onClick={() => {
-                setEvents(pendingDraft.events || []);
+                const restoredEvents = pendingDraft.events || [];
+                setEvents(restoredEvents);
                 setComplianceScore(pendingDraft.complianceScore || 100);
                 setTotalErrors(pendingDraft.totalErrors || 0);
                 setTotalWarnings(pendingDraft.totalWarnings || 0);
-                setActiveEventId(pendingDraft.events?.[0]?.id || null);
+                setActiveEventId(restoredEvents[0]?.id || null);
+                if (pendingDraft.resumeChunk && pendingDraft.totalChunks && pendingDraft.resumeChunk <= pendingDraft.totalChunks) {
+                  setResumeChunk(pendingDraft.resumeChunk);
+                  setTotalChunks(pendingDraft.totalChunks);
+                  setCanResume(true);
+                }
                 setPendingDraft(null);
               }}
               className="px-3 py-1 bg-[#00e5be] hover:bg-[#00c9a7] text-black rounded font-bold cursor-pointer transition-colors shadow-xs"
@@ -1748,7 +2285,7 @@ export default function SubtitleApp({ onBackToHome }) {
               onClick={() => {
                 try {
                   localStorage.removeItem(`karya_subtitle_autosave_${selectedFile?.name}`);
-                } catch (_) {}
+                } catch (_) { }
                 setPendingDraft(null);
               }}
               className="px-3 py-1 rounded cursor-pointer transition-colors bg-[#22232c] hover:bg-[#2c2d38] text-slate-300"
@@ -1759,10 +2296,29 @@ export default function SubtitleApp({ onBackToHome }) {
         </div>
       )}
 
+      {/* Resume Paused Generation Notification Banner */}
+      {canResume && !isGenerating && events.length > 0 && (
+        <div className="px-4 py-1.5 flex items-center justify-between border-b border-amber-500/40 bg-amber-950/70 text-amber-200 text-xs shrink-0 z-30 transition-all">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
+            <span>
+              <strong>Generation Paused:</strong> Completed through Batch {(resumeChunk || 2) - 1} of {totalChunks || '?'} ({events.length} subtitles generated). You can continue generating remaining batches anytime!
+            </span>
+          </div>
+          <button
+            onClick={handleContinueGenerate}
+            className="px-3 py-1 bg-amber-500 hover:bg-amber-400 text-black font-bold rounded text-xs shrink-0 transition-colors cursor-pointer flex items-center gap-1.5 shadow-xs"
+          >
+            <Play className="w-3 h-3 fill-black" />
+            <span>Continue Generation (Batch {resumeChunk}/{totalChunks})</span>
+          </button>
+        </div>
+      )}
+
       {/* Slim Real-Time Progress Line during Streaming */}
       {isGenerating && (
         <div className="w-full h-1 bg-[#181920] overflow-hidden shrink-0">
-          <div 
+          <div
             className="h-full bg-gradient-to-r from-[#00e5be] via-[#00c9a7] to-[#00b4d8] shadow-[0_0_8px_rgba(0,229,190,0.5)] transition-all duration-300"
             style={{ width: `${progressPercent}%` }}
           />
@@ -1771,16 +2327,16 @@ export default function SubtitleApp({ onBackToHome }) {
 
       {/* ── Resizable Subtitle Studio Workstation ── */}
       <div className="flex-1 min-h-0 flex flex-col p-1.5 gap-1.5 w-full mx-auto overflow-hidden relative select-none">
-        
+
         {/* Top Resizable Split Area (Left: Subtitle Sheet vs Right: Video + Inspector) */}
         <div className="flex-1 min-h-0 flex gap-0 overflow-hidden">
-          
+
           {/* Left Panel: Subtitle List / Spreadsheet View (Resizable Width) */}
-          <div 
-            style={{ width: `${leftPanelWidth}px` }} 
+          <div
+            style={{ width: `${leftPanelWidth}px` }}
             className="shrink-0 flex flex-col h-full overflow-hidden rounded-lg border border-[#262734] bg-[#14151a] shadow-sm transition-colors"
           >
-            <SubtitleGridView 
+            <SubtitleGridView
               events={events}
               activeEventId={activeEventId}
               setActiveEventId={setActiveEventId}
@@ -1801,7 +2357,7 @@ export default function SubtitleApp({ onBackToHome }) {
           </div>
 
           {/* ── Vertical Resizer Splitter (Left Subtitles vs Right Video) ── */}
-          <div 
+          <div
             onMouseDown={handleLeftSplitterDown}
             className="w-2 hover:w-2.5 hover:bg-[#00e5be]/40 cursor-col-resize flex items-center justify-center transition-all group z-30 shrink-0"
             title="Drag to resize Subtitle Sheet width"
@@ -1811,7 +2367,7 @@ export default function SubtitleApp({ onBackToHome }) {
 
           {/* Right Panel: Full Video Player Viewport */}
           <div className="flex-1 min-w-0 h-full overflow-hidden bg-black rounded-lg border border-[#262734]">
-            <VideoPlayer 
+            <VideoPlayer
               videoUrl={videoUrl}
               events={events}
               activeEventId={activeEventId}
@@ -1826,7 +2382,7 @@ export default function SubtitleApp({ onBackToHome }) {
         </div>
 
         {/* ── Horizontal Resizer Splitter (Top Panels vs Bottom Timeline) ── */}
-        <div 
+        <div
           onMouseDown={handleBottomSplitterDown}
           className="h-2 hover:h-2.5 hover:bg-[#00e5be]/40 cursor-row-resize flex items-center justify-center transition-all group z-30 w-full shrink-0"
           title="Drag to resize Timeline height"
@@ -1836,18 +2392,18 @@ export default function SubtitleApp({ onBackToHome }) {
 
         {/* Bottom Row: Audio Waveform Timeline with Clean Continuous Waveform & Rectangular Subtitle Boxes */}
         <div style={{ height: `${bottomTimelineHeight}px` }} className="w-full shrink-0 overflow-hidden">
-          <AudioWaveformTimeline 
+          <AudioWaveformTimeline
             videoUrl={videoUrl}
             selectedFile={selectedFile}
             videoId={currentVideoId || null}
             initialPeaks={initialWaveformPeaks}
             API_BASE={API_BASE}
             isAudio={isAudioFile}
-            events={events} 
-            shotChanges={shotChanges} 
+            events={events}
+            shotChanges={shotChanges}
             duration={videoDuration}
             currentTime={currentTime}
-            activeEventId={activeEventId} 
+            activeEventId={activeEventId}
             setActiveEventId={setActiveEventId}
             onEventTimeChange={handleEventTimeChange}
             onSeek={(t) => {
@@ -1856,6 +2412,7 @@ export default function SubtitleApp({ onBackToHome }) {
             }}
             onAddSubtitleAtTime={handleAddSubtitle}
             onShiftAllFollowing={handleShiftAllFollowing}
+            onContinueFromTime={handleOpenCustomTimeModal}
             frameRate={frameRate}
             cpsLimit={cpsLimit}
             cplLimit={cplLimit}
@@ -1866,7 +2423,7 @@ export default function SubtitleApp({ onBackToHome }) {
         {/* ── Slide-Over Netflix QC Panel Drawer ── */}
         {showQcDrawer && (
           <div className="fixed inset-y-0 right-0 z-50 w-80 md:w-96 shadow-2xl border-l border-[#262734] bg-[#14151a] text-slate-200 p-4 flex flex-col animate-in slide-in-from-right duration-200">
-            <NetflixQCPanel 
+            <NetflixQCPanel
               complianceScore={complianceScore}
               totalErrors={totalErrors}
               totalWarnings={totalWarnings}
@@ -1958,7 +2515,7 @@ export default function SubtitleApp({ onBackToHome }) {
 
       {/* ── Export Deliverables Modal ── */}
       {showExportModal && (
-        <SubtitleExportModal 
+        <SubtitleExportModal
           isOpen={showExportModal}
           onClose={() => setShowExportModal(false)}
           events={events}
@@ -1970,7 +2527,7 @@ export default function SubtitleApp({ onBackToHome }) {
 
       {/* ── Auto-Fix Diff Comparison Modal ── */}
       {showDiffModal && (
-        <SubtitleDiffModal 
+        <SubtitleDiffModal
           isOpen={showDiffModal}
           onClose={() => setShowDiffModal(false)}
           originalEvents={originalEvents}
@@ -1982,6 +2539,17 @@ export default function SubtitleApp({ onBackToHome }) {
           }}
         />
       )}
+
+      {/* ── Custom Timeline Time Resume Modal ── */}
+      <CustomTimeResumeModal
+        isOpen={showCustomTimeModal}
+        onClose={() => setShowCustomTimeModal(false)}
+        targetTime={customStartTime}
+        playheadTime={currentTime}
+        videoDuration={videoDuration}
+        events={events}
+        onStartGeneration={handleStartGenerationFromCustomTime}
+      />
     </div>
   );
 }

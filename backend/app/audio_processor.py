@@ -400,14 +400,15 @@ def find_dialogue_split_points(
     audio_path: str,
     target_chunk_sec: float = 180.0,   # ~3 minute chunks for rich conversational context
     min_chunk_sec: float = 120.0,      # at least 2m
-    max_chunk_sec: float = 240.0       # at most 4m
+    max_chunk_sec: float = 240.0,      # at most 4m
+    start_offset_sec: float = 0.0
 ) -> List[Tuple[float, float]]:
     """
     Partitions a long audio file into natural conversational chunks.
     Seeks directly to candidate search windows using < 3MB RAM (1000x faster than reading full file).
     CRITICAL: Splits ONLY at genuine dialogue silences / sentence completion pauses
     so that words or sentences are NEVER cut in the middle.
-    Returns list of (start_sec, end_sec) chunks covering the whole file without gaps.
+    Returns list of (start_sec, end_sec) chunks covering the requested range without gaps.
     """
     try:
         info = sf.info(audio_path)
@@ -420,12 +421,13 @@ def find_dialogue_split_points(
         samplerate = 16000
         total_frames = int(total_sec * samplerate)
 
-    # If audio is already <= max_chunk_sec, process as single chunk
-    if total_sec <= max_chunk_sec or total_frames <= 0:
-        return [(0.0, round(total_sec, 3))]
+    cur_start = max(0.0, min(float(start_offset_sec), max(0.0, total_sec - 0.5)))
+
+    # If remaining audio from cur_start is already <= max_chunk_sec, process as single chunk
+    if (total_sec - cur_start) <= max_chunk_sec or total_frames <= 0:
+        return [(round(cur_start, 3), round(total_sec, 3))]
 
     chunks: List[Tuple[float, float]] = []
-    cur_start = 0.0
 
     while cur_start < total_sec:
         remaining = total_sec - cur_start

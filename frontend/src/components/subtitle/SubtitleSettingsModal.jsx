@@ -16,7 +16,7 @@ export default function SubtitleSettingsModal({
   setMinDuration,
   maxDuration = 7.0,
   setMaxDuration,
-  language = 'hi',
+  language = 'en',
   setLanguage,
   script = 'auto',
   setScript,

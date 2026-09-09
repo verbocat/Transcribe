@@ -1338,6 +1338,12 @@ async def generate_subtitles_stream_endpoint(payload: dict):
     min_duration = float(payload.get("min_duration", 0.833))
     max_duration = float(payload.get("max_duration", 7.0))
     gemini_auto_fix = bool(payload.get("gemini_auto_fix", True))
+    start_chunk = int(payload.get("start_chunk", 1))
+    prev_events_count = int(payload.get("prev_events_count", 0))
+    prev_batch_end = float(payload.get("prev_batch_end", 0.0))
+    prev_context = payload.get("prev_context", [])
+    raw_start_time = payload.get("start_time")
+    start_time = float(raw_start_time) if raw_start_time is not None else None
     
     if not video_id:
         raise HTTPException(status_code=400, detail="video_id is required")
@@ -1359,6 +1365,11 @@ async def generate_subtitles_stream_endpoint(payload: dict):
             min_duration=min_duration,
             max_duration=max_duration,
             gemini_auto_fix=gemini_auto_fix,
+            start_chunk=start_chunk,
+            prev_events_count=prev_events_count,
+            prev_batch_end=prev_batch_end,
+            prev_context=prev_context,
+            start_time=start_time,
         ),
         media_type="text/event-stream; charset=utf-8",
         headers={

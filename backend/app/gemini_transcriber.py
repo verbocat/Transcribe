@@ -6,7 +6,7 @@ from typing import List, Dict, Any, Optional
 from google import genai
 from google.genai import types
 
-from app.config import GEMINI_API_KEY, GEMINI_MODEL, MAX_SEGMENT_DURATION, MIN_SEGMENT_DURATION, UPLOAD_DIR
+from app.config import GEMINI_API_KEY, GEMINI_MODEL, DEFAULT_LANGUAGE, DEFAULT_SCRIPT, MAX_SEGMENT_DURATION, MIN_SEGMENT_DURATION, UPLOAD_DIR
 from app.models import Segment, TranscriptionResult, AudioAnalysis, WordConfidence
 from app.linter_engine import lint_dataset
 from app.audio_processor import (
@@ -195,15 +195,15 @@ Return a valid JSON object matching this schema:
     # Robust JSON extraction & repair
     return extract_and_repair_json(
         resp_text,
-        default_lang=language if not is_auto else "Hindi",
-        default_script=script if not is_auto else "Devanagari"
+        default_lang=language if not is_auto else DEFAULT_LANGUAGE,
+        default_script=script if not is_auto else DEFAULT_SCRIPT
     )
 
 
 def extract_and_repair_json(
     text: str,
-    default_lang: str = "Hindi",
-    default_script: str = "Devanagari"
+    default_lang: str = DEFAULT_LANGUAGE,
+    default_script: str = DEFAULT_SCRIPT
 ) -> Dict[str, Any]:
     """
     Robustly parses JSON from Gemini multimodal responses, handling markdown code blocks,

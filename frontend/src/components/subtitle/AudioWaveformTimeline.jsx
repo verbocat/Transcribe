@@ -1,5 +1,5 @@
 import React, { useRef, useState, useEffect, useLayoutEffect, useCallback, useMemo } from 'react';
-import { ZoomIn, ZoomOut, Volume2, Split, Plus, AlertCircle, CheckCircle2, GripVertical, FastForward, Sun, Moon } from 'lucide-react';
+import { ZoomIn, ZoomOut, Volume2, Split, Plus, AlertCircle, CheckCircle2, GripVertical, FastForward, Sun, Moon, Play } from 'lucide-react';
 
 // Helper formatting for timecode
 function formatTime(seconds) {
@@ -50,17 +50,15 @@ const TimelineSubtitleBlock = React.memo(function TimelineSubtitleBlock({
   return (
     <div
       key={id}
-      className={`absolute top-0.5 bottom-0.5 rounded-[4px] flex flex-col pointer-events-auto select-none transition-colors shadow-xs ${
-        isActive 
-          ? 'border-2 border-[#00e5be] bg-[#00e5be]/15 text-white z-30 shadow-[0_0_12px_rgba(0,229,190,0.3)] ring-1 ring-[#00e5be]/40 backdrop-blur-[1px]' 
-          : 'z-20 hover:brightness-110'
-      } ${
-        isRed 
-          ? 'bg-rose-950/40 border-2 border-rose-500 text-rose-100 backdrop-blur-[1px]' 
+      className={`absolute top-0.5 bottom-0.5 rounded-[4px] flex flex-col pointer-events-auto select-none transition-colors shadow-xs ${isActive
+        ? 'border-2 border-[#00e5be] bg-[#00e5be]/15 text-white z-30 shadow-[0_0_12px_rgba(0,229,190,0.3)] ring-1 ring-[#00e5be]/40 backdrop-blur-[1px]'
+        : 'z-20 hover:brightness-110'
+        } ${isRed
+          ? 'bg-rose-950/40 border-2 border-rose-500 text-rose-100 backdrop-blur-[1px]'
           : isYellow
-          ? 'bg-amber-950/40 border-2 border-amber-400 text-amber-100 backdrop-blur-[1px]' 
-          : 'bg-[#181920]/85 border border-[#262734] text-slate-200 backdrop-blur-[1px]'
-      }`}
+            ? 'bg-amber-950/40 border-2 border-amber-400 text-amber-100 backdrop-blur-[1px]'
+            : 'bg-[#181920]/85 border border-[#262734] text-slate-200 backdrop-blur-[1px]'
+        }`}
       style={{ left: `${startX}px`, width: `${width}px` }}
       onClick={(e) => {
         e.stopPropagation();
@@ -92,7 +90,7 @@ const TimelineSubtitleBlock = React.memo(function TimelineSubtitleBlock({
       </div>
 
       {/* Body Drag Area (Move Entire Subtitle) */}
-      <div 
+      <div
         onMouseDown={(e) => handleMouseDown(e, id, 'move')}
         className="flex-1 px-3 py-1 flex flex-col justify-between cursor-grab active:cursor-grabbing overflow-hidden"
         title="Click & drag to move subtitle block"
@@ -151,13 +149,14 @@ export default function AudioWaveformTimeline({
   events = [],
   shotChanges = [],
   activeEventId = null,
-  setActiveEventId = () => {},
+  setActiveEventId = () => { },
   currentTime = 0,
   duration = 0,
-  onEventTimeChange = () => {},
-  onSeek = () => {},
+  onEventTimeChange = () => { },
+  onSeek = () => { },
   onAddSubtitleAtTime = null,
   onShiftAllFollowing = null,
+  onContinueFromTime = null,
   frameRate = 24.0,
   cpsLimit = 20,
   cplLimit = 42,
@@ -167,7 +166,7 @@ export default function AudioWaveformTimeline({
   const [waveformPeaks, setWaveformPeaks] = useState(initialPeaks || []); // Array of float 0-1
   const [waveformPointsPerSec, setWaveformPointsPerSec] = useState(50);
   const [isAudioLoading, setIsAudioLoading] = useState(false);
-  
+
   const containerRef = useRef(null);
   const scrollRef = useRef(null);
   const canvasRef = useRef(null);
@@ -246,7 +245,7 @@ export default function AudioWaveformTimeline({
               return;
             }
           }
-        } catch (_) {}
+        } catch (_) { }
 
         try {
           setIsAudioLoading(true);
@@ -260,7 +259,7 @@ export default function AudioWaveformTimeline({
               setIsAudioLoading(false);
               try {
                 sessionStorage.setItem(`karya_peaks_${videoId}`, JSON.stringify(data.peaks));
-              } catch (_) {}
+              } catch (_) { }
               return;
             }
           }
@@ -661,7 +660,7 @@ export default function AudioWaveformTimeline({
   }
 
   return (
-    <div 
+    <div
       ref={containerRef}
       className="rounded-xl border border-[#262734] bg-[#0e0f12] flex flex-col w-full h-full overflow-hidden select-none transition-colors shadow-xs"
     >
@@ -678,22 +677,22 @@ export default function AudioWaveformTimeline({
 
           {/* Left-Oriented Zoom Slider & Buttons */}
           <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-lg border border-[#262734] bg-[#181920]">
-            <ZoomOut 
-              className="w-3.5 h-3.5 cursor-pointer transition-colors text-slate-400 hover:text-white" 
-              onClick={() => handleZoomChange(zoomLevel - 15)} 
+            <ZoomOut
+              className="w-3.5 h-3.5 cursor-pointer transition-colors text-slate-400 hover:text-white"
+              onClick={() => handleZoomChange(zoomLevel - 15)}
               title="Zoom Out (Ctrl+Wheel Down)"
             />
-            <input 
-              type="range" 
-              min="25" 
-              max="220" 
-              value={zoomLevel} 
+            <input
+              type="range"
+              min="25"
+              max="220"
+              value={zoomLevel}
               onChange={(e) => handleZoomChange(Number(e.target.value))}
               className="w-24 h-1 bg-slate-600 rounded-full appearance-none cursor-pointer accent-[#00e5be]"
             />
-            <ZoomIn 
-              className="w-3.5 h-3.5 cursor-pointer transition-colors text-slate-400 hover:text-white" 
-              onClick={() => handleZoomChange(zoomLevel + 15)} 
+            <ZoomIn
+              className="w-3.5 h-3.5 cursor-pointer transition-colors text-slate-400 hover:text-white"
+              onClick={() => handleZoomChange(zoomLevel + 15)}
               title="Zoom In (Ctrl+Wheel Up)"
             />
             <span className="text-[10px] font-mono font-semibold opacity-80 pl-1 text-slate-300">{zoomLevel} px/s</span>
@@ -722,6 +721,17 @@ export default function AudioWaveformTimeline({
                 <span>+ Sub at Playhead</span>
               </button>
             )}
+
+            {onContinueFromTime && (
+              <button
+                onClick={() => onContinueFromTime(currentTime)}
+                className="px-2.5 py-1 text-xs rounded-lg font-bold transition-all cursor-pointer border border-amber-500/60 bg-amber-500/20 hover:bg-amber-500/35 text-amber-300 flex items-center gap-1.5 shadow-[0_0_10px_rgba(245,158,11,0.25)]"
+                title={`Continue generating subtitles starting from ${formatTime(currentTime)} on timeline`}
+              >
+                <Play size={11} className="fill-amber-300" />
+                <span>Continue from {formatTime(currentTime).slice(0, 5)}</span>
+              </button>
+            )}
           </div>
         </div>
 
@@ -734,20 +744,20 @@ export default function AudioWaveformTimeline({
       </div>
 
       {/* ── Continuous Waveform & Precise Subtitle Boxes ── */}
-      <div 
+      <div
         ref={scrollRef}
         className="relative flex-1 overflow-x-auto overflow-y-hidden cursor-crosshair custom-scrollbar min-h-[140px] bg-[#0e0f12]"
         onClick={handleTrackClick}
       >
-        <div 
+        <div
           className="relative h-full timeline-track"
           style={{ width: `${timelineWidth}px` }}
         >
           {/* Timecode Ruler Bar */}
           <div className="absolute top-0 left-0 w-full h-6 border-b border-[#262734] bg-[#14151a]/95 pointer-events-none z-10">
             {marks.map((time) => (
-              <div 
-                key={time} 
+              <div
+                key={time}
                 className="absolute top-0 h-full border-l border-[#262734] pl-1 flex items-center"
                 style={{ left: `${time * zoomLevel}px` }}
               >
@@ -759,7 +769,7 @@ export default function AudioWaveformTimeline({
           </div>
 
           {/* Viewport-Sized Sticky Audio Waveform Canvas (Never crashes on 40+ min media) */}
-          <canvas 
+          <canvas
             ref={canvasRef}
             height={160}
             className="sticky left-0 top-0 pointer-events-none z-0 block"
@@ -798,9 +808,9 @@ export default function AudioWaveformTimeline({
           </div>
 
           {/* ── Playhead Scrub Needle (Hardware-Accelerated 60FPS Pivot Motion) ── */}
-          <div 
+          <div
             className="absolute top-0 bottom-0 left-0 w-0.5 bg-[#00e5be] z-40 pointer-events-none shadow-[0_0_8px_rgba(0,229,190,0.9)] will-change-transform"
-            style={{ 
+            style={{
               transform: `translate3d(${currentTime * zoomLevel}px, 0, 0)`,
               transition: 'none'
             }}
@@ -816,7 +826,7 @@ export default function AudioWaveformTimeline({
 
       {/* Live Dragging Tooltip HUD */}
       {dragTooltip && (
-        <div 
+        <div
           className="fixed bg-[#181920]/95 border border-[#00e5be] text-white text-[11px] font-mono px-3 py-1.5 rounded-lg shadow-2xl pointer-events-none z-50 flex items-center gap-2"
           style={{ left: `${dragTooltip.x + 12}px`, top: `${dragTooltip.y}px` }}
         >
