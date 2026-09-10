@@ -7,6 +7,7 @@ import uuid
 import json
 import io
 import time
+import tempfile
 from collections import defaultdict
 from pathlib import Path
 from contextlib import asynccontextmanager
@@ -1284,6 +1285,52 @@ async def get_subtitle_waveform_endpoint(video_id: str, points_per_sec: int = 50
         raise HTTPException(status_code=500, detail=f"Failed to compute waveform: {e}")
 
 
+@app.post("/api/subtitle/probe_media")
+async def probe_media_endpoint(file: UploadFile = File(...)):
+    """Probe video or audio container to detect exact frame rate, resolution, duration, and stream info."""
+    suffix = Path(file.filename or "media.mp4").suffix or ".mp4"
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+    tmp_path = tmp.name
+    try:
+        # Write first 32MB (or full file if smaller) for rapid container header detection
+        chunk_size = 1024 * 1024
+        written = 0
+        while chunk := await file.read(chunk_size):
+            tmp.write(chunk)
+            written += len(chunk)
+            if written >= 32 * 1024 * 1024:
+                break
+        tmp.close()
+        
+        meta = await asyncio.to_thread(get_video_metadata, tmp_path)
+        fps = round(float(meta.get("frame_rate", 24.0)), 3)
+        return {
+            "frame_rate": fps,
+            "width": meta.get("width", 0),
+            "height": meta.get("height", 0),
+            "duration": meta.get("duration", 0.0),
+            "is_audio": meta.get("is_audio", False),
+            "codec": meta.get("codec", "unknown")
+        }
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return {
+            "frame_rate": 24.0,
+            "width": 0,
+            "height": 0,
+            "duration": 0.0,
+            "is_audio": False,
+            "error": str(e)
+        }
+    finally:
+        if os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
+
+
 @app.post("/api/subtitle/generate")
 async def generate_subtitles_endpoint(payload: dict):
     """Generate Netflix QC compliant subtitles from video with dynamic settings."""
@@ -1297,6 +1344,8 @@ async def generate_subtitles_endpoint(payload: dict):
     min_duration = float(payload.get("min_duration", 0.833))
     max_duration = float(payload.get("max_duration", 7.0))
     gemini_auto_fix = bool(payload.get("gemini_auto_fix", True))
+    raw_frame_rate = payload.get("frame_rate")
+    custom_frame_rate = float(raw_frame_rate) if raw_frame_rate is not None and float(raw_frame_rate) > 0 else None
     
     if not video_id:
         raise HTTPException(status_code=400, detail="video_id is required")
@@ -1318,6 +1367,7 @@ async def generate_subtitles_endpoint(payload: dict):
             min_duration=min_duration,
             max_duration=max_duration,
             gemini_auto_fix=gemini_auto_fix,
+            custom_frame_rate=custom_frame_rate,
         )
         active_sessions[video_id]["result"] = result
         return result
@@ -1341,6 +1391,8 @@ async def generate_subtitles_stream_endpoint(payload: dict):
     min_duration = float(payload.get("min_duration", 0.833))
     max_duration = float(payload.get("max_duration", 7.0))
     gemini_auto_fix = bool(payload.get("gemini_auto_fix", True))
+    raw_frame_rate = payload.get("frame_rate")
+    custom_frame_rate = float(raw_frame_rate) if raw_frame_rate is not None and float(raw_frame_rate) > 0 else None
     start_chunk = int(payload.get("start_chunk", 1))
     prev_events_count = int(payload.get("prev_events_count", 0))
     prev_batch_end = float(payload.get("prev_batch_end", 0.0))
@@ -1377,6 +1429,7 @@ async def generate_subtitles_stream_endpoint(payload: dict):
             start_time=start_time,
             batch_mode=batch_mode,
             user_feedback=user_feedback,
+            custom_frame_rate=custom_frame_rate,
         ),
         media_type="text/event-stream; charset=utf-8",
         headers={
@@ -1386,6 +1439,24 @@ async def generate_subtitles_stream_endpoint(payload: dict):
             "X-Accel-Buffering": "no"
         }
     )
+
+
+@app.post("/api/session/clear")
+async def clear_session_endpoint(payload: dict = None):
+    """Clear active session, results, and temporary chunk files for video_id."""
+    video_id = (payload or {}).get("video_id")
+    if video_id and video_id in active_sessions:
+        session = active_sessions.pop(video_id, None)
+        if session and session.get("file_path"):
+            fp = session["file_path"]
+            wav_fp = os.path.splitext(fp)[0] + ".wav"
+            for cand in [fp, wav_fp]:
+                if cand and "temp_" in os.path.basename(cand) and os.path.exists(cand):
+                    try:
+                        os.unlink(cand)
+                    except Exception:
+                        pass
+    return {"status": "cleared", "video_id": video_id}
 
 
 @app.post("/api/subtitle/lint")
@@ -1434,7 +1505,9 @@ async def gemini_fix_subtitles_endpoint(payload: dict):
     whisper_words = None
     is_cloud = bool(os.getenv("RENDER") or os.getenv("PORT"))
     enable_whisper = os.getenv("ENABLE_WHISPER", "true").lower() == "true"
-    whisper_model = os.getenv("WHISPER_MODEL", "tiny" if is_cloud else "base")
+    whisper_model = os.getenv("WHISPER_MODEL", "medium")
+    if whisper_model in ("base", "tiny"):
+        whisper_model = "medium"
     language = payload.get("language") or (active_sessions.get(video_id, {}).get("language") if video_id else None)
     if enable_whisper and video_id:
         video_path = resolve_active_session_video(video_id) or ""
@@ -1460,6 +1533,7 @@ async def gemini_fix_subtitles_endpoint(payload: dict):
             max_lines=max_lines,
             min_duration=min_duration,
             max_duration=max_duration,
+            audio_path=audio_path,
         )
         return result
     except Exception as e:
@@ -1512,7 +1586,9 @@ async def acoustic_sync_subtitles_endpoint(payload: dict):
                 raise HTTPException(status_code=500, detail=f"Failed to extract audio: {ex}")
 
     is_cloud = bool(os.getenv("RENDER") or os.getenv("PORT"))
-    whisper_model = payload.get("whisper_model") or os.getenv("WHISPER_MODEL", "tiny" if is_cloud else "base")
+    whisper_model = payload.get("whisper_model") or os.getenv("WHISPER_MODEL", "medium")
+    if whisper_model in ("base", "tiny"):
+        whisper_model = "medium"
 
     try:
         from app.whisper_aligner import get_whisper_word_timestamps, align_subtitle_timestamps
@@ -1532,11 +1608,14 @@ async def acoustic_sync_subtitles_endpoint(payload: dict):
         # 2. Sequential Acoustic Alignment
         aligned = await asyncio.to_thread(
             align_subtitle_timestamps,
-            events,
-            whisper_words,
-            12.0,
-            0.0,
-            audio_path
+            gemini_events=events,
+            whisper_words=whisper_words,
+            search_radius=12.0,
+            prev_batch_end=0.0,
+            audio_path=audio_path,
+            frame_rate=frame_rate,
+            min_duration=min_duration,
+            max_duration=max_duration
         )
 
         # 3. Netflix Polish

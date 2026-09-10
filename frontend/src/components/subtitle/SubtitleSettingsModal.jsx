@@ -16,6 +16,8 @@ export default function SubtitleSettingsModal({
   setMinDuration,
   maxDuration = 7.0,
   setMaxDuration,
+  frameRate = 24.0,
+  setFrameRate,
   language = 'en',
   setLanguage,
   script = 'auto',
@@ -66,24 +68,26 @@ export default function SubtitleSettingsModal({
     },
     {
       name: 'Broadcast TV',
-      desc: 'Compact 37 CPL · 17 CPS · 2 Lines',
+      desc: 'Compact 37 CPL · 17 CPS · 25 FPS',
       apply: () => {
         setCplLimit(37);
         setCpsLimit(17);
         setMaxLines(2);
         setMinDuration(1.0);
         setMaxDuration(6.0);
+        if (setFrameRate) setFrameRate(25.0);
       }
     },
     {
       name: 'Mobile / Reels',
-      desc: 'Short 32 CPL · 22 CPS · 1 Line',
+      desc: 'Short 32 CPL · 22 CPS · 30 FPS',
       apply: () => {
         setCplLimit(32);
         setCpsLimit(22);
         setMaxLines(1);
         setMinDuration(0.6);
         setMaxDuration(4.5);
+        if (setFrameRate) setFrameRate(30.0);
       }
     }
   ];
@@ -97,6 +101,7 @@ export default function SubtitleSettingsModal({
     setContentType('adult');
     setSdhMode(false);
     setGeminiAutoFix(true);
+    if (setFrameRate) setFrameRate(24.0);
   };
 
   return (
@@ -266,6 +271,67 @@ export default function SubtitleSettingsModal({
                 className="w-full accent-[#00e5be] cursor-pointer mt-1"
               />
               <span className="text-[10px] text-slate-400 block mt-1">Netflix standard: 7.0s</span>
+            </div>
+          </div>
+
+          {/* Video Frame Rate (FPS) Control */}
+          <div className="p-4 rounded-xl border bg-[#181920] border-[#262734] space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div>
+                <span className="font-bold text-xs flex items-center gap-1.5 text-white">
+                  🎬 Video Frame Rate (FPS)
+                </span>
+                <span className="text-[11px] text-slate-400">
+                  Controls shot-change snap thresholds & 2-frame gap calculations ({((2.0 / (frameRate || 24.0))).toFixed(3)}s gap)
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  step="0.001"
+                  min="1"
+                  max="120"
+                  value={frameRate}
+                  onChange={e => {
+                    const val = parseFloat(e.target.value);
+                    if (!isNaN(val) && val > 0 && setFrameRate) {
+                      setFrameRate(val);
+                    }
+                  }}
+                  className="w-20 rounded-lg px-2 py-1 text-xs font-mono font-bold border border-[#262734] bg-[#0e0f12] text-[#00e5be] text-right focus:border-[#00e5be] focus:outline-none"
+                />
+                <span className="font-mono text-xs text-slate-400">FPS</span>
+              </div>
+            </div>
+
+            {/* Quick Presets */}
+            <div className="flex flex-wrap gap-1.5">
+              {[
+                { label: '23.976 (Film)', val: 23.976 },
+                { label: '24 (Standard)', val: 24.0 },
+                { label: '25 (PAL/Indian TV)', val: 25.0 },
+                { label: '29.97 (NTSC)', val: 29.97 },
+                { label: '30 (Web/Video)', val: 30.0 },
+                { label: '50 (PAL High)', val: 50.0 },
+                { label: '59.94 (NTSC High)', val: 59.94 },
+                { label: '60 (High FPS)', val: 60.0 },
+              ].map(preset => {
+                const isSelected = Math.abs((frameRate || 24.0) - preset.val) < 0.01;
+                return (
+                  <button
+                    key={preset.label}
+                    type="button"
+                    onClick={() => setFrameRate && setFrameRate(preset.val)}
+                    className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-all cursor-pointer border ${
+                      isSelected
+                        ? 'bg-[#00e5be] border-[#00e5be] text-black shadow-xs'
+                        : 'bg-[#14151a] text-slate-300 border-[#262734] hover:border-slate-500'
+                    }`}
+                  >
+                    {preset.val} FPS
+                  </button>
+                );
+              })}
             </div>
           </div>
 

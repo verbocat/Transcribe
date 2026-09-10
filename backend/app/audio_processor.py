@@ -356,6 +356,14 @@ def snap_to_acoustic_boundaries(
     if not audio_path or not os.path.exists(audio_path):
         return round(raw_start, 3), round(raw_end, 3)
 
+    # Fast Neural VAD snapping (Silero VAD) with graceful fallback to RMS energy
+    try:
+        from app.vad_processor import is_vad_available, snap_to_acoustic_boundaries_vad
+        if is_vad_available():
+            return snap_to_acoustic_boundaries_vad(audio_path, raw_start, raw_end, collar_sec)
+    except Exception as e:
+        logger.debug(f"Silero VAD snapping fallback to RMS: {e}")
+
     try:
         info = sf.info(audio_path)
         samplerate = info.samplerate
@@ -667,7 +675,22 @@ def extract_physical_speech_intervals(
     except Exception:
         return []
 
-    # On long recordings (> 180s), return empty so we rely on fast Gemini & seek-based acoustic snapping
+    # Fast Neural Silero VAD (handles any duration with < 5MB RAM and high accuracy)
+    try:
+        from app.vad_processor import is_vad_available, get_speech_timestamps_vad
+        if is_vad_available():
+            vad_intervals = get_speech_timestamps_vad(
+                audio_path,
+                threshold=0.5,
+                min_speech_duration_ms=int(min_dur * 1000),
+                min_silence_duration_ms=int(silence_gap * 1000)
+            )
+            if vad_intervals:
+                return vad_intervals
+    except Exception as e:
+        logger.debug(f"Silero VAD interval extraction fallback to energy: {e}")
+
+    # On long recordings (> 180s) without VAD, return empty so we rely on seek-based acoustic snapping
     if total_sec > 180.0 or total_frames <= 0:
         return []
 

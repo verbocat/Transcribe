@@ -86,13 +86,16 @@ def log_terminal(msg: str):
 def load_whisper_model(model_name: Optional[str] = None):
     """
     Lazy-load Whisper model and cache it globally.
-    Defaults to 'tiny' on cloud (Render 512MB RAM) and 'base' on local desktop.
+    Enforces 'medium' model locally for studio-grade acoustic alignment and deep phonetic attention.
+    Completely eliminates deprecated 'base' and 'tiny' models.
     """
     global _whisper_model, _whisper_model_name
 
     is_cloud = bool(os.getenv("RENDER") or os.getenv("PORT"))
-    if not model_name:
-        model_name = os.getenv("WHISPER_MODEL", "tiny" if is_cloud else "base")
+    # Strictly enforce 'medium' model, rejecting any deprecated 'base' or 'tiny' requests
+    env_model = os.getenv("WHISPER_MODEL", "medium")
+    if not model_name or str(model_name).lower() in ("base", "tiny"):
+        model_name = env_model if str(env_model).lower() not in ("base", "tiny") else "medium"
 
     if _whisper_model is not None and _whisper_model_name == model_name:
         return _whisper_model
@@ -131,7 +134,7 @@ def get_whisper_word_timestamps(
     Args:
         audio_path: Path to the WAV audio file.
         language: Optional language code (e.g. 'hi', 'en', 'ta') for better accuracy.
-        model_name: Whisper model size ('tiny', 'base', 'small').
+        model_name: Whisper model size (enforced 'medium').
 
     Returns:
         Flat list of word dicts: [{"word": "hello", "start": 0.52, "end": 0.88}, ...]
@@ -476,10 +479,11 @@ def _find_best_span(
             # Weight full similarity plus boundary word matches
             total_sim = sim * 0.55 + first_sim * 0.25 + last_sim * 0.20
 
-            # Proximity score relative to orig_st (scales meaningfully up to 0.35 at 0.03/sec)
+            # Proximity penalty: soft tiebreaker for competing matches (capped at 0.15)
+            # Won't disqualify genuine acoustic matches when Gemini's estimate is coarse
             cand_st = whisper_words[s_i]["start"]
             time_diff = abs(cand_st - orig_st)
-            proximity_penalty = min(0.35, time_diff * 0.03) if orig_st > 0 else 0.0
+            proximity_penalty = min(0.15, time_diff * 0.015) if orig_st > 0 else 0.0
             score = total_sim - proximity_penalty
             candidates.append((score, s_i, e_i, cand_st, time_diff, total_sim))
 
@@ -492,6 +496,7 @@ def _find_best_span(
         best_e_idx = best_cand[2]
         best_st = best_cand[3]
         best_time_diff = best_cand[4]
+        best_total_sim = best_cand[5]
 
         # Find highest-scoring candidate representing a distinct occurrence (Fix 2)
         for c in candidates[1:]:
@@ -507,7 +512,14 @@ def _find_best_span(
     margin = best_score - second_best_score if second_best_score > 0.0 else 1.0
     req_margin = 0.02 if (best_time_diff <= 0.6 and best_score >= 0.88) else 0.08
     has_clear_margin = margin >= req_margin
-    is_confident = (best_score >= 0.50) and has_clear_margin
+
+    # Confident match evaluation:
+    # If this is an unambiguous unique occurrence (no competing duplicate phrase),
+    # trust the acoustic match if text similarity is healthy (>= 0.60).
+    if second_best_score == 0.0:
+        is_confident = (best_score >= 0.45) or (best_total_sim >= 0.60)
+    else:
+        is_confident = (best_score >= 0.48) and has_clear_margin
 
     return best_s_idx, best_e_idx, best_score, second_best_score, is_confident
 
@@ -517,7 +529,10 @@ def align_subtitle_timestamps(
     whisper_words: List[Dict[str, Any]],
     search_radius: float = 8.0,
     prev_batch_end: float = 0.0,
-    audio_path: Optional[str] = None
+    audio_path: Optional[str] = None,
+    frame_rate: float = 24.0,
+    min_duration: float = 0.833,
+    max_duration: float = 7.0
 ) -> List[Dict[str, Any]]:
     """
     Closed-loop sequential acoustic alignment:
@@ -530,6 +545,7 @@ def align_subtitle_timestamps(
 
     from app.audio_processor import parse_timestamp, snap_to_acoustic_boundaries
     from app.netflix_models import format_timestamp as fmt_ts, calculate_cps
+    from app.dtw_aligner import align_events_dtw
 
     total_events = len(gemini_events)
     total_w = len(whisper_words)
@@ -538,15 +554,24 @@ def align_subtitle_timestamps(
     aligned_count = 0
     fallback_low_conf = 0
     fallback_ambiguous = 0
-    min_gap = 0.083  # Minimum 2 frames @ 24fps
+    min_gap = round(2.0 / frame_rate, 3)
+
+    # Pre-compute Global Monotonic DTW Alignment
+    try:
+        dtw_results = align_events_dtw(gemini_events, whisper_words)
+    except Exception as dtw_err:
+        log_terminal(f"DTW alignment error, using fallback matcher: {dtw_err}")
+        dtw_results = []
 
     for ev_idx, event in enumerate(gemini_events):
         text = event.get("text", "")
         clean_words = [_normalize_text(w) for w in text.replace('\n', ' ').split() if _normalize_text(w)]
         
-        orig_st = parse_timestamp(event.get("start_time", 0.0))
-        orig_et = parse_timestamp(event.get("end_time", orig_st + 2.0))
-        orig_dur = max(0.833, round(orig_et - orig_st, 3))
+        raw_st = event.get("start_time") if (event.get("start_time") is not None and event.get("start_time") != "") else event.get("start", 0.0)
+        orig_st = parse_timestamp(raw_st)
+        raw_et = event.get("end_time") if (event.get("end_time") is not None and event.get("end_time") != "") else event.get("end", orig_st + 2.0)
+        orig_et = parse_timestamp(raw_et)
+        orig_dur = max(min_duration, round(orig_et - orig_st, 3))
 
         if not clean_words:
             st = round(max(audio_cursor + min_gap, orig_st), 3)
@@ -565,81 +590,87 @@ def align_subtitle_timestamps(
         target_norm = " ".join(clean_words)
         target_len = len(clean_words)
 
-        # Look forward from w_cursor, allowing looking slightly back (up to 4 words)
-        search_start = max(0, w_cursor - 4)
-        while search_start > 0 and whisper_words[search_start]["end"] > audio_cursor:
-            search_start -= 1
-
-        # Fix 4: Extract scan-and-score loop into _find_best_span
-        best_s_idx, best_e_idx, best_score, second_best_score, is_confident = _find_best_span(
-            clean_words=clean_words,
-            target_norm=target_norm,
-            target_len=target_len,
-            orig_st=orig_st,
-            audio_cursor=audio_cursor,
-            whisper_words=whisper_words,
-            search_start=search_start,
-            total_w=total_w
-        )
-
-        if is_confident and best_s_idx is not None:
-            matched_start = whisper_words[best_s_idx]["start"]
-            matched_end = whisper_words[best_e_idx]["end"]
-            w_cursor = best_e_idx + 1
+        # Primary Alignment: Global Monotonic DTW
+        dtw_res = dtw_results[ev_idx] if dtw_results and ev_idx < len(dtw_results) else None
+        if dtw_res and dtw_res.get("is_confident") and dtw_res.get("matched_start") is not None:
+            matched_start = float(dtw_res["matched_start"])
+            matched_end = float(dtw_res["matched_end"])
+            is_confident = True
             aligned_count += 1
+            best_score = float(dtw_res.get("confidence", 1.0))
+            second_best_score = 0.0
+            # Advance w_cursor past matched_end
+            while w_cursor < total_w and whisper_words[w_cursor]["end"] <= matched_end:
+                w_cursor += 1
         else:
-            if best_s_idx is None or best_score < 0.50:
-                fallback_low_conf += 1
+            # Secondary Alignment Fallback: Local Window Span Matcher (_find_best_span)
+            search_start = max(0, w_cursor - 4)
+            while search_start > 0 and whisper_words[search_start]["end"] > audio_cursor:
+                search_start -= 1
+
+            best_s_idx, best_e_idx, best_score, second_best_score, is_confident = _find_best_span(
+                clean_words=clean_words,
+                target_norm=target_norm,
+                target_len=target_len,
+                orig_st=orig_st,
+                audio_cursor=audio_cursor,
+                whisper_words=whisper_words,
+                search_start=search_start,
+                total_w=total_w
+            )
+
+            if is_confident and best_s_idx is not None:
+                matched_start = whisper_words[best_s_idx]["start"]
+                matched_end = whisper_words[best_e_idx]["end"]
+                w_cursor = best_e_idx + 1
+                aligned_count += 1
             else:
-                fallback_ambiguous += 1
-            # Ambiguous repetition or weak match: fall back cleanly to Gemini's timestamp guess
-            matched_start = max(audio_cursor + min_gap, orig_st)
-            matched_end = max(matched_start + 0.833, orig_et)
+                if best_s_idx is None or best_score < 0.50:
+                    fallback_low_conf += 1
+                else:
+                    fallback_ambiguous += 1
+                # Low confidence or unconfident match: preserve Gemini's verbatim ground-truth timestamps!
+                matched_start = orig_st
+                matched_end = orig_et
+                is_confident = False
 
-        orig_matched_st = matched_start
-        snap_ran = False
-        snap_delta = 0.0
-
-        # Fix 3: Micro acoustic energy snapping ONLY when match was NOT confident
-        if audio_path and os.path.exists(audio_path) and not is_confident:
+        # Micro acoustic vocal cord snapping (Silero VAD) ONLY when confident
+        if audio_path and os.path.exists(audio_path) and is_confident:
             try:
                 snapped_st, snapped_et = snap_to_acoustic_boundaries(
-                    audio_path, matched_start, matched_end, collar_sec=0.15
+                    audio_path, matched_start, matched_end, collar_sec=0.08
                 )
-                snap_ran = True
-                snap_delta = snapped_st - orig_matched_st
                 matched_start = snapped_st
-                matched_end = max(matched_start + 0.833, snapped_et)
+                matched_end = snapped_et
             except Exception:
                 pass
 
         st = round(matched_start, 3)
-        et = round(min(st + 7.0, max(st + 0.833, matched_end)), 3)
+        raw_dur = max(0.1, round(matched_end - matched_start, 3))
+        et = round(min(st + max_duration, st + raw_dur), 3)
 
         trimmed_prev = False
-        # Fix 1: Strictly enforce non-overlapping timeline without corrupting confident previous events
+        # Acoustic anchor principle: current speech onset (st) must not be pushed into the future
         if st < audio_cursor + min_gap:
             if ev_idx > 0:
                 prev_ev = gemini_events[ev_idx - 1]
-                prev_st = float(prev_ev.get("start_time", 0.0))
-                prev_was_confident = prev_ev.get("_aligned_confident", False)
-                can_trim_prev = (
-                    (st - min_gap) - prev_st >= 0.833
-                    and not prev_was_confident
-                )
-                if can_trim_prev:
-                    prev_ev["end_time"] = round(st - min_gap, 3)
-                    prev_ev["end"] = prev_ev["end_time"]
-                    prev_ev["duration"] = round(prev_ev["end_time"] - prev_st, 3)
-                    prev_ev["end_time_str"] = fmt_ts(prev_ev["end_time"])
-                    audio_cursor = prev_ev["end_time"]
+                prev_raw_st = prev_ev.get("start_time") if (prev_ev.get("start_time") is not None and prev_ev.get("start_time") != "") else prev_ev.get("start", 0.0)
+                prev_st = parse_timestamp(prev_raw_st)
+                target_prev_end = round(st - min_gap, 3)
+                if target_prev_end > prev_st + 0.05:
+                    prev_ev["end_time"] = target_prev_end
+                    prev_ev["end"] = target_prev_end
+                    prev_ev["duration"] = round(target_prev_end - prev_st, 3)
+                    prev_ev["end_time_str"] = fmt_ts(target_prev_end)
+                    audio_cursor = target_prev_end
                     trimmed_prev = True
                 else:
+                    # In degenerate cases where words completely coincided, sequence safely
                     st = round(audio_cursor + min_gap, 3)
-                    et = round(min(st + 7.0, max(st + 0.833, matched_end)), 3)
+                    et = round(st + raw_dur, 3)
             else:
                 st = round(audio_cursor + min_gap, 3)
-                et = round(min(st + 7.0, max(st + 0.833, matched_end)), 3)
+                et = round(st + raw_dur, 3)
 
         dur = max(0.01, round(et - st, 3))
 

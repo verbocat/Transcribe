@@ -11,7 +11,7 @@ from app.whisper_aligner import (
 # Test real clip repeated dialogue lines
 def test_real_dialogue_accuracy():
     wav_path = r"d:\Older-transcribe\Transcribe\backend\uploads\temp_chunk_6c861ed5_4.wav"
-    words = get_whisper_word_timestamps(wav_path, language="hi", model_name="tiny")
+    words = get_whisper_word_timestamps(wav_path, language="hi", model_name="medium")
     assert len(words) > 50
 
     # Test Case 1: The repeated phrase "I am not able to save him"

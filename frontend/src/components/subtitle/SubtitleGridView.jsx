@@ -18,6 +18,8 @@ function SubtitleGridView({
   onRebreakEvent = () => {},
   onAddSubtitle = () => {},
   onJumpNextIssue = null,
+  onRestoreDraft = null,
+  availableDraftInfo = null,
   cplLimit = 42,
   cpsLimit = 20,
   frameRate = 24.0,
@@ -302,6 +304,16 @@ function SubtitleGridView({
             <p className="text-[11px] opacity-70 mt-1 max-w-[220px]">
               {searchQuery ? "No matches found for your search." : "Click '+ Sub' or 'Auto Captions (AI)' to generate subtitles."}
             </p>
+            {availableDraftInfo && !searchQuery && onRestoreDraft && (
+              <button
+                onClick={onRestoreDraft}
+                className="mt-3 px-3 py-1.5 bg-[#00e5be] hover:bg-[#00c9a7] text-black rounded font-bold text-xs cursor-pointer transition-all shadow-xs flex items-center gap-1.5"
+                title="Restore subtitles from last saved draft"
+              >
+                <Sparkles size={13} />
+                <span>Restore Saved Draft ({availableDraftInfo.eventsCount || availableDraftInfo.events?.length || 0} subs)</span>
+              </button>
+            )}
           </div>
         ) : (
           <div style={{ height: `${totalHeight}px`, position: 'relative', width: '100%' }}>

@@ -126,16 +126,18 @@ def coordinate_gemini_qc_fix(
     max_lines: int = 2,
     min_duration: float = 0.833,
     max_duration: float = 7.0,
+    audio_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Coordinates with Gemini to fix subtitle events violating QC rules.
 
     1. Lints events against user settings.
     2. Gathers violating events and their exact diagnostic errors.
-    3. Batches violating events to Gemini with a targeted fix prompt.
-    4. Merges corrected events into the timeline.
-    5. Re-aligns corrected events against Whisper word boundaries.
-    6. Re-lints and returns updated events and QC score.
+    3. Grounds the fix prompt with actual spoken word timestamps from Whisper.
+    4. Batches violating events to Gemini with a targeted fix prompt.
+    5. Merges corrected events into the timeline.
+    6. Re-aligns corrected events against Whisper & Silero VAD acoustic boundaries.
+    7. Re-lints and returns updated events and QC score.
     """
     shot_changes = shot_changes or []
 
@@ -182,13 +184,11 @@ def coordinate_gemini_qc_fix(
 
     client = _get_gemini_client()
     candidate_models = [
-        "gemini-3.8-flash",
-        "gemini-3.7-flash",
         "gemini-3.6-flash",
-        "gemini-3.5-flash",
-        "gemini-3.5-flash-lite",
-        "gemini-3.1-flash-lite",
+        "gemini-flash-latest",
         "gemini-3-flash-preview",
+        "gemini-flash-lite-latest",
+        "gemini-2.5-flash",
     ]
     primary = os.getenv("GEMINI_MODEL")
     if primary and primary in candidate_models:
@@ -210,7 +210,19 @@ def coordinate_gemini_qc_fix(
         for idx in batch_idx_subset:
             ev = linted_events[idx]
             err_msgs = [e.get("message", "") for e in ev.get("qc_errors", [])]
-            items_to_fix.append({
+            ev_st = parse_timestamp(ev.get("start_time", 0.0))
+            ev_et = parse_timestamp(ev.get("end_time", ev_st + 2.0))
+
+            # Ground with physical spoken word timestamps from Whisper if available
+            ev_word_anchors = []
+            if whisper_words:
+                for w in whisper_words:
+                    w_st = float(w.get("start", 0.0))
+                    w_et = float(w.get("end", w_st + 0.3))
+                    if w_et >= ev_st - 0.4 and w_st <= ev_et + 0.4:
+                        ev_word_anchors.append(f"{w.get('word', '')} ({w_st:.2f}s-{w_et:.2f}s)")
+
+            fix_item = {
                 "batch_item_id": idx,
                 "current_start": ev.get("start_time_str") or format_timestamp(ev.get("start_time", 0.0)),
                 "current_end": ev.get("end_time_str") or format_timestamp(ev.get("end_time", 0.0)),
@@ -218,7 +230,11 @@ def coordinate_gemini_qc_fix(
                 "current_text": ev.get("text", ""),
                 "qc_errors": err_msgs,
                 "speakers": ev.get("speakers", ["Speaker 1"]),
-            })
+            }
+            if ev_word_anchors:
+                fix_item["spoken_word_timestamps"] = " ".join(ev_word_anchors[:25])
+
+            items_to_fix.append(fix_item)
 
         fix_prompt = f"""Fix the following {len(items_to_fix)} subtitle event(s) to strictly satisfy all Netflix rules:
 
@@ -234,6 +250,7 @@ Instructions:
 - For each item, keep 100% verbatim spoken words.
 - Re-break lines with '\\n' so every line has <= {cpl_limit} characters.
 - If text is too long for its duration (CPS > {max_cps}), split it into TWO separate sequential subtitle events with appropriate timestamps!
+- Use the spoken_word_timestamps to ensure any split falls precisely at a natural pause between words.
 - Use the item's `batch_item_id` in the `id` field (or sub-ids if split, e.g. 101, 102).
 """
 
@@ -331,13 +348,21 @@ Instructions:
 
     # Step 4: If Whisper words are available, align any newly split or edited events
     if whisper_words:
-        log_terminal("Re-aligning Gemini-fixed subtitles against Whisper acoustic boundaries...")
-        rebuilt_events = align_subtitle_timestamps(rebuilt_events, whisper_words, search_radius=12.0)
+        log_terminal("Re-aligning Gemini-fixed subtitles against Whisper & Silero VAD acoustic boundaries...")
+        rebuilt_events = align_subtitle_timestamps(
+            rebuilt_events,
+            whisper_words,
+            search_radius=12.0,
+            audio_path=audio_path,
+            frame_rate=frame_rate,
+            min_duration=min_duration,
+            max_duration=max_duration
+        )
 
     # Step 5: Split any multi-speaker events, gap chaining & monotonic order enforcement
     from app.netflix_linter import split_multi_speaker_subtitles
     rebuilt_events = split_multi_speaker_subtitles(rebuilt_events, frame_rate=frame_rate, min_duration=min_duration)
-    rebuilt_events = auto_chain_gaps(rebuilt_events, frame_rate=frame_rate)
+    rebuilt_events = auto_chain_gaps(rebuilt_events, frame_rate=frame_rate, min_duration=min_duration, max_cps=max_cps)
 
     # Step 6: Final lint check
     final_lint = lint_all_subtitles(

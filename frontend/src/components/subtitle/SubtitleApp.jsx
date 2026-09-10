@@ -5,7 +5,7 @@ import {
   SlidersHorizontal, Search, Split, Merge, Scissors, Trash2, Plus,
   ChevronDown, X, Play, Clock, Activity, FileText, Check, Settings,
   Menu, Download, Eye, AlertTriangle, Layers, Type, Sun, Moon, Loader2, Globe, Volume2,
-  MessageSquare, ChevronRight
+  MessageSquare, ChevronRight, RotateCcw
 } from 'lucide-react';
 import { API_BASE } from '../../config';
 import VideoPlayer from './VideoPlayer';
@@ -91,6 +91,113 @@ async function uploadFileInChunks(file, apiBase, onProgress) {
     }
   }
   return lastData;
+}
+
+// Robust auto video frame rate detector (backend FFprobe container probe with browser HTML5 video fallback)
+async function detectVideoFrameRate(file, apiBase) {
+  // 1. Try high-speed backend probe endpoint (reads first 32MB container headers)
+  try {
+    const formData = new FormData();
+    const slice = file.slice(0, Math.min(file.size, 32 * 1024 * 1024));
+    formData.append('file', slice, file.name);
+    const res = await fetch(`${apiBase}/api/subtitle/probe_media`, {
+      method: 'POST',
+      body: formData,
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.frame_rate && data.width > 0) {
+        return {
+          frame_rate: data.frame_rate,
+          width: data.width,
+          height: data.height,
+          duration: data.duration,
+          source: 'container_probe'
+        };
+      }
+    }
+  } catch (err) {
+    console.warn("Backend media probe notice:", err);
+  }
+
+  // 2. Client-side browser HTML5 video requestVideoFrameCallback fallback
+  return new Promise((resolve) => {
+    try {
+      if (!('requestVideoFrameCallback' in HTMLVideoElement.prototype)) {
+        resolve({ frame_rate: 24.0, source: 'default' });
+        return;
+      }
+      const video = document.createElement('video');
+      video.muted = true;
+      video.playsInline = true;
+      const url = URL.createObjectURL(file);
+      video.src = url;
+
+      let frameTimes = [];
+      let timeoutId = null;
+
+      const cleanup = () => {
+        if (timeoutId) clearTimeout(timeoutId);
+        video.pause();
+        video.removeAttribute('src');
+        video.load();
+        URL.revokeObjectURL(url);
+      };
+
+      const onFrame = (now, metadata) => {
+        frameTimes.push(metadata.mediaTime);
+        if (frameTimes.length >= 8) {
+          cleanup();
+          const deltas = [];
+          for (let i = 1; i < frameTimes.length; i++) {
+            const d = frameTimes[i] - frameTimes[i - 1];
+            if (d > 0.005 && d < 0.2) deltas.push(d);
+          }
+          if (deltas.length >= 4) {
+            const avgDelta = deltas.reduce((a, b) => a + b, 0) / deltas.length;
+            const rawFps = 1.0 / avgDelta;
+            const standardFps = [23.976, 24, 25, 29.97, 30, 48, 50, 59.94, 60];
+            let closest = standardFps[0];
+            let minDiff = Math.abs(rawFps - closest);
+            for (const fps of standardFps) {
+              const diff = Math.abs(rawFps - fps);
+              if (diff < minDiff) {
+                minDiff = diff;
+                closest = fps;
+              }
+            }
+            const detected = minDiff < 0.6 ? closest : Math.round(rawFps * 100) / 100;
+            resolve({ frame_rate: detected, source: 'browser_rvfc' });
+            return;
+          }
+          resolve({ frame_rate: 24.0, source: 'default' });
+        } else {
+          video.requestVideoFrameCallback(onFrame);
+        }
+      };
+
+      video.onloadeddata = async () => {
+        try {
+          video.requestVideoFrameCallback(onFrame);
+          await video.play();
+          timeoutId = setTimeout(() => {
+            cleanup();
+            resolve({ frame_rate: 24.0, source: 'timeout_default' });
+          }, 1200);
+        } catch (_) {
+          cleanup();
+          resolve({ frame_rate: 24.0, source: 'play_error_default' });
+        }
+      };
+
+      video.onerror = () => {
+        cleanup();
+        resolve({ frame_rate: 24.0, source: 'video_error_default' });
+      };
+    } catch (_) {
+      resolve({ frame_rate: 24.0, source: 'exception_default' });
+    }
+  });
 }
 
 export default function SubtitleApp({ onBackToHome }) {
@@ -236,18 +343,26 @@ export default function SubtitleApp({ onBackToHome }) {
   const [language, setLanguage] = useState(() => {
     try {
       const saved = localStorage.getItem('karya_sub_language');
-      return (saved && saved !== 'hi') ? saved : 'en';
-    } catch (_) { return 'en'; }
+      return saved || 'auto';
+    } catch (_) { return 'auto'; }
   });
   const [script, setScript] = useState(() => {
     try {
       const saved = localStorage.getItem('karya_sub_script');
-      return (saved && saved !== 'devanagari') ? saved : 'auto';
+      return saved || 'auto';
     } catch (_) { return 'auto'; }
   });
   const [contentType, setContentType] = useState('adult'); // 'adult' (20 CPS) | 'children' (17 CPS)
   const [sdhMode, setSdhMode] = useState(false);
-  const [frameRate, setFrameRate] = useState(24.0);
+  const [frameRate, setFrameRate] = useState(() => {
+    try {
+      const v = localStorage.getItem('karya_sub_fps');
+      return v ? parseFloat(v) : 24.0;
+    } catch {
+      return 24.0;
+    }
+  });
+  const [detectedFpsNotice, setDetectedFpsNotice] = useState('');
   const [shotChanges, setShotChanges] = useState([]);
   const [complianceScore, setComplianceScore] = useState(100.0);
   const [totalErrors, setTotalErrors] = useState(0);
@@ -267,6 +382,9 @@ export default function SubtitleApp({ onBackToHome }) {
   const [batchProgress, setBatchProgress] = useState(null); // { current: 1, total: 4 }
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const elapsedTimerRef = useRef(null);
+  const activeStreamReaderRef = useRef(null);
+  const activeAbortControllerRef = useRef(null);
+  const isCancelledRef = useRef(false);
 
   // History for Undo/Redo
   const [history, setHistory] = useState([]);
@@ -281,7 +399,17 @@ export default function SubtitleApp({ onBackToHome }) {
   const [showCustomTimeModal, setShowCustomTimeModal] = useState(false);
   const [customStartTime, setCustomStartTime] = useState(0);
   const [autoSaveStatus, setAutoSaveStatus] = useState('');
-  const [pendingDraft, setPendingDraft] = useState(null); // Previous autosaved draft detection
+  const [pendingDraft, setPendingDraft] = useState(null); // Draft associated with currently selected file
+  const [availableSavedDraft, setAvailableSavedDraft] = useState(() => {
+    try {
+      const raw = localStorage.getItem('karya_subtitle_last_active_draft');
+      if (raw) {
+        const d = JSON.parse(raw);
+        if (d.events && d.events.length > 0) return d;
+      }
+    } catch (_) {}
+    return null;
+  });
   const [backendConnected, setBackendConnected] = useState(null); // null = checking, true = online, false = offline
 
   useEffect(() => {
@@ -379,8 +507,9 @@ export default function SubtitleApp({ onBackToHome }) {
       localStorage.setItem('karya_sub_min_dur', minDuration);
       localStorage.setItem('karya_sub_max_dur', maxDuration);
       localStorage.setItem('karya_sub_autofix', geminiAutoFix);
+      localStorage.setItem('karya_sub_fps', frameRate);
     } catch { }
-  }, [cplLimit, cpsLimit, maxLines, minDuration, maxDuration, geminiAutoFix]);
+  }, [cplLimit, cpsLimit, maxLines, minDuration, maxDuration, geminiAutoFix, frameRate]);
 
   // Active Subtitle
   const activeEvent = useMemo(() => {
@@ -417,30 +546,55 @@ export default function SubtitleApp({ onBackToHome }) {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // ── 1-Minute Interval Auto-Save to Database / localStorage ──
+  // ── Robust Draft Saving to Per-File & Active Session Cache ──
+  const saveCurrentDraft = useCallback((evsToSave, customStatus = 'Draft Saved ✓') => {
+    const list = evsToSave || events;
+    if (!list || list.length === 0) return;
+    try {
+      const draftPayload = {
+        fileName: selectedFile?.name || null,
+        fileSize: selectedFile?.size || null,
+        events: list,
+        complianceScore,
+        totalErrors,
+        totalWarnings,
+        resumeChunk,
+        totalChunks,
+        settings: { language, script, contentType, cplLimit, cpsLimit, frameRate, sdhMode },
+        timestamp: new Date().toISOString()
+      };
+      const serialized = JSON.stringify(draftPayload);
+      if (selectedFile?.name) {
+        localStorage.setItem(`karya_subtitle_autosave_${selectedFile.name}`, serialized);
+      }
+      localStorage.setItem('karya_subtitle_last_active_draft', serialized);
+      setAvailableSavedDraft(draftPayload);
+      if (customStatus) {
+        setAutoSaveStatus(customStatus);
+        setTimeout(() => setAutoSaveStatus(''), 2500);
+      }
+    } catch (e) {
+      console.warn('Auto-save storage quota exceeded', e);
+    }
+  }, [events, selectedFile, complianceScore, totalErrors, totalWarnings, resumeChunk, totalChunks, language, script, contentType, cplLimit, cpsLimit, frameRate, sdhMode]);
+
+  // Debounced auto-save on event modifications (1.2s after last user change)
+  useEffect(() => {
+    if (!events || events.length === 0) return;
+    const timer = setTimeout(() => {
+      saveCurrentDraft(events, '');
+    }, 1200);
+    return () => clearTimeout(timer);
+  }, [events, saveCurrentDraft]);
+
+  // Periodic heartbeat sync every 30s
   useEffect(() => {
     if (!events || events.length === 0) return;
     const interval = setInterval(() => {
-      try {
-        const fileId = selectedFile?.name || 'draft_subtitle';
-        localStorage.setItem(`karya_subtitle_autosave_${fileId}`, JSON.stringify({
-          events,
-          complianceScore,
-          totalErrors,
-          totalWarnings,
-          resumeChunk,
-          totalChunks,
-          settings: { language, contentType, cplLimit, cpsLimit, frameRate, sdhMode },
-          timestamp: new Date().toISOString()
-        }));
-        setAutoSaveStatus('Draft Saved (1m sync) ✓');
-        setTimeout(() => setAutoSaveStatus(''), 2500);
-      } catch (e) {
-        console.warn('Auto-save storage quota exceeded', e);
-      }
-    }, 60000); // Once every 1 minute
+      saveCurrentDraft(events, 'Draft Synced ✓');
+    }, 30000);
     return () => clearInterval(interval);
-  }, [events, complianceScore, totalErrors, totalWarnings, selectedFile, language, contentType, cplLimit, cpsLimit, frameRate, sdhMode, resumeChunk, totalChunks]);
+  }, [events, saveCurrentDraft]);
 
   // ── Mouse Drag Splitter Handlers for Resizable Panes ──
   const handleLeftSplitterDown = (e) => {
@@ -569,6 +723,53 @@ export default function SubtitleApp({ onBackToHome }) {
       handleLint(targetEvents);
     }
   };
+
+  // ── Restore Saved Draft from Storage/Memory ──
+  const handleRestoreDraft = useCallback((draftToRestore = null) => {
+    let draft = draftToRestore;
+    if (!draft && pendingDraft) draft = pendingDraft;
+    if (!draft && availableSavedDraft) draft = availableSavedDraft;
+    if (!draft) {
+      try {
+        const raw = localStorage.getItem('karya_subtitle_last_active_draft');
+        if (raw) draft = JSON.parse(raw);
+      } catch (_) {}
+    }
+
+    if (!draft || !draft.events || draft.events.length === 0) {
+      alert("No saved draft found in memory to restore.");
+      return;
+    }
+
+    const cleaned = sanitizeEvents(draft.events);
+    setEvents(cleaned);
+    setOriginalEvents(cleaned);
+    pushToHistory(cleaned);
+    handleLint(cleaned);
+
+    if (draft.complianceScore !== undefined) setComplianceScore(draft.complianceScore);
+    if (draft.totalErrors !== undefined) setTotalErrors(draft.totalErrors);
+    if (draft.totalWarnings !== undefined) setTotalWarnings(draft.totalWarnings);
+    if (draft.settings) {
+      if (draft.settings.language) setLanguage(draft.settings.language);
+      if (draft.settings.script) setScript(draft.settings.script);
+      if (draft.settings.contentType) setContentType(draft.settings.contentType);
+      if (draft.settings.cplLimit) setCplLimit(draft.settings.cplLimit);
+      if (draft.settings.cpsLimit) setCpsLimit(draft.settings.cpsLimit);
+      if (draft.settings.frameRate) setFrameRate(draft.settings.frameRate);
+      if (draft.settings.sdhMode !== undefined) setSdhMode(draft.settings.sdhMode);
+    }
+    if (draft.resumeChunk && draft.totalChunks) {
+      setResumeChunk(draft.resumeChunk);
+      setTotalChunks(draft.totalChunks);
+      setCanResume(draft.resumeChunk <= draft.totalChunks);
+    }
+
+    setActiveEventId(cleaned[0]?.id || null);
+    setAutoSaveStatus(`Restored draft (${cleaned.length} subtitles) ✓`);
+    setTimeout(() => setAutoSaveStatus(''), 4000);
+    setPendingDraft(null);
+  }, [pendingDraft, availableSavedDraft, sanitizeEvents, pushToHistory, handleLint]);
 
   // Re-cut / Split active subtitle at current playhead cursor
   const handleSplitAtCursor = (splitTime) => {
@@ -733,10 +934,128 @@ export default function SubtitleApp({ onBackToHome }) {
     }
   };
 
+  // ── Absolute Reset & Clear All Drafts, Active Streams, and Cache ──
+  const handleClearAllDraftAndWork = useCallback((confirmPrompt = true) => {
+    if (confirmPrompt && !window.confirm("Clear all current subtitles, drafts, and active progress for this session?")) {
+      return false;
+    }
+
+    isCancelledRef.current = true;
+
+    // 1. Cancel any active stream reader immediately
+    if (activeStreamReaderRef.current) {
+      try {
+        activeStreamReaderRef.current.cancel();
+      } catch (_) {}
+      activeStreamReaderRef.current = null;
+    }
+
+    // 2. Abort any active fetch requests
+    if (activeAbortControllerRef.current) {
+      try {
+        activeAbortControllerRef.current.abort();
+      } catch (_) {}
+      activeAbortControllerRef.current = null;
+    }
+
+    // 3. Clear elapsed timer
+    if (elapsedTimerRef.current) {
+      clearInterval(elapsedTimerRef.current);
+      elapsedTimerRef.current = null;
+    }
+
+    // 4. Reset generation & streaming progress states
+    setIsGenerating(false);
+    setProgressPercent(0);
+    setProgressStage('');
+    setProgressDetail('');
+    setBatchProgress(null);
+    setElapsedSeconds(0);
+    setBatchPauseData(null);
+    setCanResume(false);
+    setResumeChunk(null);
+    setTotalChunks(null);
+    setQcNotification(null);
+    setAutoSaveStatus('');
+
+    // 5. Reset subtitle canvas & history
+    setEvents([]);
+    setHistory([]);
+    setHistoryIndex(-1);
+    setComplianceScore(100);
+    setTotalErrors(0);
+    setTotalWarnings(0);
+    setActiveEventId(null);
+    setPendingDraft(null);
+    editedEventIdsRef.current.clear();
+
+    // 6. Reset media & audio caching
+    extractedAudioFileRef.current = null;
+    uploadPromiseRef.current = null;
+    setInitialWaveformPeaks([]);
+
+    // 7. Clean autosave keys from localStorage ONLY WHEN USER EXPLICITLY CONFIRMS DELETION
+    if (confirmPrompt) {
+      try {
+        if (selectedFile?.name) {
+          localStorage.removeItem(`karya_subtitle_autosave_${selectedFile.name}`);
+        }
+        localStorage.removeItem('karya_subtitle_last_active_draft');
+        setAvailableSavedDraft(null);
+        Object.keys(localStorage).forEach(key => {
+          if (key.startsWith('karya_subtitle_autosave_')) {
+            localStorage.removeItem(key);
+          }
+        });
+      } catch (_) {}
+    }
+
+    // 8. Notify backend to clear server session & temporary files
+    if (currentVideoId) {
+      fetch(`${API_BASE}/api/session/clear`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ video_id: currentVideoId })
+      }).catch(() => {});
+      setCurrentVideoId(null);
+    }
+
+    setTimeout(() => {
+      isCancelledRef.current = false;
+    }, 300);
+
+    return true;
+  }, [currentVideoId, selectedFile]);
+
   // Media File (Video or Audio) Upload Handler
   const handleFileChange = (e) => {
     const file = e.target.files?.[0];
     if (file) {
+      // 1. Abort any ongoing stream cleanly WITHOUT wiping saved drafts
+      isCancelledRef.current = true;
+      if (activeStreamReaderRef.current) {
+        try { activeStreamReaderRef.current.cancel(); } catch (_) {}
+        activeStreamReaderRef.current = null;
+      }
+      if (activeAbortControllerRef.current) {
+        try { activeAbortControllerRef.current.abort(); } catch (_) {}
+        activeAbortControllerRef.current = null;
+      }
+      if (elapsedTimerRef.current) {
+        clearInterval(elapsedTimerRef.current);
+        elapsedTimerRef.current = null;
+      }
+
+      setIsGenerating(false);
+      setProgressPercent(0);
+      setProgressStage('');
+      setProgressDetail('');
+      setBatchProgress(null);
+      setElapsedSeconds(0);
+      setBatchPauseData(null);
+      setQcNotification(null);
+      setAutoSaveStatus('');
+
       setSelectedFile(file);
       setCurrentVideoId(null);
       extractedAudioFileRef.current = null;
@@ -755,41 +1074,89 @@ export default function SubtitleApp({ onBackToHome }) {
         setVideoDuration(mediaElem.duration || 0);
       };
 
+      // Auto-detect container frame rate for video files
+      if (!isAudio) {
+        detectVideoFrameRate(file, API_BASE).then(res => {
+          if (res?.frame_rate && res.frame_rate > 0) {
+            setFrameRate(res.frame_rate);
+            setDetectedFpsNotice(`${res.frame_rate} fps`);
+            setTimeout(() => setDetectedFpsNotice(''), 4500);
+          }
+        }).catch(err => console.warn("FPS detection notice:", err));
+      }
+
       // Upload in background immediately with client audio extraction and waveform generation
       uploadPromiseRef.current = processAndUploadMedia(file, isAudio);
 
-      // Reset subtitle canvas for clean state
-      setEvents([]);
-      setComplianceScore(100);
-      setTotalErrors(0);
-      setTotalWarnings(0);
-      setActiveEventId(null);
-      setCanResume(false);
-      setResumeChunk(null);
-      setTotalChunks(null);
-
-      // Check if previous autosaved draft exists
-      const saved = localStorage.getItem(`karya_subtitle_autosave_${file.name}`);
-      if (saved) {
-        try {
-          const data = JSON.parse(saved);
-          if (data.events && data.events.length > 0) {
-            setPendingDraft(data);
-            if (data.resumeChunk && data.totalChunks && data.resumeChunk <= data.totalChunks) {
-              setResumeChunk(data.resumeChunk);
-              setTotalChunks(data.totalChunks);
-              setCanResume(true);
-            }
-          } else {
-            setPendingDraft(null);
+      // Check if previous autosaved draft exists for this specific file
+      let existingDraft = null;
+      try {
+        const saved = localStorage.getItem(`karya_subtitle_autosave_${file.name}`);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (parsed && parsed.events && parsed.events.length > 0) {
+            existingDraft = parsed;
           }
-        } catch (err) {
-          console.error(err);
-          setPendingDraft(null);
         }
+      } catch (err) {
+        console.error("Error reading saved draft for file:", err);
+      }
+
+      // Also ensure availableSavedDraft is fresh from memory
+      try {
+        const lastRaw = localStorage.getItem('karya_subtitle_last_active_draft');
+        if (lastRaw) {
+          const lastParsed = JSON.parse(lastRaw);
+          if (lastParsed?.events?.length > 0) {
+            setAvailableSavedDraft(lastParsed);
+          }
+        }
+      } catch (_) {}
+
+      if (existingDraft) {
+        // MATCH: This file was uploaded earlier! Automatically restore its previous subtitles onto canvas
+        console.log(`[Subtitle Studio] Recognized earlier upload: "${file.name}" with ${existingDraft.events.length} subtitles.`);
+        const cleaned = sanitizeEvents(existingDraft.events);
+        setEvents(cleaned);
+        setOriginalEvents(cleaned);
+        pushToHistory(cleaned);
+        handleLint(cleaned);
+        setActiveEventId(cleaned[0]?.id || null);
+
+        if (existingDraft.complianceScore !== undefined) setComplianceScore(existingDraft.complianceScore);
+        if (existingDraft.totalErrors !== undefined) setTotalErrors(existingDraft.totalErrors);
+        if (existingDraft.totalWarnings !== undefined) setTotalWarnings(existingDraft.totalWarnings);
+        if (existingDraft.resumeChunk && existingDraft.totalChunks && existingDraft.resumeChunk <= existingDraft.totalChunks) {
+          setResumeChunk(existingDraft.resumeChunk);
+          setTotalChunks(existingDraft.totalChunks);
+          setCanResume(true);
+        } else {
+          setCanResume(false);
+          setResumeChunk(null);
+          setTotalChunks(null);
+        }
+
+        setPendingDraft(existingDraft);
+        setAutoSaveStatus(`Recognized earlier upload: restored ${cleaned.length} subtitles ✓`);
+        setTimeout(() => setAutoSaveStatus(''), 4500);
       } else {
+        // Different file: reset canvas, but keep saved drafts in memory so user can restore if they wish
+        setEvents([]);
+        setHistory([]);
+        setHistoryIndex(-1);
+        setComplianceScore(100);
+        setTotalErrors(0);
+        setTotalWarnings(0);
+        setActiveEventId(null);
+        setCanResume(false);
+        setResumeChunk(null);
+        setTotalChunks(null);
         setPendingDraft(null);
       }
+
+      setTimeout(() => {
+        isCancelledRef.current = false;
+      }, 300);
     }
   };
 
@@ -1080,6 +1447,7 @@ export default function SubtitleApp({ onBackToHome }) {
           max_lines: maxLines,
           min_duration: minDuration,
           max_duration: maxDuration,
+          frame_rate: frameRate,
           gemini_auto_fix: geminiAutoFix,
           batch_mode: 'all',
           user_feedback: userFeedbackText.trim() || null
@@ -1120,6 +1488,7 @@ export default function SubtitleApp({ onBackToHome }) {
             max_lines: maxLines,
             min_duration: minDuration,
             max_duration: maxDuration,
+            frame_rate: frameRate,
             gemini_auto_fix: geminiAutoFix,
             batch_mode: 'all',
             user_feedback: userFeedbackText.trim() || null
@@ -1133,6 +1502,7 @@ export default function SubtitleApp({ onBackToHome }) {
       }
 
       const reader = streamRes.body.getReader();
+      activeStreamReaderRef.current = reader;
       const decoder = new TextDecoder('utf-8');
       let buffer = '';
       let accumulatedEvents = [];
@@ -1289,6 +1659,9 @@ export default function SubtitleApp({ onBackToHome }) {
       }
 
       // Check for premature disconnection
+      if (isCancelledRef.current) {
+        return;
+      }
       if (!streamCompleted) {
         console.warn(`[Subtitle Studio] Stream reader closed without 'complete' event. Ingested ${lastBatchIndex}/${totalExpectedChunks} batches (${accumulatedEvents.length} events).`);
         if (accumulatedEvents.length > 0) {
@@ -1313,6 +1686,9 @@ export default function SubtitleApp({ onBackToHome }) {
         }
       }
     } catch (err) {
+      if (isCancelledRef.current || err.name === 'AbortError') {
+        return;
+      }
       console.error("Generation error:", err);
       if (lastBatchIndex > 0 && lastBatchIndex < totalExpectedChunks) {
         setCanResume(true);
@@ -1333,12 +1709,15 @@ export default function SubtitleApp({ onBackToHome }) {
         alert(`Error generating subtitles: ${err.message}`);
       }
     } finally {
+      activeStreamReaderRef.current = null;
       setIsGenerating(false);
       if (elapsedTimerRef.current) clearInterval(elapsedTimerRef.current);
-      setTimeout(() => {
-        setProgressPercent(0);
-        setBatchProgress(null);
-      }, 2500);
+      if (!isCancelledRef.current) {
+        setTimeout(() => {
+          setProgressPercent(0);
+          setBatchProgress(null);
+        }, 2500);
+      }
     }
   };
 
@@ -1398,6 +1777,7 @@ export default function SubtitleApp({ onBackToHome }) {
           max_lines: maxLines,
           min_duration: minDuration,
           max_duration: maxDuration,
+          frame_rate: frameRate,
           gemini_auto_fix: geminiAutoFix,
           start_time: prevBatchEnd,
           start_chunk: chunkToStart,
@@ -1432,6 +1812,7 @@ export default function SubtitleApp({ onBackToHome }) {
             max_lines: maxLines,
             min_duration: minDuration,
             max_duration: maxDuration,
+            frame_rate: frameRate,
             gemini_auto_fix: geminiAutoFix,
             start_time: prevBatchEnd,
             start_chunk: chunkToStart,
@@ -1450,6 +1831,7 @@ export default function SubtitleApp({ onBackToHome }) {
       }
 
       const reader = streamRes.body.getReader();
+      activeStreamReaderRef.current = reader;
       const decoder = new TextDecoder('utf-8');
       let buffer = '';
       let streamCompleted = false;
@@ -1562,6 +1944,9 @@ export default function SubtitleApp({ onBackToHome }) {
         }
       }
 
+      if (isCancelledRef.current) {
+        return;
+      }
       if (!streamCompleted) {
         console.warn(`[Subtitle Studio] Stream stopped at batch ${lastBatchIndex}/${totalExpectedChunks}.`);
         if (lastBatchIndex < totalExpectedChunks) {
@@ -1572,6 +1957,9 @@ export default function SubtitleApp({ onBackToHome }) {
         }
       }
     } catch (err) {
+      if (isCancelledRef.current || err.name === 'AbortError') {
+        return;
+      }
       console.error("Resume error:", err);
       if (lastBatchIndex > 0 && lastBatchIndex < totalExpectedChunks) {
         setCanResume(true);
@@ -1580,12 +1968,15 @@ export default function SubtitleApp({ onBackToHome }) {
       }
       alert(`Error resuming subtitle generation: ${err.message}`);
     } finally {
+      activeStreamReaderRef.current = null;
       setIsGenerating(false);
       if (elapsedTimerRef.current) clearInterval(elapsedTimerRef.current);
-      setTimeout(() => {
-        setProgressPercent(0);
-        setBatchProgress(null);
-      }, 2500);
+      if (!isCancelledRef.current) {
+        setTimeout(() => {
+          setProgressPercent(0);
+          setBatchProgress(null);
+        }, 2500);
+      }
     }
   };
 
@@ -1678,6 +2069,7 @@ export default function SubtitleApp({ onBackToHome }) {
           max_lines: maxLines,
           min_duration: minDuration,
           max_duration: maxDuration,
+          frame_rate: frameRate,
           gemini_auto_fix: geminiAutoFix,
           start_time: t,
           prev_events_count: prevEventsCount,
@@ -1709,6 +2101,7 @@ export default function SubtitleApp({ onBackToHome }) {
             max_lines: maxLines,
             min_duration: minDuration,
             max_duration: maxDuration,
+            frame_rate: frameRate,
             gemini_auto_fix: geminiAutoFix,
             start_time: t,
             prev_events_count: prevEventsCount,
@@ -1724,6 +2117,7 @@ export default function SubtitleApp({ onBackToHome }) {
       }
 
       const reader = streamRes.body.getReader();
+      activeStreamReaderRef.current = reader;
       const decoder = new TextDecoder('utf-8');
       let buffer = '';
       let streamCompleted = false;
@@ -1812,6 +2206,9 @@ export default function SubtitleApp({ onBackToHome }) {
         }
       }
 
+      if (isCancelledRef.current) {
+        return;
+      }
       if (!streamCompleted) {
         if (lastBatchIndex < totalExpectedChunks) {
           setResumeChunk(lastBatchIndex + 1);
@@ -1821,15 +2218,21 @@ export default function SubtitleApp({ onBackToHome }) {
         }
       }
     } catch (err) {
+      if (isCancelledRef.current || err.name === 'AbortError') {
+        return;
+      }
       console.error("Custom time generate error:", err);
       alert(`Error generating subtitles from ${formatTime(t)}: ${err.message}`);
     } finally {
+      activeStreamReaderRef.current = null;
       setIsGenerating(false);
       if (elapsedTimerRef.current) clearInterval(elapsedTimerRef.current);
-      setTimeout(() => {
-        setProgressPercent(0);
-        setBatchProgress(null);
-      }, 2500);
+      if (!isCancelledRef.current) {
+        setTimeout(() => {
+          setProgressPercent(0);
+          setBatchProgress(null);
+        }, 2500);
+      }
     }
   }, [selectedFile, events, videoDuration, currentVideoId, isAudioFile, processAndUploadMedia, language, script, contentType, sdhMode, cplLimit, cpsLimit, maxLines, minDuration, maxDuration, geminiAutoFix, pushToHistory]);
 
@@ -1881,14 +2284,49 @@ export default function SubtitleApp({ onBackToHome }) {
 
   // ── Closed-Loop Acoustic Audio Synchronization Pass ──
   const handleAcousticSync = async () => {
-    if (!events || events.length === 0 || !currentVideoId) return;
+    if (!events || events.length === 0) {
+      alert("No subtitles to sync. Please generate or import subtitles first.");
+      return;
+    }
+    if (!currentVideoId && !selectedFile) {
+      alert("No media file selected. Please select an audio or video file to align subtitles against.");
+      return;
+    }
     setIsSyncingAudio(true);
+    setAutoSaveStatus('Analyzing audio waveforms & synchronizing pauses...');
     try {
-      const res = await fetch(`${API_BASE}/api/subtitle/acoustic_sync`, {
+      let videoId = currentVideoId;
+      if (!videoId && uploadPromiseRef.current) {
+        try {
+          videoId = await uploadPromiseRef.current;
+        } catch (e) {
+          console.warn("Background upload failed, will upload directly:", e);
+        }
+        if (videoId) {
+          setCurrentVideoId(videoId);
+        }
+      }
+
+      if (!videoId && selectedFile) {
+        setAutoSaveStatus('Transferring audio track to server for waveform alignment...');
+        videoId = await processAndUploadMedia(selectedFile, isAudioFile);
+        if (videoId) {
+          setCurrentVideoId(videoId);
+        } else {
+          throw new Error('Could not transfer media to server for audio sync.');
+        }
+      }
+
+      if (!videoId) {
+        throw new Error('No active video session found. Please re-upload your audio/video file.');
+      }
+
+      setAutoSaveStatus('Analyzing speech waveforms & aligning dialect timings...');
+      let res = await fetch(`${API_BASE}/api/subtitle/acoustic_sync`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          video_id: currentVideoId,
+          video_id: videoId,
           events: events,
           language: language,
           content_type: contentType,
@@ -1901,6 +2339,36 @@ export default function SubtitleApp({ onBackToHome }) {
           shot_changes: shotChanges
         })
       });
+
+      // Self-healing: if session on server expired or restarted (404), re-upload and retry
+      if (res.status === 404 && selectedFile) {
+        console.warn(`[Subtitle Studio] Video session ${videoId} expired for acoustic sync. Re-uploading...`);
+        setAutoSaveStatus('Session refreshed on server. Re-uploading media...');
+        videoId = await processAndUploadMedia(selectedFile, isAudioFile);
+        if (!videoId) {
+          throw new Error('Media re-upload failed after server session expired.');
+        }
+        setCurrentVideoId(videoId);
+        setAutoSaveStatus('Re-analyzing waveforms & synchronizing...');
+        res = await fetch(`${API_BASE}/api/subtitle/acoustic_sync`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            video_id: videoId,
+            events: events,
+            language: language,
+            content_type: contentType,
+            frame_rate: frameRate,
+            cpl_limit: cplLimit,
+            max_cps: cpsLimit,
+            max_lines: maxLines,
+            min_duration: minDuration,
+            max_duration: maxDuration,
+            shot_changes: shotChanges
+          })
+        });
+      }
+
       if (res.ok) {
         const data = await res.json();
         setOriginalEvents(events);
@@ -1917,7 +2385,7 @@ export default function SubtitleApp({ onBackToHome }) {
           setTotalWarnings(data.lint_result.total_warnings || 0);
           setCpsStats(data.lint_result.cps_stats || null);
         }
-        setAutoSaveStatus('Acoustically Synced to Audio ✓');
+        setAutoSaveStatus('Acoustically Synced to Audio Waveform ✓');
         setTimeout(() => setAutoSaveStatus(''), 4000);
       } else {
         const err = await res.json();
@@ -2138,6 +2606,18 @@ export default function SubtitleApp({ onBackToHome }) {
                     <span>Import Subtitle (SRT/VTT)...</span>
                   </button>
                   <div className="h-px my-1 bg-[#262734]" />
+                  {(availableSavedDraft || pendingDraft) && (
+                    <button
+                      onClick={() => {
+                        handleRestoreDraft();
+                        setShowFileDropdown(false);
+                      }}
+                      className="w-full text-left px-3 py-2 text-xs rounded flex items-center gap-2 font-medium cursor-pointer hover:bg-[#22232c] text-amber-300"
+                    >
+                      <RotateCcw size={13} className="text-amber-400" />
+                      <span>Restore Saved Draft ({pendingDraft?.events?.length || availableSavedDraft?.events?.length || 0})</span>
+                    </button>
+                  )}
                   <button
                     onClick={() => { setShowExportModal(true); setShowFileDropdown(false); }}
                     className="w-full text-left px-3 py-2 text-xs rounded flex items-center gap-2 font-bold cursor-pointer hover:bg-[#22232c] text-[#00e5be]"
@@ -2148,19 +2628,7 @@ export default function SubtitleApp({ onBackToHome }) {
                   <div className="h-px my-1 bg-[#262734]" />
                   <button
                     onClick={() => {
-                      if (window.confirm("Clear all current subtitles and remove any saved draft for this video?")) {
-                        try {
-                          if (selectedFile?.name) {
-                            localStorage.removeItem(`karya_subtitle_autosave_${selectedFile.name}`);
-                          }
-                        } catch (_) { }
-                        setEvents([]);
-                        setComplianceScore(100);
-                        setTotalErrors(0);
-                        setTotalWarnings(0);
-                        setActiveEventId(null);
-                        setPendingDraft(null);
-                      }
+                      handleClearAllDraftAndWork(true);
                       setShowFileDropdown(false);
                     }}
                     className={`w-full text-left px-3 py-2 text-xs rounded flex items-center gap-2 font-medium cursor-pointer text-rose-400 hover:bg-rose-950/40`}
@@ -2176,13 +2644,26 @@ export default function SubtitleApp({ onBackToHome }) {
             <button
               onClick={() => setShowSettingsModal(true)}
               className="px-2 py-1 rounded text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer border hover:bg-[#181920] text-slate-300 border-[#262734]"
-              title="Configure CPL, CPS, Line Limits & AI Auto-Fix"
+              title="Configure CPL, CPS, Frame Rate (FPS), Line Limits & AI Auto-Fix"
             >
               <Settings size={13} className="text-[#00e5be]" />
               <span>Settings</span>
               <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-[#00e5be]/15 text-[#00e5be] border border-[#00e5be]/30">
-                {cplLimit} CPL · {cpsLimit} CPS
+                {cplLimit} CPL · {cpsLimit} CPS · {frameRate} FPS
               </span>
+            </button>
+
+            {/* Quick Frame Rate Indicator / Selector Badge */}
+            <button
+              onClick={() => setShowSettingsModal(true)}
+              className={`px-2 py-1 rounded text-xs font-mono font-semibold flex items-center gap-1 transition-all cursor-pointer border ${detectedFpsNotice
+                  ? 'bg-[#00e5be] text-black border-[#00e5be] shadow-[0_0_10px_rgba(0,229,190,0.4)] animate-pulse'
+                  : 'bg-[#14151a] hover:bg-[#181920] text-slate-300 border-[#262734] hover:border-slate-500'
+                }`}
+              title="Click to view or change Video Frame Rate (FPS)"
+            >
+              <span>🎬</span>
+              <span>{detectedFpsNotice ? `FPS: ${detectedFpsNotice}` : `${frameRate} fps`}</span>
             </button>
 
             {/* Undo / Redo */}
@@ -2261,6 +2742,18 @@ export default function SubtitleApp({ onBackToHome }) {
             </select>
           </div>
 
+          {/* Restore Draft Button (Visible when canvas is empty and a draft exists in memory) */}
+          {events.length === 0 && (availableSavedDraft || pendingDraft) && (
+            <button
+              onClick={() => handleRestoreDraft()}
+              className="px-3 py-1 rounded text-xs font-bold bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/60 text-amber-300 flex items-center gap-1.5 transition-all cursor-pointer shadow-xs"
+              title="Restore subtitles from previous draft in memory"
+            >
+              <RotateCcw className="w-3.5 h-3.5 text-amber-400" />
+              <span>Restore Draft ({pendingDraft?.events?.length || availableSavedDraft?.events?.length || 0})</span>
+            </button>
+          )}
+
           {/* Auto-Fix Button */}
           <button
             onClick={handleAutoFix}
@@ -2276,11 +2769,10 @@ export default function SubtitleApp({ onBackToHome }) {
           <button
             onClick={() => handleOpenCustomTimeModal('lastSub')}
             disabled={isGenerating}
-            className={`px-3 py-1 rounded text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-xs ${
-              canResume || events.length > 0
+            className={`px-3 py-1 rounded text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-xs ${canResume || events.length > 0
                 ? 'bg-amber-500 hover:bg-amber-400 text-black shadow-[0_0_12px_rgba(245,158,11,0.35)]'
                 : 'bg-[#181920] hover:bg-[#22232c] border border-amber-500/50 text-amber-300'
-            } disabled:opacity-40 disabled:cursor-not-allowed`}
+              } disabled:opacity-40 disabled:cursor-not-allowed`}
             title={
               canResume
                 ? `Continue generation from Batch ${resumeChunk} of ${totalChunks}`
@@ -2321,12 +2813,12 @@ export default function SubtitleApp({ onBackToHome }) {
           {/* Acoustic Audio Sync Button */}
           <button
             onClick={handleAcousticSync}
-            disabled={events.length === 0 || isSyncingAudio || !currentVideoId}
+            disabled={events.length === 0 || isSyncingAudio || (!selectedFile && !currentVideoId)}
             className="px-3 py-1 rounded text-xs font-semibold bg-emerald-950/70 border border-emerald-500/40 hover:bg-emerald-900/80 text-emerald-300 flex items-center gap-1.5 transition-all shadow-[0_0_10px_rgba(16,185,129,0.2)] cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-            title="Snap and re-synchronize all subtitles directly to speech audio acoustics (Whisper + VAD)"
+            title="Snap and re-synchronize all subtitles directly to speech audio waveforms and rapid dialects (Whisper Medium + VAD)"
           >
             <Volume2 className={`w-3.5 h-3.5 text-emerald-400 ${isSyncingAudio ? 'animate-bounce' : ''}`} />
-            <span>{isSyncingAudio ? 'Syncing...' : 'Sync Audio'}</span>
+            <span>{isSyncingAudio ? 'Analyzing Audio...' : 'Audio Sync'}</span>
           </button>
 
           {/* Export Button (CapCut Signature Neon Turquoise Action) */}
@@ -2344,10 +2836,10 @@ export default function SubtitleApp({ onBackToHome }) {
           <button
             onClick={() => setShowQcDrawer(!showQcDrawer)}
             className={`px-2.5 py-1 rounded text-xs font-mono font-bold flex items-center gap-1.5 transition-colors cursor-pointer border ${complianceScore >= 98
-                ? 'bg-[#181920] border-emerald-500/50 text-emerald-400'
-                : complianceScore >= 80
-                  ? 'bg-[#181920] border-amber-500/50 text-amber-400'
-                  : 'bg-[#181920] border-rose-500/50 text-rose-400'
+              ? 'bg-[#181920] border-emerald-500/50 text-emerald-400'
+              : complianceScore >= 80
+                ? 'bg-[#181920] border-amber-500/50 text-amber-400'
+                : 'bg-[#181920] border-rose-500/50 text-rose-400'
               }`}
             title="Open Netflix Quality Control Dashboard"
           >
@@ -2393,45 +2885,84 @@ export default function SubtitleApp({ onBackToHome }) {
         </div>
       )}
 
-      {/* Draft Restore Notification Banner */}
+      {/* Draft Notification Banner for Recognized Earlier Upload */}
       {pendingDraft && (
-        <div className="px-4 py-2 flex items-center justify-between border-b border-[#262734] bg-[#181920] text-slate-200 text-xs shrink-0 z-30 transition-all">
+        <div className="px-4 py-2 flex items-center justify-between border-b border-[#00e5be]/30 bg-[#0d1f1c] text-slate-200 text-xs shrink-0 z-30 transition-all">
           <div className="flex items-center gap-2">
-            <Sparkles className="w-4 h-4 text-[#00e5be] shrink-0" />
+            <CheckCircle2 className="w-4 h-4 text-[#00e5be] shrink-0" />
             <span>
-              Found an earlier saved draft for <strong>{selectedFile?.name}</strong> with {pendingDraft.events?.length || 0} subtitles ({pendingDraft.timestamp ? new Date(pendingDraft.timestamp).toLocaleTimeString() : 'autosaved'}).
+              <strong>File Recognized:</strong> Restored {pendingDraft.events?.length || 0} earlier subtitles for <strong>{selectedFile?.name}</strong> ({pendingDraft.timestamp ? new Date(pendingDraft.timestamp).toLocaleTimeString() : 'autosaved'}). Preserved until you delete them.
             </span>
           </div>
           <div className="flex items-center gap-2">
             <button
-              onClick={() => {
-                const restoredEvents = pendingDraft.events || [];
-                setEvents(restoredEvents);
-                setComplianceScore(pendingDraft.complianceScore || 100);
-                setTotalErrors(pendingDraft.totalErrors || 0);
-                setTotalWarnings(pendingDraft.totalWarnings || 0);
-                setActiveEventId(restoredEvents[0]?.id || null);
-                if (pendingDraft.resumeChunk && pendingDraft.totalChunks && pendingDraft.resumeChunk <= pendingDraft.totalChunks) {
-                  setResumeChunk(pendingDraft.resumeChunk);
-                  setTotalChunks(pendingDraft.totalChunks);
-                  setCanResume(true);
-                }
-                setPendingDraft(null);
-              }}
+              onClick={() => setPendingDraft(null)}
               className="px-3 py-1 bg-[#00e5be] hover:bg-[#00c9a7] text-black rounded font-bold cursor-pointer transition-colors shadow-xs"
             >
-              Restore Draft
+              Keep Subtitles
             </button>
             <button
               onClick={() => {
-                try {
-                  localStorage.removeItem(`karya_subtitle_autosave_${selectedFile?.name}`);
-                } catch (_) { }
-                setPendingDraft(null);
+                if (window.confirm(`Permanently delete saved draft for ${selectedFile?.name}?`)) {
+                  try {
+                    localStorage.removeItem(`karya_subtitle_autosave_${selectedFile?.name}`);
+                  } catch (_) {}
+                  setEvents([]);
+                  setHistory([]);
+                  setHistoryIndex(-1);
+                  setPendingDraft(null);
+                  setAutoSaveStatus('Draft deleted');
+                  setTimeout(() => setAutoSaveStatus(''), 2500);
+                }
               }}
-              className="px-3 py-1 rounded cursor-pointer transition-colors bg-[#22232c] hover:bg-[#2c2d38] text-slate-300"
+              className="px-3 py-1 rounded cursor-pointer transition-colors bg-[#22232c] hover:bg-rose-950/60 text-rose-300 border border-rose-500/30"
             >
-              Discard & Start Fresh
+              Discard & Delete Draft
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Available Draft in Memory Banner (When no file uploaded or blank canvas) */}
+      {!pendingDraft && availableSavedDraft && events.length === 0 && (
+        <div className="px-4 py-2 flex items-center justify-between border-b border-amber-500/40 bg-[#221805] text-amber-200 text-xs shrink-0 z-30 transition-all">
+          <div className="flex items-center gap-2">
+            <RotateCcw className="w-4 h-4 text-amber-400 shrink-0" />
+            <span>
+              <strong>Saved Draft Available:</strong> Found {availableSavedDraft.events?.length || 0} subtitles in memory{availableSavedDraft.fileName ? ` from "${availableSavedDraft.fileName}"` : ''} ({availableSavedDraft.timestamp ? new Date(availableSavedDraft.timestamp).toLocaleTimeString() : 'autosaved'}).
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => handleRestoreDraft(availableSavedDraft)}
+              className="px-3 py-1 bg-amber-500 hover:bg-amber-400 text-black rounded font-bold cursor-pointer transition-colors shadow-xs flex items-center gap-1.5"
+            >
+              <RotateCcw size={12} />
+              <span>Restore Draft</span>
+            </button>
+            <button
+              onClick={() => {
+                if (window.confirm("Permanently delete this saved draft from memory?")) {
+                  try {
+                    localStorage.removeItem('karya_subtitle_last_active_draft');
+                    if (availableSavedDraft.fileName) {
+                      localStorage.removeItem(`karya_subtitle_autosave_${availableSavedDraft.fileName}`);
+                    }
+                  } catch (_) {}
+                  setAvailableSavedDraft(null);
+                }
+              }}
+              className="px-2.5 py-1 rounded cursor-pointer transition-colors bg-[#22232c] hover:bg-rose-950/60 text-slate-300 hover:text-rose-300"
+              title="Delete draft from memory"
+            >
+              Delete
+            </button>
+            <button
+              onClick={() => setAvailableSavedDraft(null)}
+              className="px-2 py-1 rounded text-slate-400 hover:text-slate-200 cursor-pointer"
+              title="Dismiss banner"
+            >
+              ✕
             </button>
           </div>
         </div>
@@ -2494,6 +3025,8 @@ export default function SubtitleApp({ onBackToHome }) {
               cpsLimit={cpsLimit}
               frameRate={frameRate}
               theme={theme}
+              onRestoreDraft={handleRestoreDraft}
+              availableDraftInfo={pendingDraft || availableSavedDraft}
             />
           </div>
 
@@ -2639,6 +3172,8 @@ export default function SubtitleApp({ onBackToHome }) {
         setMinDuration={setMinDuration}
         maxDuration={maxDuration}
         setMaxDuration={setMaxDuration}
+        frameRate={frameRate}
+        setFrameRate={setFrameRate}
         language={language}
         setLanguage={setLanguage}
         script={script}

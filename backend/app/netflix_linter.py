@@ -960,7 +960,9 @@ def auto_fix_line_breaks(text: str, max_cpl: int = 42) -> str:
 
 def auto_chain_gaps(
     events: List[Dict[str, Any]],
-    frame_rate: float = 24.0
+    frame_rate: float = 24.0,
+    min_duration: float = 0.833,
+    max_cps: float = 20.0
 ) -> List[Dict[str, Any]]:
     """
     Apply Netflix gap chaining rule to all events.
@@ -986,25 +988,33 @@ def auto_chain_gaps(
         # Strict timeline non-overlap & gap enforcement
         if gap_seconds < min_gap:
             target_end = round(next_start - min_gap, 6)
-            if target_end - curr_start >= 0.833:
+            if target_end - curr_start >= min_duration:
                 events[i]["end_time"] = target_end
                 events[i]["end"] = target_end
             else:
-                # If shortening curr_end would make duration < 0.833s, enforce min duration on curr and push next_start
-                if curr_end - curr_start < 0.833:
-                    curr_end = round(curr_start + 0.833, 6)
-                    events[i]["end_time"] = curr_end
-                    events[i]["end"] = curr_end
-                new_next_start = round(curr_end + min_gap, 6)
-                events[i + 1]["start_time"] = new_next_start
-                events[i + 1]["start"] = new_next_start
-                if float(events[i + 1].get("end_time", 0)) < new_next_start + 0.833:
-                    events[i + 1]["end_time"] = round(new_next_start + 0.833, 6)
-                    events[i + 1]["end"] = events[i + 1]["end_time"]
+                # If shortening curr_end drops duration below min_duration:
+                # Try expanding curr_start BACKWARDS into preceding silence (NEVER push next_start into speech!)
+                prev_end = float(events[i - 1].get("end_time", 0.0)) if i > 0 else 0.0
+                earliest_start = round(prev_end + min_gap, 6) if (i > 0 or prev_end > 0.0) else 0.0
+                if target_end - earliest_start >= min_duration:
+                    new_curr_start = round(target_end - min_duration, 6)
+                    events[i]["start_time"] = new_curr_start
+                    events[i]["start"] = new_curr_start
+                    events[i]["end_time"] = target_end
+                    events[i]["end"] = target_end
+                else:
+                    # Preceding space is too tight: clamp end_time to target_end without shifting next_start!
+                    # Strictly preserves acoustic speech anchor of events[i+1] and avoids compounding forward drift.
+                    events[i]["end_time"] = target_end
+                    events[i]["end"] = target_end
         elif MIN_GAP_FRAMES < gap_frames < CHAIN_THRESHOLD_FRAMES:
-            # Flicker zone: chain to 2-frame gap
-            events[i]["end_time"] = round(next_start - min_gap, 6)
-            events[i]["end"] = events[i]["end_time"]
+            # Only bridge the gap if the pause is tiny (<= 0.18s) OR subtitle needs reading time (CPS > max_cps)
+            # This prevents subtitles from lingering on screen during natural 300-500ms conversational pauses.
+            cur_dur = max(0.01, curr_end - curr_start)
+            cur_cps = calculate_cps(events[i].get("text", ""), cur_dur)
+            if gap_seconds <= 0.18 or cur_cps > max_cps or cur_dur < min_duration:
+                events[i]["end_time"] = round(next_start - min_gap, 6)
+                events[i]["end"] = events[i]["end_time"]
     
     # Update durations and formatted timestamps
     for event in events:
@@ -1577,7 +1587,7 @@ def format_and_split_subtitle_events(
         ev["id"] = idx
 
     # Pass 3: Gap chaining
-    formatted_events = auto_chain_gaps(formatted_events, frame_rate)
+    formatted_events = auto_chain_gaps(formatted_events, frame_rate=frame_rate, min_duration=min_duration, max_cps=max_cps)
     return formatted_events
 
 
