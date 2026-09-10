@@ -1441,24 +1441,6 @@ async def generate_subtitles_stream_endpoint(payload: dict):
     )
 
 
-@app.post("/api/session/clear")
-async def clear_session_endpoint(payload: dict = None):
-    """Clear active session, results, and temporary chunk files for video_id."""
-    video_id = (payload or {}).get("video_id")
-    if video_id and video_id in active_sessions:
-        session = active_sessions.pop(video_id, None)
-        if session and session.get("file_path"):
-            fp = session["file_path"]
-            wav_fp = os.path.splitext(fp)[0] + ".wav"
-            for cand in [fp, wav_fp]:
-                if cand and "temp_" in os.path.basename(cand) and os.path.exists(cand):
-                    try:
-                        os.unlink(cand)
-                    except Exception:
-                        pass
-    return {"status": "cleared", "video_id": video_id}
-
-
 @app.post("/api/subtitle/lint")
 async def lint_subtitles_endpoint(payload: SubtitleLintRequest):
     """Lint subtitles for Netflix QC compliance with dynamic custom settings."""
@@ -1505,9 +1487,7 @@ async def gemini_fix_subtitles_endpoint(payload: dict):
     whisper_words = None
     is_cloud = bool(os.getenv("RENDER") or os.getenv("PORT"))
     enable_whisper = os.getenv("ENABLE_WHISPER", "true").lower() == "true"
-    whisper_model = os.getenv("WHISPER_MODEL", "medium")
-    if whisper_model in ("base", "tiny"):
-        whisper_model = "medium"
+    whisper_model = os.getenv("WHISPER_MODEL", "tiny" if is_cloud else "base")
     language = payload.get("language") or (active_sessions.get(video_id, {}).get("language") if video_id else None)
     if enable_whisper and video_id:
         video_path = resolve_active_session_video(video_id) or ""
@@ -1586,9 +1566,7 @@ async def acoustic_sync_subtitles_endpoint(payload: dict):
                 raise HTTPException(status_code=500, detail=f"Failed to extract audio: {ex}")
 
     is_cloud = bool(os.getenv("RENDER") or os.getenv("PORT"))
-    whisper_model = payload.get("whisper_model") or os.getenv("WHISPER_MODEL", "medium")
-    if whisper_model in ("base", "tiny"):
-        whisper_model = "medium"
+    whisper_model = payload.get("whisper_model") or os.getenv("WHISPER_MODEL", "tiny" if is_cloud else "base")
 
     try:
         from app.whisper_aligner import get_whisper_word_timestamps, align_subtitle_timestamps
@@ -1608,14 +1586,11 @@ async def acoustic_sync_subtitles_endpoint(payload: dict):
         # 2. Sequential Acoustic Alignment
         aligned = await asyncio.to_thread(
             align_subtitle_timestamps,
-            gemini_events=events,
-            whisper_words=whisper_words,
-            search_radius=12.0,
-            prev_batch_end=0.0,
-            audio_path=audio_path,
-            frame_rate=frame_rate,
-            min_duration=min_duration,
-            max_duration=max_duration
+            events,
+            whisper_words,
+            12.0,
+            0.0,
+            audio_path
         )
 
         # 3. Netflix Polish

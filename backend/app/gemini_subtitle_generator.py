@@ -217,116 +217,6 @@ def group_whisper_words_into_subtitles(
     return events
 
 
-def audit_and_backfill_speech_coverage(
-    subs: List[Dict[str, Any]],
-    raw_whisper_words: List[Dict[str, Any]],
-    chunk_idx: int,
-    total_chunks: int,
-    cpl_limit: int = 42,
-    target_language: str = "Auto-Detect",
-    min_speech_gap_sec: float = 4.0,
-) -> Tuple[List[Dict[str, Any]], bool, str]:
-    """
-    Cross-checks generated subtitles against Whisper physical acoustic speech words.
-    
-    1. If Gemini returned 0 subtitles but Whisper detected audible speech words (>= 4 words):
-       -> Automatically recovers the entire batch from Whisper Medium.
-    2. If Gemini stopped early (e.g. cut off at 25s, but Whisper detected speech continuing until 85s):
-       -> Extracts the uncaptured trailing speech from Whisper Medium and appends to the batch.
-    3. If Gemini started late (missed leading speech by > 4s):
-       -> Extracts the uncaptured leading speech from Whisper Medium and prepends to the batch.
-
-    Returns:
-        (repaired_subtitles, was_recovered, audit_summary_message)
-    """
-    if not raw_whisper_words:
-        return subs, False, "No Whisper acoustic words to audit against"
-
-    # Filter genuine speech words (ignore punctuation tokens, pure whitespace)
-    speech_words = [
-        w for w in raw_whisper_words
-        if w.get("word", "").strip() and not re.match(r'^[\s.,!?:;\-_~`\'"♪\(\)\[\]#*&^%$@+=<>\\/]+$', w.get("word", "").strip())
-    ]
-    
-    if len(speech_words) < 4:
-        # Less than 4 audible words across the entire chunk -> genuinely silent / non-vocal audio interval
-        return subs, False, "Chunk has no significant vocal speech (< 4 words)"
-
-    # Case 1: Gemini returned 0 subtitles, but Whisper detected speech
-    if not subs:
-        log_terminal(
-            f"Batch {chunk_idx}/{total_chunks} [Coverage Audit]: Gemini returned 0 subtitles, "
-            f"but Whisper Medium detected {len(speech_words)} physical speech words. "
-            f"Auto-recovering entire batch from Whisper Medium!"
-        )
-        recovered = group_whisper_words_into_subtitles(
-            speech_words,
-            chunk_offset=0.0,
-            cpl_limit=cpl_limit,
-            target_language=target_language
-        )
-        return recovered, True, f"Full batch auto-recovered via Whisper Medium ({len(recovered)} events)"
-
-    # Case 2 & 3: Check timing coverage for leading or trailing speech cutoffs
-    try:
-        sub_first_start = parse_timestamp(subs[0]["start_time"])
-        sub_last_end = parse_timestamp(subs[-1]["end_time"])
-    except Exception:
-        return subs, False, "Failed to parse subtitle timestamps for audit"
-
-    whisper_first_start = speech_words[0]["start"]
-    whisper_last_end = speech_words[-1]["end"]
-
-    repaired_subs = list(subs)
-    was_recovered = False
-    audit_notes = []
-
-    # Check Trailing Gap: Did Gemini stop prematurely?
-    trailing_gap = whisper_last_end - sub_last_end
-    if trailing_gap >= min_speech_gap_sec:
-        trailing_words = [w for w in speech_words if w["start"] >= (sub_last_end + 0.35)]
-        if len(trailing_words) >= 4:
-            trailing_subs = group_whisper_words_into_subtitles(
-                trailing_words,
-                chunk_offset=0.0,
-                cpl_limit=cpl_limit,
-                target_language=target_language
-            )
-            if trailing_subs:
-                log_terminal(
-                    f"Batch {chunk_idx}/{total_chunks} [Coverage Audit]: Gemini prematurely cut off at {sub_last_end:.2f}s "
-                    f"(detected trailing speech gap: {trailing_gap:.2f}s up to {whisper_last_end:.2f}s). "
-                    f"Backfilling {len(trailing_subs)} trailing events from Whisper Medium!"
-                )
-                repaired_subs.extend(trailing_subs)
-                was_recovered = True
-                audit_notes.append(f"+{len(trailing_subs)} trailing events")
-
-    # Check Leading Gap: Did Gemini skip opening dialogue?
-    leading_gap = sub_first_start - whisper_first_start
-    if leading_gap >= min_speech_gap_sec:
-        leading_words = [w for w in speech_words if w["end"] <= (sub_first_start - 0.35)]
-        if len(leading_words) >= 4:
-            leading_subs = group_whisper_words_into_subtitles(
-                leading_words,
-                chunk_offset=0.0,
-                cpl_limit=cpl_limit,
-                target_language=target_language
-            )
-            if leading_subs:
-                log_terminal(
-                    f"Batch {chunk_idx}/{total_chunks} [Coverage Audit]: Gemini missed opening dialogue before {sub_first_start:.2f}s "
-                    f"(detected leading speech gap: {leading_gap:.2f}s from {whisper_first_start:.2f}s). "
-                    f"Prepending {len(leading_subs)} leading events from Whisper Medium!"
-                )
-                repaired_subs = leading_subs + repaired_subs
-                was_recovered = True
-                audit_notes.append(f"+{len(leading_subs)} leading events")
-
-    summary = ", ".join(audit_notes) if audit_notes else "Coverage verified complete"
-    return repaired_subs, was_recovered, summary
-
-
 def transcribe_chunk_with_whisper(
     target_path: str,
     chunk_s: float = 0.0,
@@ -342,9 +232,7 @@ def transcribe_chunk_with_whisper(
     try:
         from app.whisper_aligner import get_whisper_word_timestamps
         is_cloud = bool(os.getenv("RENDER") or os.getenv("PORT"))
-        model_name = whisper_model or os.getenv("WHISPER_MODEL", "medium")
-        if model_name in ("base", "tiny"):
-            model_name = "medium"
+        model_name = whisper_model or os.getenv("WHISPER_MODEL", "tiny" if is_cloud else "base")
         
         resolved_lang, _ = normalize_language_and_script(language)
         lang_target = None
@@ -443,72 +331,45 @@ def get_netflix_subtitle_system_prompt(
     target_script: str = "Auto-Detect"
 ) -> str:
     """Generate dynamic system prompt with user-configured CPL, CPS, max lines, and target language enforcement."""
-    is_auto = target_language.lower() in ["auto", "auto-detect", ""]
     is_english = target_language.lower() in ["english", "en"]
-    is_hindi = target_language.lower() in ["hindi", "hi", "hinglish"]
-
-    if is_auto:
+    lang_directive = ""
+    if is_english:
         lang_directive = (
-            "CRITICAL MANDATE: PRESERVE ORIGINAL SPOKEN LANGUAGE & SCRIPT (DO NOT TRANSLATE):\n"
-            "   - Transcribe 100% in the EXACT original language and dialect spoken in the audio.\n"
-            "   - If the audio dialogue is in Hindi: output 100% in Hindi using standard Devanagari script (e.g. 'तरुण, क्या हाल है?'). Do NOT translate into English!\n"
-            "   - If the audio dialogue is in Hinglish (Hindi spoken with English words): transcribe faithfully in Latin or Devanagari matching conversational speech.\n"
-            "   - If the audio dialogue is in English: transcribe in English.\n"
-            "   - NEVER translate dialogue from one language to another unless the user explicitly requested translation!\n"
-        )
-    elif is_hindi:
-        if "latin" in target_script.lower() or "hinglish" in target_script.lower():
-            lang_directive = (
-                "CRITICAL MANDATE: TARGET SUBTITLE LANGUAGE IS HINDI (LATIN / HINGLISH SCRIPT):\n"
-                "   - Transcribe the spoken Hindi dialogue phonetically using the Latin alphabet (e.g. 'Tarun, kya haal hai? Yeh bahut achha hai.').\n"
-                "   - Do NOT translate into English! Transcribe verbatim spoken Hindi in Roman/Latin script.\n"
-            )
-        else:
-            lang_directive = (
-                "CRITICAL MANDATE: TARGET SUBTITLE LANGUAGE IS HINDI (DEVANAGARI SCRIPT):\n"
-                "   - Transcribe 100% in Hindi using standard Devanagari script (e.g. 'तरुण, क्या हाल है?').\n"
-                "   - Do NOT translate Hindi dialogue into English!\n"
-                "   - Do NOT output unsolicited English words unless the speaker explicitly spoke an English loanword (e.g. 'डॉक्टर', 'फोन', 'हॉस्पिटल').\n"
-            )
-    elif is_english:
-        lang_directive = (
-            "CRITICAL MANDATE: TARGET SUBTITLE LANGUAGE IS ENGLISH:\n"
+            "CRITICAL MANDATE: TARGET SUBTITLE LANGUAGE IS 100% ENGLISH (LATIN ALPHABET).\n"
+            "   - Every single subtitle text MUST be written in ENGLISH using the standard Latin alphabet.\n"
+            "   - ABSOLUTE PROHIBITION: NEVER output Urdu, Arabic script (e.g. اردو, ی, ہ, etc.), Devanagari, or random symbols/gibberish.\n"
             "   - If the audio is in English: transcribe the spoken words verbatim into English subtitles.\n"
-            "   - If the audio dialogue is in another language: translate into natural, accurate English subtitles.\n"
+            "   - If the audio dialogue is spoken in Hindi, Urdu, or another language: translate the spoken dialogue accurately and fluently into natural English subtitles.\n"
         )
-    else:
+    elif target_language != "Auto-Detect":
         lang_directive = (
-            f"CRITICAL MANDATE: TARGET SUBTITLE LANGUAGE IS {target_language.upper()} ({target_script} SCRIPT):\n"
+            f"CRITICAL MANDATE: TARGET SUBTITLE LANGUAGE IS 100% {target_language.upper()} ({target_script} SCRIPT).\n"
             f"   - All subtitle text MUST be in {target_language} using {target_script} script.\n"
+            f"   - NEVER output random symbols or unrelated language scripts.\n"
         )
 
-    return f"""You are an elite, professional audio-to-text subtitle transcription engine.
+    return f"""You are an elite, professional audio-to-text subtitle transcription and translation engine.
 
-Your task is to transcribe and time subtitles from the audio with 100% verbatim accuracy and millimeter-precise sync following strict Netflix Timed Text standards.
+Your task is to generate millimeter-precise, timed subtitles following strict Netflix Timed Text standards.
 
 ### CRITICAL RULES:
 
-1. 100% VERBATIM ACCURACY (NEVER REPHRASE OR SUMMARIZE):
-   - Transcribe the EXACT words spoken by the speaker word-for-word.
-   - NEVER rephrase, paraphrase, omit, summarize, simplify, smooth grammar, or alter words in any way.
-   - Retain every spoken word, slang, expression, stutter, and dialogue element exactly as voiced.
+1. 100% ACCURACY & DIALOGUE FIDELITY:
+   - Capture the EXACT message and dialogue spoken by every speaker.
+   - Retain every spoken dialogue element, slang, and expression naturally.
    - Do NOT censor profanity.
+   - Do NOT invent or hallucinate words, repeating punctuation, or random symbols.
 
-2. ABSOLUTE PROPER NOUN PRESERVATION & ANTI-ANGLICIZATION:
-   - NEVER anglicize, westernize, substitute, or translate South Asian, Indian, regional, or culturally specific names, places, or proper nouns.
-   - For example:
-     * "Tarun" must ALWAYS remain "Tarun" (or "तरुण"), NEVER substitute with Western names like "Tyrone".
-     * "Jethalal" must ALWAYS remain "Jethalal" (or "जेठालाल").
-     * "Champaklal" must ALWAYS remain "Champaklal" (or "चंपकलाल").
-     * "Chalu Pandey" must ALWAYS remain "Chalu Pandey" (or "चालू पांडे").
-     * "Popatlal" must ALWAYS remain "Popatlal" (or "पोपटलाल").
-     * "Khesari" must ALWAYS remain "Khesari" (or "खेसारी").
-     * "Fukra" must ALWAYS remain "Fukra" (or "फुकरा").
-     * "Insaan" must ALWAYS remain "Insaan" (or "इंसान").
-   - Listen attentively to phonetic articulation. NEVER guess an English dictionary word when an Indian or regional name is spoken.
+2. ABSOLUTE PROPER NOUN PRESERVATION:
+   - Preserve character names, brand names, and place names faithfully with phonetic precision.
+   - Do not substitute real names with arbitrary Western names.
 
 3. STRICT TARGET LANGUAGE & SCRIPT PURITY:
-{lang_directive}
+{lang_directive}   - If Target Language is Hindi and Target Script is Devanagari:
+     * Transcribe 100% in Hindi using standard Devanagari script (e.g. "तरुण, क्या हाल है?").
+     * Do NOT translate Hindi dialogue into English.
+   - If Target Language is Hindi and Target Script is Latin / Hinglish:
+     * Transcribe conversational Hindi phonetically in Latin alphabet (e.g. "Tarun, kya haal hai?").
    - Under no circumstances should you ever output random corrupted symbols (e.g. '.....', '♪♪♪', repeating characters).
 
 4. COMPLETE GRAMMATICAL UNITS & NATURAL CLAUSE BOUNDARIES (NO MID-PHRASE SPLITS):
@@ -1088,23 +949,18 @@ def split_and_balance_event(
 
 def merge_short_fragments(events: List[Dict[str, Any]], cpl_limit: int = 42, max_lines: int = 2) -> List[Dict[str, Any]]:
     """Merge tiny fragments (<= 3 words or duration < 1.0s) into the preceding event only if same speaker and grammatically sound."""
-    from app.audio_processor import parse_timestamp
     merged = []
     for ev in events:
         text = ev.get("text", "").strip()
         words = text.replace('\n', ' ').split()
-        raw_st = ev.get("start_time") if (ev.get("start_time") is not None and ev.get("start_time") != "") else ev.get("start", 0.0)
-        raw_et = ev.get("end_time") if (ev.get("end_time") is not None and ev.get("end_time") != "") else ev.get("end", 0.0)
-        st = parse_timestamp(raw_st)
-        et = parse_timestamp(raw_et)
-        if et <= st:
-            et = round(st + 1.0, 3)
+        st = float(ev.get("start_time", 0.0))
+        et = float(ev.get("end_time", st + 1.0))
         dur = et - st
         
         if merged and (len(words) <= 3 or dur < 0.9):
             prev = merged[-1]
-            prev_st = parse_timestamp(prev.get("start_time") if prev.get("start_time") is not None else prev.get("start", 0.0))
-            prev_et = parse_timestamp(prev.get("end_time") if prev.get("end_time") is not None else prev.get("end", prev_st + 1.0))
+            prev_st = float(prev["start_time"])
+            prev_et = float(prev["end_time"])
             combined_dur = et - prev_st
 
             # Do NOT merge across different speakers!
@@ -1164,21 +1020,7 @@ def polish_subtitle_events_netflix(
     """
     from app.netflix_models import format_timestamp, calculate_cps, calculate_cpl
     from app.netflix_linter import split_multi_speaker_subtitles
-    from app.audio_processor import parse_timestamp
     min_gap_sec = round(2.0 / frame_rate, 3)
-
-    # Normalize timestamps upfront so all downstream functions work with safe float values
-    for ev in events:
-        raw_st = ev.get("start_time") if (ev.get("start_time") is not None and ev.get("start_time") != "") else ev.get("start", 0.0)
-        raw_et = ev.get("end_time") if (ev.get("end_time") is not None and ev.get("end_time") != "") else ev.get("end", 0.0)
-        ev_st = parse_timestamp(raw_st)
-        ev_et = parse_timestamp(raw_et)
-        if ev_et <= ev_st:
-            ev_et = round(ev_st + 1.5, 3)
-        ev["start_time"] = ev_st
-        ev["end_time"] = ev_et
-        ev["start"] = ev_st
-        ev["end"] = ev_et
 
     # Step 0: Ensure strict single-speaker events (never 2 speakers in 1 subtitle)
     events = split_multi_speaker_subtitles(events, frame_rate=frame_rate, min_duration=min_duration)
@@ -1575,9 +1417,7 @@ def generate_subtitles(
     # 6. Run Whisper on audio for word-level timestamps (guarded for cloud 512MB RAM using tiny model)
     is_cloud = bool(os.getenv("RENDER") or os.getenv("PORT"))
     enable_whisper = os.getenv("ENABLE_WHISPER", "true").lower() == "true"
-    whisper_model = os.getenv("WHISPER_MODEL", "medium")
-    if whisper_model in ("base", "tiny"):
-        whisper_model = "medium"
+    whisper_model = os.getenv("WHISPER_MODEL", "tiny" if is_cloud else "base")
     whisper_words = []
     if enable_whisper:
         if progress_callback:
@@ -1599,11 +1439,13 @@ def generate_subtitles(
         
     client = get_gemini_client()
     candidate_models = [
+        "gemini-3.8-flash",
+        "gemini-3.7-flash",
         "gemini-3.6-flash",
-        "gemini-flash-latest",
+        "gemini-3.5-flash",
+        "gemini-3.5-flash-lite",
+        "gemini-3.1-flash-lite",
         "gemini-3-flash-preview",
-        "gemini-flash-lite-latest",
-        "gemini-2.5-flash",
     ]
     primary = GEMINI_MODEL
     if primary and primary in candidate_models:
@@ -1735,24 +1577,6 @@ def generate_subtitles(
             subs = parsed.get("subtitles", []) if isinstance(parsed, dict) else []
             if isinstance(parsed, list):
                 subs = parsed
-
-            # Coverage Audit: ensure Gemini didn't drop the chunk or cut off early
-            slice_whisper_words = [w for w in whisper_words if (slice_s - 0.5) <= w["start"] <= (slice_e + 0.5)] if whisper_words else []
-            if not slice_whisper_words and enable_whisper and os.path.exists(target_path) and not subs:
-                try:
-                    slice_whisper_words = get_whisper_word_timestamps(target_path, language=resolved_language, model_name=whisper_model)
-                except Exception:
-                    pass
-            rel_whisper_words = [{"word": w["word"], "start": max(0.0, w["start"] - slice_s), "end": max(0.0, w["end"] - slice_s)} for w in slice_whisper_words] if slice_whisper_words else []
-            if rel_whisper_words and not subs:
-                subs, _, _ = audit_and_backfill_speech_coverage(
-                    subs=subs,
-                    raw_whisper_words=rel_whisper_words,
-                    chunk_idx=chunk_idx,
-                    total_chunks=len(chunks),
-                    cpl_limit=cpl_limit,
-                    target_language=resolved_language
-                )
                 
             prev_chunk_end = raw_subtitles[-1]["end_time"] if raw_subtitles else 0.0
             resolved_chunk_subs = resolve_batch_timestamps(
@@ -1985,9 +1809,7 @@ async def generate_subtitles_stream(
         # 3. Whisper acoustic alignment settings (executed per-chunk to guarantee zero stream delay and unlimited video length)
         is_cloud = bool(os.getenv("RENDER") or os.getenv("PORT"))
         enable_whisper = os.getenv("ENABLE_WHISPER", "true").lower() == "true"
-        whisper_model = os.getenv("WHISPER_MODEL", "medium")
-        if whisper_model in ("base", "tiny"):
-            whisper_model = "medium"
+        whisper_model = os.getenv("WHISPER_MODEL", "tiny" if is_cloud else "base")
         whisper_words = []
         whisper_lang_target = resolved_language if resolved_language not in ["auto", "Auto-Detect"] else None
         if not enable_whisper:
@@ -2033,12 +1855,14 @@ async def generate_subtitles_stream(
         
         client = get_gemini_client()
         candidate_models = [
-            "gemini-3.6-flash",
-            "gemini-flash-latest",
-            "gemini-3-flash-preview",
-            "gemini-flash-lite-latest",
-            "gemini-2.5-flash",
-        ]
+        "gemini-3.8-flash",
+        "gemini-3.7-flash",
+        "gemini-3.6-flash",
+        "gemini-3.5-flash",
+        "gemini-3.5-flash-lite",
+        "gemini-3.1-flash-lite",
+        "gemini-3-flash-preview",
+    ]
         primary = GEMINI_MODEL
         if primary and primary in candidate_models:
             candidate_models.remove(primary)
@@ -2074,8 +1898,39 @@ async def generate_subtitles_stream(
                 slice_e = total_duration
 
             try:
+                # Stage 0: Acoustic Pre-scan with Whisper to extract exact word timestamps & timeline anchors
                 chunk_whisper_words = []
+                acoustic_anchors = []
                 raw_cw = []
+                if enable_whisper:
+                    try:
+                        async for item in execute_task_with_heartbeats(
+                            get_whisper_word_timestamps,
+                            target_path,
+                            whisper_lang_target,
+                            whisper_model,
+                            chunk_idx=chunk_idx,
+                            total_chunks=total_chunks,
+                            stage=f"Whisper ({whisper_model}) acoustic scan for Part {chunk_idx}"
+                        ):
+                            if isinstance(item, tuple) and item[0] == "__RESULT__":
+                                raw_cw = item[1]
+                            else:
+                                yield item
+                        from app.whisper_aligner import extract_acoustic_timeline_anchors
+                        acoustic_anchors = extract_acoustic_timeline_anchors(raw_cw)
+                        for w in raw_cw:
+                            w_item = {
+                                "word": w["word"],
+                                "start": round(w["start"] + slice_s, 3),
+                                "end": round(w["end"] + slice_s, 3),
+                                "probability": w.get("probability", 1.0)
+                            }
+                            chunk_whisper_words.append(w_item)
+                            whisper_words.append(w_item)
+                        log_terminal(f"Batch {chunk_idx}: Whisper extracted {len(raw_cw)} words across {len(acoustic_anchors)} acoustic intervals.")
+                    except Exception as e:
+                        log_terminal(f"Batch {chunk_idx} Whisper pre-scan warning: {e}")
 
                 # Read chunk audio bytes directly (well within 20MB inline limit)
                 with open(target_path, "rb") as f:
@@ -2090,33 +1945,31 @@ async def generate_subtitles_stream(
                         f"{formatted_prev}\n\n"
                     )
 
+                anchors_clause = ""
+                if acoustic_anchors:
+                    anchor_lines = [f"- [{a['start']:.2f}s -> {a['end']:.2f}s]: {a['text']}" for a in acoustic_anchors[:15]]
+                    anchors_clause = (
+                        "ACOUSTIC SPEECH TIMELINE GROUNDING (Genuine spoken segments detected in audio):\n"
+                        + "\n".join(anchor_lines) + "\n"
+                        "CRITICAL TIMING RULE: Your subtitle timestamps MUST closely align with these physical acoustic speech intervals.\n"
+                        "Never hallucinate or stretch dialogue into the pauses between these intervals!\n\n"
+                    )
+
                 script_clause = f"Target Script: {resolved_script}\n" if resolved_script != "Auto-Detect" else ""
                 lang_directive = ""
-                if resolved_language.lower() in ["hindi", "hi"]:
-                    lang_directive = (
-                        "CRITICAL LANGUAGE RULE (HINDI DEVANAGARI ONLY):\n"
-                        "- Target Language is 100% HINDI in Devanagari script (e.g. 'तरुण, क्या हाल है?').\n"
-                        "- ABSOLUTELY FORBIDDEN: DO NOT translate Hindi speech into English subtitles!\n"
-                        "- Output verbatim in Devanagari script.\n"
-                    )
-                elif "hinglish" in resolved_language.lower() or "hinglish" in resolved_script.lower() or "latin" in resolved_script.lower():
-                    lang_directive = (
-                        "CRITICAL LANGUAGE RULE (HINGLISH / LATIN SCRIPT ONLY):\n"
-                        "- Transcribe spoken Hindi dialogue phonetically in Latin alphabet (e.g. 'Tarun, kya haal hai?').\n"
-                        "- DO NOT translate into English!\n"
-                    )
-                elif resolved_language.lower() in ["english", "en"]:
+                if resolved_language.lower() in ["english", "en"]:
                     lang_directive = (
                         "CRITICAL LANGUAGE RULE (ENGLISH ONLY):\n"
                         "- Target Language is 100% ENGLISH in Latin script.\n"
-                        "- ABSOLUTELY FORBIDDEN: NEVER output Urdu, Arabic script, Devanagari, or random symbols.\n"
-                        "- Transcribe verbatim in English.\n"
+                        "- ABSOLUTELY FORBIDDEN: NEVER output Urdu, Arabic script (e.g. اردو, ی, ہ, etc.), Devanagari, or random symbols/characters.\n"
+                        "- If speech is in English: transcribe verbatim in English.\n"
+                        "- If speech is in another language (e.g. Hindi, Urdu, etc.): translate dialogue into natural, accurate English subtitles.\n"
                     )
-                else:
+                elif resolved_language != "Auto-Detect":
                     lang_directive = (
-                        "CRITICAL LANGUAGE RULE (PRESERVE ORIGINAL SPOKEN LANGUAGE):\n"
-                        f"- Transcribe verbatim in the speaker's original language ({resolved_language}) using {resolved_script} script.\n"
-                        "- DO NOT translate dialogue into another language. Preserve verbatim speech.\n"
+                        f"CRITICAL LANGUAGE RULE ({resolved_language.upper()} ONLY):\n"
+                        f"- Target Language is 100% {resolved_language} in {resolved_script} script.\n"
+                        f"- Subtitles must strictly match {resolved_language}. Do NOT output random symbols or unrelated languages.\n"
                     )
 
                 feedback_clause = ""
@@ -2136,6 +1989,7 @@ async def generate_subtitles_stream(
                 prompt = (
                     f"{feedback_clause}"
                     f"{context_clause}"
+                    f"{anchors_clause}"
                     f"{silence_clause}"
                     f"Target Spoken Language: {resolved_language}\n"
                     f"{script_clause}"
@@ -2151,7 +2005,6 @@ async def generate_subtitles_stream(
                     f"   - If Target Language is English: Output strictly in English using Latin characters. Never output Urdu or Arabic symbols.\n"
                     f"   - If Target Language is Hindi and Script is Devanagari: Output 100% in Hindi using standard Devanagari script. Do NOT translate into English!\n"
                     f"   - If Target Language is Hindi and Script is Latin (Hinglish): Output conversational Hindi in the Latin alphabet (e.g. 'Tarun, kya haal hai?'). Do NOT translate into English!\n"
-                    f"   - If Target Spoken Language is Auto-Detect: Detect the spoken language automatically. Transcribe speech verbatim in its native spoken language and native script (e.g., Hindi dialogue in Hindi Devanagari, English dialogue in English). NEVER translate dialogue into another language.\n"
                     f"4. MAXIMUM CHARACTERS PER LINE (CPL): Exactly <= {cpl_limit} characters per line.\n"
                     f"   - When a sentence exceeds {cpl_limit - 4} characters, insert a newline ('\\n') at a natural linguistic pause.\n"
                     f"   - HINDI & ALL LANGUAGES: Break at punctuation ('।', '॥', ',', '?') or before conjunctions ('और', 'या', 'लेकिन', 'मगर', 'क्योंकि', 'इसलिए', 'ताकि', 'कि', 'तो', 'and', 'but').\n"
@@ -2286,19 +2139,6 @@ async def generate_subtitles_stream(
                 subs = parsed.get("subtitles", []) if isinstance(parsed, dict) else []
                 if isinstance(parsed, list):
                     subs = parsed
-
-                # Gate 1B: If Gemini returned 0 subtitles, attempt recovery from Whisper
-                if not subs and raw_cw:
-                    subs, was_recovered, audit_msg = audit_and_backfill_speech_coverage(
-                        subs=subs,
-                        raw_whisper_words=raw_cw,
-                        chunk_idx=chunk_idx,
-                        total_chunks=total_chunks,
-                        cpl_limit=cpl_limit,
-                        target_language=resolved_language
-                    )
-                    if was_recovered:
-                        is_whisper_fallback = True
                     
                 # 1. Format raw batch events with absolute video timeline (zero jumping, zero gaps)
                 batch_raw = resolve_batch_timestamps(
@@ -2415,10 +2255,6 @@ async def generate_subtitles_stream(
                     current_event_id += 1
                     prev_batch_end = ev["end_time"]
 
-                # If batch has genuinely 0 events (silence / music interval), advance cursor to chunk_e
-                if not processed_batch:
-                    prev_batch_end = max(prev_batch_end, chunk_e)
-
                 # Record last dialogue lines into rolling context for subsequent batches
                 for item in processed_batch[-5:]:
                     txt = item.get("text", "").replace("\n", " ").strip()
@@ -2439,67 +2275,8 @@ async def generate_subtitles_stream(
             except Exception as chunk_err:
                 import traceback
                 traceback.print_exc()
-                log_terminal(f"ERROR processing Batch {chunk_idx} ({chunk_err}). Initiating emergency Whisper Medium recovery to prevent missing batch...")
-                try:
-                    # Emergency fallback: guarantee batch generation via Whisper Medium
-                    fallback_words = raw_cw if raw_cw else []
-                    if not fallback_words and os.path.exists(target_path):
-                        fallback_words = get_whisper_word_timestamps(target_path, language=whisper_lang_target, model_name=whisper_model)
-                    
-                    emergency_subs = group_whisper_words_into_subtitles(
-                        fallback_words,
-                        chunk_offset=0.0,
-                        cpl_limit=cpl_limit,
-                        target_language=resolved_language
-                    )
-                    
-                    batch_raw = resolve_batch_timestamps(
-                        emergency_subs,
-                        slice_s,
-                        slice_e,
-                        prev_batch_end=prev_batch_end,
-                        min_gap_sec=round(2.0 / frame_rate, 3),
-                        min_duration=min_duration
-                    )
-                    
-                    if all_aligned_subtitles and batch_raw:
-                        all_aligned_subtitles, batch_raw = stitch_cross_chunk_seam(
-                            all_aligned_subtitles,
-                            batch_raw,
-                            min_gap_sec=round(2.0 / frame_rate, 3),
-                            min_duration=min_duration,
-                            collar_sec=collar_sec
-                        )
-                    
-                    processed_batch = polish_subtitle_events_netflix(
-                        events=batch_raw,
-                        cpl_limit=cpl_limit,
-                        max_cps=max_cps,
-                        max_lines=max_lines,
-                        min_duration=min_duration,
-                        max_duration=max_duration,
-                        frame_rate=frame_rate,
-                        shot_changes=shot_changes,
-                        prev_batch_end=prev_batch_end
-                    )
-                    
-                    for ev in processed_batch:
-                        ev["id"] = current_event_id
-                        current_event_id += 1
-                        prev_batch_end = ev["end_time"]
-                    
-                    if not processed_batch:
-                        prev_batch_end = max(prev_batch_end, chunk_e)
-                    
-                    all_aligned_subtitles.extend(processed_batch)
-                    
-                    yield f"data: {json.dumps({'type': 'batch', 'chunk_index': chunk_idx, 'total_chunks': total_chunks, 'events': processed_batch, 'fallback': True})}\n\n"
-                    yield f"data: {json.dumps({'type': 'batch_ready', 'chunk_index': chunk_idx, 'total_chunks': total_chunks, 'message': f'Part {chunk_idx} (Whisper Medium emergency recovery) is complete!'})}\n\n"
-                    log_terminal(f"Emergency recovery succeeded for Batch {chunk_idx}: {len(processed_batch)} events recovered via Whisper Medium.")
-                except Exception as emerg_err:
-                    log_terminal(f"Emergency recovery also failed for Batch {chunk_idx}: {emerg_err}")
-                    prev_batch_end = max(prev_batch_end, chunk_e)
-                    yield f"data: {json.dumps({'type': 'batch_error', 'chunk_index': chunk_idx, 'total_chunks': total_chunks, 'error': f'{chunk_err}'})}\n\n"
+                log_terminal(f"ERROR processing Batch {chunk_idx}: {chunk_err}")
+                yield f"data: {json.dumps({'type': 'batch_error', 'chunk_index': chunk_idx, 'total_chunks': total_chunks, 'error': str(chunk_err)})}\n\n"
             finally:
                 if total_chunks > 1 and os.path.exists(target_path):
                     try:

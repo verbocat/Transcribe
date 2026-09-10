@@ -86,16 +86,13 @@ def log_terminal(msg: str):
 def load_whisper_model(model_name: Optional[str] = None):
     """
     Lazy-load Whisper model and cache it globally.
-    Enforces 'medium' model locally for studio-grade acoustic alignment and deep phonetic attention.
-    Completely eliminates deprecated 'base' and 'tiny' models.
+    Defaults to 'tiny' on cloud (Render 512MB RAM) and 'base' on local desktop.
     """
     global _whisper_model, _whisper_model_name
 
     is_cloud = bool(os.getenv("RENDER") or os.getenv("PORT"))
-    # Strictly enforce 'medium' model, rejecting any deprecated 'base' or 'tiny' requests
-    env_model = os.getenv("WHISPER_MODEL", "medium")
-    if not model_name or str(model_name).lower() in ("base", "tiny"):
-        model_name = env_model if str(env_model).lower() not in ("base", "tiny") else "medium"
+    if not model_name:
+        model_name = os.getenv("WHISPER_MODEL", "tiny" if is_cloud else "base")
 
     if _whisper_model is not None and _whisper_model_name == model_name:
         return _whisper_model
@@ -134,7 +131,7 @@ def get_whisper_word_timestamps(
     Args:
         audio_path: Path to the WAV audio file.
         language: Optional language code (e.g. 'hi', 'en', 'ta') for better accuracy.
-        model_name: Whisper model size (enforced 'medium').
+        model_name: Whisper model size ('tiny', 'base', 'small').
 
     Returns:
         Flat list of word dicts: [{"word": "hello", "start": 0.52, "end": 0.88}, ...]
@@ -567,10 +564,8 @@ def align_subtitle_timestamps(
         text = event.get("text", "")
         clean_words = [_normalize_text(w) for w in text.replace('\n', ' ').split() if _normalize_text(w)]
         
-        raw_st = event.get("start_time") if (event.get("start_time") is not None and event.get("start_time") != "") else event.get("start", 0.0)
-        orig_st = parse_timestamp(raw_st)
-        raw_et = event.get("end_time") if (event.get("end_time") is not None and event.get("end_time") != "") else event.get("end", orig_st + 2.0)
-        orig_et = parse_timestamp(raw_et)
+        orig_st = parse_timestamp(event.get("start_time", 0.0))
+        orig_et = parse_timestamp(event.get("end_time", orig_st + 2.0))
         orig_dur = max(min_duration, round(orig_et - orig_st, 3))
 
         if not clean_words:
@@ -629,17 +624,28 @@ def align_subtitle_timestamps(
                     fallback_low_conf += 1
                 else:
                     fallback_ambiguous += 1
-                # Low confidence or unconfident match: preserve Gemini's verbatim ground-truth timestamps!
-                matched_start = orig_st
-                matched_end = orig_et
-                is_confident = False
+                # Ambiguous repetition or weak match: fall back cleanly to Gemini's timestamp guess
+                matched_start = max(audio_cursor + min_gap, orig_st)
+                matched_end = max(matched_start + min_duration, orig_et)
+                # Advance w_cursor to the first word near matched_start to keep cursor progressing
+                while w_cursor < total_w and whisper_words[w_cursor]["start"] < matched_start - 0.2:
+                    w_cursor += 1
 
-        # Micro acoustic vocal cord snapping (Silero VAD) ONLY when confident
-        if audio_path and os.path.exists(audio_path) and is_confident:
+        orig_matched_st = matched_start
+        snap_ran = False
+        snap_delta = 0.0
+
+        # Micro acoustic vocal cord snapping (Silero VAD)
+        if audio_path and os.path.exists(audio_path):
             try:
+                # If confident, tight collar (0.08s) eliminates residual word-boundary jitter
+                # If not confident, wider collar (0.20s) locates the actual vocal island
+                collar = 0.08 if is_confident else 0.20
                 snapped_st, snapped_et = snap_to_acoustic_boundaries(
-                    audio_path, matched_start, matched_end, collar_sec=0.08
+                    audio_path, matched_start, matched_end, collar_sec=collar
                 )
+                snap_ran = True
+                snap_delta = snapped_st - orig_matched_st
                 matched_start = snapped_st
                 matched_end = snapped_et
             except Exception:
@@ -654,8 +660,7 @@ def align_subtitle_timestamps(
         if st < audio_cursor + min_gap:
             if ev_idx > 0:
                 prev_ev = gemini_events[ev_idx - 1]
-                prev_raw_st = prev_ev.get("start_time") if (prev_ev.get("start_time") is not None and prev_ev.get("start_time") != "") else prev_ev.get("start", 0.0)
-                prev_st = parse_timestamp(prev_raw_st)
+                prev_st = float(prev_ev.get("start_time", 0.0))
                 target_prev_end = round(st - min_gap, 3)
                 if target_prev_end > prev_st + 0.05:
                     prev_ev["end_time"] = target_prev_end

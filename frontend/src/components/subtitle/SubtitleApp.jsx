@@ -5,7 +5,7 @@ import {
   SlidersHorizontal, Search, Split, Merge, Scissors, Trash2, Plus,
   ChevronDown, X, Play, Clock, Activity, FileText, Check, Settings,
   Menu, Download, Eye, AlertTriangle, Layers, Type, Sun, Moon, Loader2, Globe, Volume2,
-  MessageSquare, ChevronRight, RotateCcw
+  MessageSquare, ChevronRight
 } from 'lucide-react';
 import { API_BASE } from '../../config';
 import VideoPlayer from './VideoPlayer';
@@ -343,13 +343,13 @@ export default function SubtitleApp({ onBackToHome }) {
   const [language, setLanguage] = useState(() => {
     try {
       const saved = localStorage.getItem('karya_sub_language');
-      return saved || 'auto';
-    } catch (_) { return 'auto'; }
+      return (saved && saved !== 'hi') ? saved : 'en';
+    } catch (_) { return 'en'; }
   });
   const [script, setScript] = useState(() => {
     try {
       const saved = localStorage.getItem('karya_sub_script');
-      return saved || 'auto';
+      return (saved && saved !== 'devanagari') ? saved : 'auto';
     } catch (_) { return 'auto'; }
   });
   const [contentType, setContentType] = useState('adult'); // 'adult' (20 CPS) | 'children' (17 CPS)
@@ -382,9 +382,6 @@ export default function SubtitleApp({ onBackToHome }) {
   const [batchProgress, setBatchProgress] = useState(null); // { current: 1, total: 4 }
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const elapsedTimerRef = useRef(null);
-  const activeStreamReaderRef = useRef(null);
-  const activeAbortControllerRef = useRef(null);
-  const isCancelledRef = useRef(false);
 
   // History for Undo/Redo
   const [history, setHistory] = useState([]);
@@ -399,17 +396,7 @@ export default function SubtitleApp({ onBackToHome }) {
   const [showCustomTimeModal, setShowCustomTimeModal] = useState(false);
   const [customStartTime, setCustomStartTime] = useState(0);
   const [autoSaveStatus, setAutoSaveStatus] = useState('');
-  const [pendingDraft, setPendingDraft] = useState(null); // Draft associated with currently selected file
-  const [availableSavedDraft, setAvailableSavedDraft] = useState(() => {
-    try {
-      const raw = localStorage.getItem('karya_subtitle_last_active_draft');
-      if (raw) {
-        const d = JSON.parse(raw);
-        if (d.events && d.events.length > 0) return d;
-      }
-    } catch (_) {}
-    return null;
-  });
+  const [pendingDraft, setPendingDraft] = useState(null); // Previous autosaved draft detection
   const [backendConnected, setBackendConnected] = useState(null); // null = checking, true = online, false = offline
 
   useEffect(() => {
@@ -546,55 +533,30 @@ export default function SubtitleApp({ onBackToHome }) {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // ── Robust Draft Saving to Per-File & Active Session Cache ──
-  const saveCurrentDraft = useCallback((evsToSave, customStatus = 'Draft Saved ✓') => {
-    const list = evsToSave || events;
-    if (!list || list.length === 0) return;
-    try {
-      const draftPayload = {
-        fileName: selectedFile?.name || null,
-        fileSize: selectedFile?.size || null,
-        events: list,
-        complianceScore,
-        totalErrors,
-        totalWarnings,
-        resumeChunk,
-        totalChunks,
-        settings: { language, script, contentType, cplLimit, cpsLimit, frameRate, sdhMode },
-        timestamp: new Date().toISOString()
-      };
-      const serialized = JSON.stringify(draftPayload);
-      if (selectedFile?.name) {
-        localStorage.setItem(`karya_subtitle_autosave_${selectedFile.name}`, serialized);
-      }
-      localStorage.setItem('karya_subtitle_last_active_draft', serialized);
-      setAvailableSavedDraft(draftPayload);
-      if (customStatus) {
-        setAutoSaveStatus(customStatus);
-        setTimeout(() => setAutoSaveStatus(''), 2500);
-      }
-    } catch (e) {
-      console.warn('Auto-save storage quota exceeded', e);
-    }
-  }, [events, selectedFile, complianceScore, totalErrors, totalWarnings, resumeChunk, totalChunks, language, script, contentType, cplLimit, cpsLimit, frameRate, sdhMode]);
-
-  // Debounced auto-save on event modifications (1.2s after last user change)
-  useEffect(() => {
-    if (!events || events.length === 0) return;
-    const timer = setTimeout(() => {
-      saveCurrentDraft(events, '');
-    }, 1200);
-    return () => clearTimeout(timer);
-  }, [events, saveCurrentDraft]);
-
-  // Periodic heartbeat sync every 30s
+  // ── 1-Minute Interval Auto-Save to Database / localStorage ──
   useEffect(() => {
     if (!events || events.length === 0) return;
     const interval = setInterval(() => {
-      saveCurrentDraft(events, 'Draft Synced ✓');
-    }, 30000);
+      try {
+        const fileId = selectedFile?.name || 'draft_subtitle';
+        localStorage.setItem(`karya_subtitle_autosave_${fileId}`, JSON.stringify({
+          events,
+          complianceScore,
+          totalErrors,
+          totalWarnings,
+          resumeChunk,
+          totalChunks,
+          settings: { language, contentType, cplLimit, cpsLimit, frameRate, sdhMode },
+          timestamp: new Date().toISOString()
+        }));
+        setAutoSaveStatus('Draft Saved (1m sync) ✓');
+        setTimeout(() => setAutoSaveStatus(''), 2500);
+      } catch (e) {
+        console.warn('Auto-save storage quota exceeded', e);
+      }
+    }, 60000); // Once every 1 minute
     return () => clearInterval(interval);
-  }, [events, saveCurrentDraft]);
+  }, [events, complianceScore, totalErrors, totalWarnings, selectedFile, language, contentType, cplLimit, cpsLimit, frameRate, sdhMode, resumeChunk, totalChunks]);
 
   // ── Mouse Drag Splitter Handlers for Resizable Panes ──
   const handleLeftSplitterDown = (e) => {
@@ -723,53 +685,6 @@ export default function SubtitleApp({ onBackToHome }) {
       handleLint(targetEvents);
     }
   };
-
-  // ── Restore Saved Draft from Storage/Memory ──
-  const handleRestoreDraft = useCallback((draftToRestore = null) => {
-    let draft = draftToRestore;
-    if (!draft && pendingDraft) draft = pendingDraft;
-    if (!draft && availableSavedDraft) draft = availableSavedDraft;
-    if (!draft) {
-      try {
-        const raw = localStorage.getItem('karya_subtitle_last_active_draft');
-        if (raw) draft = JSON.parse(raw);
-      } catch (_) {}
-    }
-
-    if (!draft || !draft.events || draft.events.length === 0) {
-      alert("No saved draft found in memory to restore.");
-      return;
-    }
-
-    const cleaned = sanitizeEvents(draft.events);
-    setEvents(cleaned);
-    setOriginalEvents(cleaned);
-    pushToHistory(cleaned);
-    handleLint(cleaned);
-
-    if (draft.complianceScore !== undefined) setComplianceScore(draft.complianceScore);
-    if (draft.totalErrors !== undefined) setTotalErrors(draft.totalErrors);
-    if (draft.totalWarnings !== undefined) setTotalWarnings(draft.totalWarnings);
-    if (draft.settings) {
-      if (draft.settings.language) setLanguage(draft.settings.language);
-      if (draft.settings.script) setScript(draft.settings.script);
-      if (draft.settings.contentType) setContentType(draft.settings.contentType);
-      if (draft.settings.cplLimit) setCplLimit(draft.settings.cplLimit);
-      if (draft.settings.cpsLimit) setCpsLimit(draft.settings.cpsLimit);
-      if (draft.settings.frameRate) setFrameRate(draft.settings.frameRate);
-      if (draft.settings.sdhMode !== undefined) setSdhMode(draft.settings.sdhMode);
-    }
-    if (draft.resumeChunk && draft.totalChunks) {
-      setResumeChunk(draft.resumeChunk);
-      setTotalChunks(draft.totalChunks);
-      setCanResume(draft.resumeChunk <= draft.totalChunks);
-    }
-
-    setActiveEventId(cleaned[0]?.id || null);
-    setAutoSaveStatus(`Restored draft (${cleaned.length} subtitles) ✓`);
-    setTimeout(() => setAutoSaveStatus(''), 4000);
-    setPendingDraft(null);
-  }, [pendingDraft, availableSavedDraft, sanitizeEvents, pushToHistory, handleLint]);
 
   // Re-cut / Split active subtitle at current playhead cursor
   const handleSplitAtCursor = (splitTime) => {
@@ -934,128 +849,10 @@ export default function SubtitleApp({ onBackToHome }) {
     }
   };
 
-  // ── Absolute Reset & Clear All Drafts, Active Streams, and Cache ──
-  const handleClearAllDraftAndWork = useCallback((confirmPrompt = true) => {
-    if (confirmPrompt && !window.confirm("Clear all current subtitles, drafts, and active progress for this session?")) {
-      return false;
-    }
-
-    isCancelledRef.current = true;
-
-    // 1. Cancel any active stream reader immediately
-    if (activeStreamReaderRef.current) {
-      try {
-        activeStreamReaderRef.current.cancel();
-      } catch (_) {}
-      activeStreamReaderRef.current = null;
-    }
-
-    // 2. Abort any active fetch requests
-    if (activeAbortControllerRef.current) {
-      try {
-        activeAbortControllerRef.current.abort();
-      } catch (_) {}
-      activeAbortControllerRef.current = null;
-    }
-
-    // 3. Clear elapsed timer
-    if (elapsedTimerRef.current) {
-      clearInterval(elapsedTimerRef.current);
-      elapsedTimerRef.current = null;
-    }
-
-    // 4. Reset generation & streaming progress states
-    setIsGenerating(false);
-    setProgressPercent(0);
-    setProgressStage('');
-    setProgressDetail('');
-    setBatchProgress(null);
-    setElapsedSeconds(0);
-    setBatchPauseData(null);
-    setCanResume(false);
-    setResumeChunk(null);
-    setTotalChunks(null);
-    setQcNotification(null);
-    setAutoSaveStatus('');
-
-    // 5. Reset subtitle canvas & history
-    setEvents([]);
-    setHistory([]);
-    setHistoryIndex(-1);
-    setComplianceScore(100);
-    setTotalErrors(0);
-    setTotalWarnings(0);
-    setActiveEventId(null);
-    setPendingDraft(null);
-    editedEventIdsRef.current.clear();
-
-    // 6. Reset media & audio caching
-    extractedAudioFileRef.current = null;
-    uploadPromiseRef.current = null;
-    setInitialWaveformPeaks([]);
-
-    // 7. Clean autosave keys from localStorage ONLY WHEN USER EXPLICITLY CONFIRMS DELETION
-    if (confirmPrompt) {
-      try {
-        if (selectedFile?.name) {
-          localStorage.removeItem(`karya_subtitle_autosave_${selectedFile.name}`);
-        }
-        localStorage.removeItem('karya_subtitle_last_active_draft');
-        setAvailableSavedDraft(null);
-        Object.keys(localStorage).forEach(key => {
-          if (key.startsWith('karya_subtitle_autosave_')) {
-            localStorage.removeItem(key);
-          }
-        });
-      } catch (_) {}
-    }
-
-    // 8. Notify backend to clear server session & temporary files
-    if (currentVideoId) {
-      fetch(`${API_BASE}/api/session/clear`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ video_id: currentVideoId })
-      }).catch(() => {});
-      setCurrentVideoId(null);
-    }
-
-    setTimeout(() => {
-      isCancelledRef.current = false;
-    }, 300);
-
-    return true;
-  }, [currentVideoId, selectedFile]);
-
   // Media File (Video or Audio) Upload Handler
   const handleFileChange = (e) => {
     const file = e.target.files?.[0];
     if (file) {
-      // 1. Abort any ongoing stream cleanly WITHOUT wiping saved drafts
-      isCancelledRef.current = true;
-      if (activeStreamReaderRef.current) {
-        try { activeStreamReaderRef.current.cancel(); } catch (_) {}
-        activeStreamReaderRef.current = null;
-      }
-      if (activeAbortControllerRef.current) {
-        try { activeAbortControllerRef.current.abort(); } catch (_) {}
-        activeAbortControllerRef.current = null;
-      }
-      if (elapsedTimerRef.current) {
-        clearInterval(elapsedTimerRef.current);
-        elapsedTimerRef.current = null;
-      }
-
-      setIsGenerating(false);
-      setProgressPercent(0);
-      setProgressStage('');
-      setProgressDetail('');
-      setBatchProgress(null);
-      setElapsedSeconds(0);
-      setBatchPauseData(null);
-      setQcNotification(null);
-      setAutoSaveStatus('');
-
       setSelectedFile(file);
       setCurrentVideoId(null);
       extractedAudioFileRef.current = null;
@@ -1088,75 +885,38 @@ export default function SubtitleApp({ onBackToHome }) {
       // Upload in background immediately with client audio extraction and waveform generation
       uploadPromiseRef.current = processAndUploadMedia(file, isAudio);
 
-      // Check if previous autosaved draft exists for this specific file
-      let existingDraft = null;
-      try {
-        const saved = localStorage.getItem(`karya_subtitle_autosave_${file.name}`);
-        if (saved) {
-          const parsed = JSON.parse(saved);
-          if (parsed && parsed.events && parsed.events.length > 0) {
-            existingDraft = parsed;
+      // Reset subtitle canvas for clean state
+      setEvents([]);
+      setComplianceScore(100);
+      setTotalErrors(0);
+      setTotalWarnings(0);
+      setActiveEventId(null);
+      setCanResume(false);
+      setResumeChunk(null);
+      setTotalChunks(null);
+
+      // Check if previous autosaved draft exists
+      const saved = localStorage.getItem(`karya_subtitle_autosave_${file.name}`);
+      if (saved) {
+        try {
+          const data = JSON.parse(saved);
+          if (data.events && data.events.length > 0) {
+            setPendingDraft(data);
+            if (data.resumeChunk && data.totalChunks && data.resumeChunk <= data.totalChunks) {
+              setResumeChunk(data.resumeChunk);
+              setTotalChunks(data.totalChunks);
+              setCanResume(true);
+            }
+          } else {
+            setPendingDraft(null);
           }
+        } catch (err) {
+          console.error(err);
+          setPendingDraft(null);
         }
-      } catch (err) {
-        console.error("Error reading saved draft for file:", err);
-      }
-
-      // Also ensure availableSavedDraft is fresh from memory
-      try {
-        const lastRaw = localStorage.getItem('karya_subtitle_last_active_draft');
-        if (lastRaw) {
-          const lastParsed = JSON.parse(lastRaw);
-          if (lastParsed?.events?.length > 0) {
-            setAvailableSavedDraft(lastParsed);
-          }
-        }
-      } catch (_) {}
-
-      if (existingDraft) {
-        // MATCH: This file was uploaded earlier! Automatically restore its previous subtitles onto canvas
-        console.log(`[Subtitle Studio] Recognized earlier upload: "${file.name}" with ${existingDraft.events.length} subtitles.`);
-        const cleaned = sanitizeEvents(existingDraft.events);
-        setEvents(cleaned);
-        setOriginalEvents(cleaned);
-        pushToHistory(cleaned);
-        handleLint(cleaned);
-        setActiveEventId(cleaned[0]?.id || null);
-
-        if (existingDraft.complianceScore !== undefined) setComplianceScore(existingDraft.complianceScore);
-        if (existingDraft.totalErrors !== undefined) setTotalErrors(existingDraft.totalErrors);
-        if (existingDraft.totalWarnings !== undefined) setTotalWarnings(existingDraft.totalWarnings);
-        if (existingDraft.resumeChunk && existingDraft.totalChunks && existingDraft.resumeChunk <= existingDraft.totalChunks) {
-          setResumeChunk(existingDraft.resumeChunk);
-          setTotalChunks(existingDraft.totalChunks);
-          setCanResume(true);
-        } else {
-          setCanResume(false);
-          setResumeChunk(null);
-          setTotalChunks(null);
-        }
-
-        setPendingDraft(existingDraft);
-        setAutoSaveStatus(`Recognized earlier upload: restored ${cleaned.length} subtitles ✓`);
-        setTimeout(() => setAutoSaveStatus(''), 4500);
       } else {
-        // Different file: reset canvas, but keep saved drafts in memory so user can restore if they wish
-        setEvents([]);
-        setHistory([]);
-        setHistoryIndex(-1);
-        setComplianceScore(100);
-        setTotalErrors(0);
-        setTotalWarnings(0);
-        setActiveEventId(null);
-        setCanResume(false);
-        setResumeChunk(null);
-        setTotalChunks(null);
         setPendingDraft(null);
       }
-
-      setTimeout(() => {
-        isCancelledRef.current = false;
-      }, 300);
     }
   };
 
@@ -1502,7 +1262,6 @@ export default function SubtitleApp({ onBackToHome }) {
       }
 
       const reader = streamRes.body.getReader();
-      activeStreamReaderRef.current = reader;
       const decoder = new TextDecoder('utf-8');
       let buffer = '';
       let accumulatedEvents = [];
@@ -1659,9 +1418,6 @@ export default function SubtitleApp({ onBackToHome }) {
       }
 
       // Check for premature disconnection
-      if (isCancelledRef.current) {
-        return;
-      }
       if (!streamCompleted) {
         console.warn(`[Subtitle Studio] Stream reader closed without 'complete' event. Ingested ${lastBatchIndex}/${totalExpectedChunks} batches (${accumulatedEvents.length} events).`);
         if (accumulatedEvents.length > 0) {
@@ -1686,9 +1442,6 @@ export default function SubtitleApp({ onBackToHome }) {
         }
       }
     } catch (err) {
-      if (isCancelledRef.current || err.name === 'AbortError') {
-        return;
-      }
       console.error("Generation error:", err);
       if (lastBatchIndex > 0 && lastBatchIndex < totalExpectedChunks) {
         setCanResume(true);
@@ -1709,15 +1462,12 @@ export default function SubtitleApp({ onBackToHome }) {
         alert(`Error generating subtitles: ${err.message}`);
       }
     } finally {
-      activeStreamReaderRef.current = null;
       setIsGenerating(false);
       if (elapsedTimerRef.current) clearInterval(elapsedTimerRef.current);
-      if (!isCancelledRef.current) {
-        setTimeout(() => {
-          setProgressPercent(0);
-          setBatchProgress(null);
-        }, 2500);
-      }
+      setTimeout(() => {
+        setProgressPercent(0);
+        setBatchProgress(null);
+      }, 2500);
     }
   };
 
@@ -1831,7 +1581,6 @@ export default function SubtitleApp({ onBackToHome }) {
       }
 
       const reader = streamRes.body.getReader();
-      activeStreamReaderRef.current = reader;
       const decoder = new TextDecoder('utf-8');
       let buffer = '';
       let streamCompleted = false;
@@ -1944,9 +1693,6 @@ export default function SubtitleApp({ onBackToHome }) {
         }
       }
 
-      if (isCancelledRef.current) {
-        return;
-      }
       if (!streamCompleted) {
         console.warn(`[Subtitle Studio] Stream stopped at batch ${lastBatchIndex}/${totalExpectedChunks}.`);
         if (lastBatchIndex < totalExpectedChunks) {
@@ -1957,9 +1703,6 @@ export default function SubtitleApp({ onBackToHome }) {
         }
       }
     } catch (err) {
-      if (isCancelledRef.current || err.name === 'AbortError') {
-        return;
-      }
       console.error("Resume error:", err);
       if (lastBatchIndex > 0 && lastBatchIndex < totalExpectedChunks) {
         setCanResume(true);
@@ -1968,15 +1711,12 @@ export default function SubtitleApp({ onBackToHome }) {
       }
       alert(`Error resuming subtitle generation: ${err.message}`);
     } finally {
-      activeStreamReaderRef.current = null;
       setIsGenerating(false);
       if (elapsedTimerRef.current) clearInterval(elapsedTimerRef.current);
-      if (!isCancelledRef.current) {
-        setTimeout(() => {
-          setProgressPercent(0);
-          setBatchProgress(null);
-        }, 2500);
-      }
+      setTimeout(() => {
+        setProgressPercent(0);
+        setBatchProgress(null);
+      }, 2500);
     }
   };
 
@@ -2117,7 +1857,6 @@ export default function SubtitleApp({ onBackToHome }) {
       }
 
       const reader = streamRes.body.getReader();
-      activeStreamReaderRef.current = reader;
       const decoder = new TextDecoder('utf-8');
       let buffer = '';
       let streamCompleted = false;
@@ -2206,9 +1945,6 @@ export default function SubtitleApp({ onBackToHome }) {
         }
       }
 
-      if (isCancelledRef.current) {
-        return;
-      }
       if (!streamCompleted) {
         if (lastBatchIndex < totalExpectedChunks) {
           setResumeChunk(lastBatchIndex + 1);
@@ -2218,21 +1954,15 @@ export default function SubtitleApp({ onBackToHome }) {
         }
       }
     } catch (err) {
-      if (isCancelledRef.current || err.name === 'AbortError') {
-        return;
-      }
       console.error("Custom time generate error:", err);
       alert(`Error generating subtitles from ${formatTime(t)}: ${err.message}`);
     } finally {
-      activeStreamReaderRef.current = null;
       setIsGenerating(false);
       if (elapsedTimerRef.current) clearInterval(elapsedTimerRef.current);
-      if (!isCancelledRef.current) {
-        setTimeout(() => {
-          setProgressPercent(0);
-          setBatchProgress(null);
-        }, 2500);
-      }
+      setTimeout(() => {
+        setProgressPercent(0);
+        setBatchProgress(null);
+      }, 2500);
     }
   }, [selectedFile, events, videoDuration, currentVideoId, isAudioFile, processAndUploadMedia, language, script, contentType, sdhMode, cplLimit, cpsLimit, maxLines, minDuration, maxDuration, geminiAutoFix, pushToHistory]);
 
@@ -2284,49 +2014,14 @@ export default function SubtitleApp({ onBackToHome }) {
 
   // ── Closed-Loop Acoustic Audio Synchronization Pass ──
   const handleAcousticSync = async () => {
-    if (!events || events.length === 0) {
-      alert("No subtitles to sync. Please generate or import subtitles first.");
-      return;
-    }
-    if (!currentVideoId && !selectedFile) {
-      alert("No media file selected. Please select an audio or video file to align subtitles against.");
-      return;
-    }
+    if (!events || events.length === 0 || !currentVideoId) return;
     setIsSyncingAudio(true);
-    setAutoSaveStatus('Analyzing audio waveforms & synchronizing pauses...');
     try {
-      let videoId = currentVideoId;
-      if (!videoId && uploadPromiseRef.current) {
-        try {
-          videoId = await uploadPromiseRef.current;
-        } catch (e) {
-          console.warn("Background upload failed, will upload directly:", e);
-        }
-        if (videoId) {
-          setCurrentVideoId(videoId);
-        }
-      }
-
-      if (!videoId && selectedFile) {
-        setAutoSaveStatus('Transferring audio track to server for waveform alignment...');
-        videoId = await processAndUploadMedia(selectedFile, isAudioFile);
-        if (videoId) {
-          setCurrentVideoId(videoId);
-        } else {
-          throw new Error('Could not transfer media to server for audio sync.');
-        }
-      }
-
-      if (!videoId) {
-        throw new Error('No active video session found. Please re-upload your audio/video file.');
-      }
-
-      setAutoSaveStatus('Analyzing speech waveforms & aligning dialect timings...');
-      let res = await fetch(`${API_BASE}/api/subtitle/acoustic_sync`, {
+      const res = await fetch(`${API_BASE}/api/subtitle/acoustic_sync`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          video_id: videoId,
+          video_id: currentVideoId,
           events: events,
           language: language,
           content_type: contentType,
@@ -2339,36 +2034,6 @@ export default function SubtitleApp({ onBackToHome }) {
           shot_changes: shotChanges
         })
       });
-
-      // Self-healing: if session on server expired or restarted (404), re-upload and retry
-      if (res.status === 404 && selectedFile) {
-        console.warn(`[Subtitle Studio] Video session ${videoId} expired for acoustic sync. Re-uploading...`);
-        setAutoSaveStatus('Session refreshed on server. Re-uploading media...');
-        videoId = await processAndUploadMedia(selectedFile, isAudioFile);
-        if (!videoId) {
-          throw new Error('Media re-upload failed after server session expired.');
-        }
-        setCurrentVideoId(videoId);
-        setAutoSaveStatus('Re-analyzing waveforms & synchronizing...');
-        res = await fetch(`${API_BASE}/api/subtitle/acoustic_sync`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            video_id: videoId,
-            events: events,
-            language: language,
-            content_type: contentType,
-            frame_rate: frameRate,
-            cpl_limit: cplLimit,
-            max_cps: cpsLimit,
-            max_lines: maxLines,
-            min_duration: minDuration,
-            max_duration: maxDuration,
-            shot_changes: shotChanges
-          })
-        });
-      }
-
       if (res.ok) {
         const data = await res.json();
         setOriginalEvents(events);
@@ -2385,7 +2050,7 @@ export default function SubtitleApp({ onBackToHome }) {
           setTotalWarnings(data.lint_result.total_warnings || 0);
           setCpsStats(data.lint_result.cps_stats || null);
         }
-        setAutoSaveStatus('Acoustically Synced to Audio Waveform ✓');
+        setAutoSaveStatus('Acoustically Synced to Audio ✓');
         setTimeout(() => setAutoSaveStatus(''), 4000);
       } else {
         const err = await res.json();
@@ -2606,18 +2271,6 @@ export default function SubtitleApp({ onBackToHome }) {
                     <span>Import Subtitle (SRT/VTT)...</span>
                   </button>
                   <div className="h-px my-1 bg-[#262734]" />
-                  {(availableSavedDraft || pendingDraft) && (
-                    <button
-                      onClick={() => {
-                        handleRestoreDraft();
-                        setShowFileDropdown(false);
-                      }}
-                      className="w-full text-left px-3 py-2 text-xs rounded flex items-center gap-2 font-medium cursor-pointer hover:bg-[#22232c] text-amber-300"
-                    >
-                      <RotateCcw size={13} className="text-amber-400" />
-                      <span>Restore Saved Draft ({pendingDraft?.events?.length || availableSavedDraft?.events?.length || 0})</span>
-                    </button>
-                  )}
                   <button
                     onClick={() => { setShowExportModal(true); setShowFileDropdown(false); }}
                     className="w-full text-left px-3 py-2 text-xs rounded flex items-center gap-2 font-bold cursor-pointer hover:bg-[#22232c] text-[#00e5be]"
@@ -2628,7 +2281,19 @@ export default function SubtitleApp({ onBackToHome }) {
                   <div className="h-px my-1 bg-[#262734]" />
                   <button
                     onClick={() => {
-                      handleClearAllDraftAndWork(true);
+                      if (window.confirm("Clear all current subtitles and remove any saved draft for this video?")) {
+                        try {
+                          if (selectedFile?.name) {
+                            localStorage.removeItem(`karya_subtitle_autosave_${selectedFile.name}`);
+                          }
+                        } catch (_) { }
+                        setEvents([]);
+                        setComplianceScore(100);
+                        setTotalErrors(0);
+                        setTotalWarnings(0);
+                        setActiveEventId(null);
+                        setPendingDraft(null);
+                      }
                       setShowFileDropdown(false);
                     }}
                     className={`w-full text-left px-3 py-2 text-xs rounded flex items-center gap-2 font-medium cursor-pointer text-rose-400 hover:bg-rose-950/40`}
@@ -2742,18 +2407,6 @@ export default function SubtitleApp({ onBackToHome }) {
             </select>
           </div>
 
-          {/* Restore Draft Button (Visible when canvas is empty and a draft exists in memory) */}
-          {events.length === 0 && (availableSavedDraft || pendingDraft) && (
-            <button
-              onClick={() => handleRestoreDraft()}
-              className="px-3 py-1 rounded text-xs font-bold bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/60 text-amber-300 flex items-center gap-1.5 transition-all cursor-pointer shadow-xs"
-              title="Restore subtitles from previous draft in memory"
-            >
-              <RotateCcw className="w-3.5 h-3.5 text-amber-400" />
-              <span>Restore Draft ({pendingDraft?.events?.length || availableSavedDraft?.events?.length || 0})</span>
-            </button>
-          )}
-
           {/* Auto-Fix Button */}
           <button
             onClick={handleAutoFix}
@@ -2813,12 +2466,12 @@ export default function SubtitleApp({ onBackToHome }) {
           {/* Acoustic Audio Sync Button */}
           <button
             onClick={handleAcousticSync}
-            disabled={events.length === 0 || isSyncingAudio || (!selectedFile && !currentVideoId)}
+            disabled={events.length === 0 || isSyncingAudio || !currentVideoId}
             className="px-3 py-1 rounded text-xs font-semibold bg-emerald-950/70 border border-emerald-500/40 hover:bg-emerald-900/80 text-emerald-300 flex items-center gap-1.5 transition-all shadow-[0_0_10px_rgba(16,185,129,0.2)] cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-            title="Snap and re-synchronize all subtitles directly to speech audio waveforms and rapid dialects (Whisper Medium + VAD)"
+            title="Snap and re-synchronize all subtitles directly to speech audio acoustics (Whisper + VAD)"
           >
             <Volume2 className={`w-3.5 h-3.5 text-emerald-400 ${isSyncingAudio ? 'animate-bounce' : ''}`} />
-            <span>{isSyncingAudio ? 'Analyzing Audio...' : 'Audio Sync'}</span>
+            <span>{isSyncingAudio ? 'Syncing...' : 'Sync Audio'}</span>
           </button>
 
           {/* Export Button (CapCut Signature Neon Turquoise Action) */}
@@ -2885,84 +2538,45 @@ export default function SubtitleApp({ onBackToHome }) {
         </div>
       )}
 
-      {/* Draft Notification Banner for Recognized Earlier Upload */}
+      {/* Draft Restore Notification Banner */}
       {pendingDraft && (
-        <div className="px-4 py-2 flex items-center justify-between border-b border-[#00e5be]/30 bg-[#0d1f1c] text-slate-200 text-xs shrink-0 z-30 transition-all">
+        <div className="px-4 py-2 flex items-center justify-between border-b border-[#262734] bg-[#181920] text-slate-200 text-xs shrink-0 z-30 transition-all">
           <div className="flex items-center gap-2">
-            <CheckCircle2 className="w-4 h-4 text-[#00e5be] shrink-0" />
+            <Sparkles className="w-4 h-4 text-[#00e5be] shrink-0" />
             <span>
-              <strong>File Recognized:</strong> Restored {pendingDraft.events?.length || 0} earlier subtitles for <strong>{selectedFile?.name}</strong> ({pendingDraft.timestamp ? new Date(pendingDraft.timestamp).toLocaleTimeString() : 'autosaved'}). Preserved until you delete them.
+              Found an earlier saved draft for <strong>{selectedFile?.name}</strong> with {pendingDraft.events?.length || 0} subtitles ({pendingDraft.timestamp ? new Date(pendingDraft.timestamp).toLocaleTimeString() : 'autosaved'}).
             </span>
           </div>
           <div className="flex items-center gap-2">
             <button
-              onClick={() => setPendingDraft(null)}
+              onClick={() => {
+                const restoredEvents = pendingDraft.events || [];
+                setEvents(restoredEvents);
+                setComplianceScore(pendingDraft.complianceScore || 100);
+                setTotalErrors(pendingDraft.totalErrors || 0);
+                setTotalWarnings(pendingDraft.totalWarnings || 0);
+                setActiveEventId(restoredEvents[0]?.id || null);
+                if (pendingDraft.resumeChunk && pendingDraft.totalChunks && pendingDraft.resumeChunk <= pendingDraft.totalChunks) {
+                  setResumeChunk(pendingDraft.resumeChunk);
+                  setTotalChunks(pendingDraft.totalChunks);
+                  setCanResume(true);
+                }
+                setPendingDraft(null);
+              }}
               className="px-3 py-1 bg-[#00e5be] hover:bg-[#00c9a7] text-black rounded font-bold cursor-pointer transition-colors shadow-xs"
             >
-              Keep Subtitles
+              Restore Draft
             </button>
             <button
               onClick={() => {
-                if (window.confirm(`Permanently delete saved draft for ${selectedFile?.name}?`)) {
-                  try {
-                    localStorage.removeItem(`karya_subtitle_autosave_${selectedFile?.name}`);
-                  } catch (_) {}
-                  setEvents([]);
-                  setHistory([]);
-                  setHistoryIndex(-1);
-                  setPendingDraft(null);
-                  setAutoSaveStatus('Draft deleted');
-                  setTimeout(() => setAutoSaveStatus(''), 2500);
-                }
+                try {
+                  localStorage.removeItem(`karya_subtitle_autosave_${selectedFile?.name}`);
+                } catch (_) { }
+                setPendingDraft(null);
               }}
-              className="px-3 py-1 rounded cursor-pointer transition-colors bg-[#22232c] hover:bg-rose-950/60 text-rose-300 border border-rose-500/30"
+              className="px-3 py-1 rounded cursor-pointer transition-colors bg-[#22232c] hover:bg-[#2c2d38] text-slate-300"
             >
-              Discard & Delete Draft
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Available Draft in Memory Banner (When no file uploaded or blank canvas) */}
-      {!pendingDraft && availableSavedDraft && events.length === 0 && (
-        <div className="px-4 py-2 flex items-center justify-between border-b border-amber-500/40 bg-[#221805] text-amber-200 text-xs shrink-0 z-30 transition-all">
-          <div className="flex items-center gap-2">
-            <RotateCcw className="w-4 h-4 text-amber-400 shrink-0" />
-            <span>
-              <strong>Saved Draft Available:</strong> Found {availableSavedDraft.events?.length || 0} subtitles in memory{availableSavedDraft.fileName ? ` from "${availableSavedDraft.fileName}"` : ''} ({availableSavedDraft.timestamp ? new Date(availableSavedDraft.timestamp).toLocaleTimeString() : 'autosaved'}).
-            </span>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => handleRestoreDraft(availableSavedDraft)}
-              className="px-3 py-1 bg-amber-500 hover:bg-amber-400 text-black rounded font-bold cursor-pointer transition-colors shadow-xs flex items-center gap-1.5"
-            >
-              <RotateCcw size={12} />
-              <span>Restore Draft</span>
-            </button>
-            <button
-              onClick={() => {
-                if (window.confirm("Permanently delete this saved draft from memory?")) {
-                  try {
-                    localStorage.removeItem('karya_subtitle_last_active_draft');
-                    if (availableSavedDraft.fileName) {
-                      localStorage.removeItem(`karya_subtitle_autosave_${availableSavedDraft.fileName}`);
-                    }
-                  } catch (_) {}
-                  setAvailableSavedDraft(null);
-                }
-              }}
-              className="px-2.5 py-1 rounded cursor-pointer transition-colors bg-[#22232c] hover:bg-rose-950/60 text-slate-300 hover:text-rose-300"
-              title="Delete draft from memory"
-            >
-              Delete
-            </button>
-            <button
-              onClick={() => setAvailableSavedDraft(null)}
-              className="px-2 py-1 rounded text-slate-400 hover:text-slate-200 cursor-pointer"
-              title="Dismiss banner"
-            >
-              ✕
+              Discard & Start Fresh
             </button>
           </div>
         </div>
@@ -3025,8 +2639,6 @@ export default function SubtitleApp({ onBackToHome }) {
               cpsLimit={cpsLimit}
               frameRate={frameRate}
               theme={theme}
-              onRestoreDraft={handleRestoreDraft}
-              availableDraftInfo={pendingDraft || availableSavedDraft}
             />
           </div>
 

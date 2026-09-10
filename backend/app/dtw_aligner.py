@@ -18,11 +18,6 @@ from difflib import SequenceMatcher
 from typing import List, Dict, Any, Optional, Tuple
 import numpy as np
 
-try:
-    from app.audio_processor import parse_timestamp
-except ImportError:
-    from audio_processor import parse_timestamp
-
 # Mapping for digits to words (English & Hindi/Indic digits)
 _DIGIT_TO_WORDS = {
     "0": ["zero", "oh", "शून्य"],
@@ -318,8 +313,8 @@ def align_events_dtw(
     for w in whisper_words:
         w_txt = w.get("word", "").strip()
         w_norm = normalize_token(w_txt)
-        w_st = parse_timestamp(w.get("start", 0.0))
-        w_et = parse_timestamp(w.get("end", w_st + 0.3))
+        w_st = float(w.get("start", 0.0))
+        w_et = float(w.get("end", w_st + 0.3))
         prep_whisper.append({
             "word": w_txt,
             "norm": w_norm,
@@ -333,10 +328,8 @@ def align_events_dtw(
     for ev_idx, ev in enumerate(gemini_events):
         text = ev.get("text", "")
         raw_words = text.replace('\n', ' ').split()
-        raw_ev_st = ev.get("start_time") if (ev.get("start_time") is not None and ev.get("start_time") != "") else ev.get("start", 0.0)
-        ev_st = parse_timestamp(raw_ev_st)
-        raw_ev_et = ev.get("end_time") if (ev.get("end_time") is not None and ev.get("end_time") != "") else ev.get("end", ev_st + 2.0)
-        ev_et = parse_timestamp(raw_ev_et)
+        ev_st = float(ev.get("start_time", 0.0))
+        ev_et = float(ev.get("end_time", ev_st + 2.0))
         dur = max(0.1, ev_et - ev_st)
 
         num_words = max(1, len(raw_words))
