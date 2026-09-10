@@ -2,7 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { 
   ShieldCheck, Download, AlertCircle, AlertTriangle, CheckCircle2, 
   Clock, Type, Users, Video, ChevronDown, ChevronUp, Activity, Wand2, BookOpen,
-  Sparkles, Layers, X
+  Sparkles, Layers, X, Volume2
 } from 'lucide-react';
 
 export default function NetflixQCPanel({
@@ -18,6 +18,8 @@ export default function NetflixQCPanel({
   onAutoFix = () => {},
   onGeminiFix = null,
   isFixingWithGemini = false,
+  onAcousticSync = null,
+  isSyncingAudio = false,
   onExport = () => {},
   onRebreakAll = () => {},
   onJumpToEvent = () => {},
@@ -179,6 +181,18 @@ export default function NetflixQCPanel({
 
       {/* Action Buttons */}
       <div className="flex flex-col gap-2">
+        {onAcousticSync && (
+          <button
+            onClick={onAcousticSync}
+            disabled={!events.length || isSyncingAudio}
+            className="w-full py-2 px-3 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 disabled:opacity-40 text-black font-bold rounded-xl shadow-[0_0_15px_rgba(16,185,129,0.25)] flex items-center justify-center gap-2 transition-all text-xs cursor-pointer border-none"
+            title="Re-synchronize all subtitle timestamps to exact speech audio acoustics via Whisper and VAD"
+          >
+            <Volume2 className={`w-4 h-4 ${isSyncingAudio ? 'animate-bounce text-black' : 'text-black'}`} />
+            {isSyncingAudio ? 'Acoustically Syncing Audio...' : 'Acoustic Audio Re-Sync (Whisper)'}
+          </button>
+        )}
+
         {onGeminiFix && (
           <button
             onClick={onGeminiFix}

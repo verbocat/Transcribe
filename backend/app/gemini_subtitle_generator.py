@@ -510,8 +510,18 @@ def resolve_batch_timestamps(
             abs_st = round(chunk_s + min(st_sec, chunk_dur), 3)
             abs_et = round(abs_st + dur, 3)
 
-        # Enforce strictly sequential non-overlapping timeline with previous events
-        if abs_st < current_cursor:
+        # Enforce strictly sequential non-overlapping timeline without runaway forward drift
+        if resolved:
+            prev_ev_end = resolved[-1]["end_time"]
+            if abs_st < prev_ev_end + min_gap_sec:
+                # If previous event was long, trim it to make room instead of compounding drift forward!
+                if (abs_st - min_gap_sec - resolved[-1]["start_time"]) >= 0.833:
+                    resolved[-1]["end_time"] = round(abs_st - min_gap_sec, 3)
+                    resolved[-1]["end"] = resolved[-1]["end_time"]
+                else:
+                    abs_st = round(prev_ev_end + min_gap_sec, 3)
+                    abs_et = round(max(abs_st + 0.833, abs_et), 3)
+        elif abs_st < current_cursor:
             abs_st = round(current_cursor, 3)
             abs_et = round(abs_st + dur, 3)
 
@@ -520,8 +530,6 @@ def resolve_batch_timestamps(
             abs_et = round(chunk_e + 2.0, 3)
             if abs_st >= abs_et:
                 abs_st = round(max(chunk_s, abs_et - 0.833), 3)
-
-        current_cursor = abs_et + min_gap_sec
 
         spk = orig_s.get("speaker") or (orig_s.get("speakers") or ["Speaker 1"])[0]
 
@@ -933,34 +941,7 @@ def polish_subtitle_events_netflix(
             et = round(st + max_duration, 3)
             dur = max_duration
 
-        # 3. Non-destructive CPS padding aiming for ~17.5 CPS to avoid warnings
-        cur_cps = calculate_cps(text, dur)
-        target_cps = max(12.0, max_cps - 2.5)
-        if cur_cps > target_cps:
-            needed_dur = len(text.replace('\n', ' ')) / target_cps
-            next_st = float(expanded_events[idx + 1]["start_time"]) if idx + 1 < n else et + 3.0
-            max_allowed_et = (next_st - min_gap_sec - min_duration) if idx + 1 < n else (et + 3.0)
-            target_et = st + min(needed_dur, max_duration)
-            if target_et <= max_allowed_et:
-                et = round(target_et, 3)
-                dur = max(0.01, round(et - st, 3))
-            elif max_allowed_et > et:
-                et = round(max_allowed_et, 3)
-                dur = max(0.01, round(et - st, 3))
-
-        # 4. CPS expansion into preceding silence gap
-        cur_cps = calculate_cps(text, dur)
-        if cur_cps > max_cps:
-            prev_et = float(expanded_events[idx - 1]["end_time"]) if idx > 0 else prev_batch_end
-            pre_gap = st - prev_et
-            if pre_gap > min_gap_sec + 0.100:
-                needed_extra = (len(text.replace('\n', ' ')) / max_cps) - dur
-                shift = min(needed_extra, pre_gap - min_gap_sec)
-                if shift > 0.050:
-                    st = round(st - shift, 3)
-                    dur = max(0.01, round(et - st, 3))
-
-        # 5. Snap to shot changes (Netflix cuts rule)
+        # 3. Snap to shot changes (Netflix cuts rule)
         if shot_changes:
             for sc in shot_changes:
                 if 0.0 < abs(st - sc) < 3.0 / frame_rate:
@@ -1320,12 +1301,12 @@ def generate_subtitles(
         
     client = get_gemini_client()
     candidate_models = [
+        "gemini-3.8-flash",
         "gemini-3.7-flash",
         "gemini-3.6-flash",
-        "gemini-3.1-flash-lite",
         "gemini-3.5-flash",
         "gemini-3.5-flash-lite",
-        "gemini-3.8-flash",
+        "gemini-3.1-flash-lite",
         "gemini-3-flash-preview",
     ]
     primary = GEMINI_MODEL
@@ -1505,7 +1486,7 @@ def generate_subtitles(
     # Stage 2: Monotonic Whisper Acoustic Synchronization
     if whisper_words and split_subtitles:
         log_terminal("Aligning subtitle timestamps to Whisper acoustic boundaries...")
-        split_subtitles = align_subtitle_timestamps(split_subtitles, whisper_words, search_radius=3.0)
+        split_subtitles = align_subtitle_timestamps(split_subtitles, whisper_words, search_radius=8.0, audio_path=audio_path_out)
 
     # Stage 3: Non-destructive Netflix polish
     fixed_event_dicts = polish_subtitle_events_netflix(
@@ -1603,9 +1584,11 @@ async def generate_subtitles_stream(
     prev_events_count: int = 0,
     prev_batch_end: float = 0.0,
     prev_context: Optional[List[str]] = None,
-    start_time: Optional[float] = None
+    start_time: Optional[float] = None,
+    batch_mode: str = "all",
+    user_feedback: Optional[str] = None
 ) -> AsyncGenerator[str, None]:
-    """Progressive Batch-wise SSE Stream generator with resume capability and dynamic settings."""
+    """Progressive Batch-wise SSE Stream generator with resume capability, single-batch review pause, and user feedback injection."""
     resolved_language, resolved_script = normalize_language_and_script(language, script)
     start_chunk = max(1, int(start_chunk))
     prev_events_count = max(0, int(prev_events_count))
@@ -1615,7 +1598,7 @@ async def generate_subtitles_stream(
     rolling_context = list(prev_context) if prev_context else []
 
     log_terminal(f"Starting Progressive Batch Stream for: {Path(video_path).name} (Starting at Batch {start_chunk}{f', From Time {start_time_sec:.2f}s' if start_time_sec else ''})")
-    log_terminal(f"Settings: Language={resolved_language}, Script={resolved_script}, Content={content_type}, SDH={sdh_mode}, CPL<={cpl_limit}, CPS<={max_cps}, AutoFix={gemini_auto_fix}, StartChunk={start_chunk}")
+    log_terminal(f"Settings: Language={resolved_language}, Script={resolved_script}, Content={content_type}, SDH={sdh_mode}, CPL<={cpl_limit}, CPS<={max_cps}, BatchMode={batch_mode}, UserFeedback={'Yes' if user_feedback else 'None'}")
     
     all_raw_subtitles = []
     all_aligned_subtitles = []
@@ -1715,14 +1698,14 @@ async def generate_subtitles_stream(
         
         client = get_gemini_client()
         candidate_models = [
-            "gemini-3.7-flash",
-            "gemini-3.6-flash",
-            "gemini-3.1-flash-lite",
-            "gemini-3.5-flash",
-            "gemini-3.5-flash-lite",
-            "gemini-3.8-flash",
-            "gemini-3-flash-preview",
-        ]
+        "gemini-3.8-flash",
+        "gemini-3.7-flash",
+        "gemini-3.6-flash",
+        "gemini-3.5-flash",
+        "gemini-3.5-flash-lite",
+        "gemini-3.1-flash-lite",
+        "gemini-3-flash-preview",
+    ]
         primary = GEMINI_MODEL
         if primary and primary in candidate_models:
             candidate_models.remove(primary)
@@ -1750,9 +1733,38 @@ async def generate_subtitles_stream(
                 target_path = audio_path_out
 
             try:
-                # Initialize per-slice Whisper words (will run during Stage 3 after Gemini transcribes)
+                # Stage 0: Acoustic Pre-scan with Whisper to extract exact word timestamps & timeline anchors
                 chunk_whisper_words = []
-                
+                acoustic_anchors = []
+                raw_cw = []
+                if enable_whisper:
+                    try:
+                        async for item in execute_task_with_heartbeats(
+                            get_whisper_word_timestamps,
+                            target_path,
+                            whisper_lang_target,
+                            whisper_model,
+                            chunk_idx=chunk_idx,
+                            total_chunks=total_chunks,
+                            stage=f"Whisper ({whisper_model}) acoustic scan for Part {chunk_idx}"
+                        ):
+                            if isinstance(item, tuple) and item[0] == "__RESULT__":
+                                raw_cw = item[1]
+                            else:
+                                yield item
+                        from app.whisper_aligner import extract_acoustic_timeline_anchors
+                        acoustic_anchors = extract_acoustic_timeline_anchors(raw_cw)
+                        for w in raw_cw:
+                            chunk_whisper_words.append({
+                                "word": w["word"],
+                                "start": round(w["start"] + chunk_s, 3),
+                                "end": round(w["end"] + chunk_s, 3),
+                                "probability": w.get("probability", 1.0)
+                            })
+                        log_terminal(f"Batch {chunk_idx}: Whisper extracted {len(raw_cw)} words across {len(acoustic_anchors)} acoustic intervals.")
+                    except Exception as e:
+                        log_terminal(f"Batch {chunk_idx} Whisper pre-scan warning: {e}")
+
                 # Read chunk audio bytes directly (well within 20MB inline limit)
                 with open(target_path, "rb") as f:
                     chunk_bytes = f.read()
@@ -1764,6 +1776,16 @@ async def generate_subtitles_stream(
                     context_clause = (
                         f"PREVIOUS CONVERSATION CONTEXT (from previous minutes for continuity & speaker/term consistency — DO NOT re-transcribe):\n"
                         f"{formatted_prev}\n\n"
+                    )
+
+                anchors_clause = ""
+                if acoustic_anchors:
+                    anchor_lines = [f"- [{a['start']:.2f}s -> {a['end']:.2f}s]: {a['text']}" for a in acoustic_anchors[:15]]
+                    anchors_clause = (
+                        "ACOUSTIC SPEECH TIMELINE GROUNDING (Genuine spoken segments detected in audio):\n"
+                        + "\n".join(anchor_lines) + "\n"
+                        "CRITICAL TIMING RULE: Your subtitle timestamps MUST closely align with these physical acoustic speech intervals.\n"
+                        "Never hallucinate or stretch dialogue into the pauses between these intervals!\n\n"
                     )
 
                 script_clause = f"Target Script: {resolved_script}\n" if resolved_script != "Auto-Detect" else ""
@@ -1783,8 +1805,25 @@ async def generate_subtitles_stream(
                         f"- Subtitles must strictly match {resolved_language}. Do NOT output random symbols or unrelated languages.\n"
                     )
 
+                feedback_clause = ""
+                if user_feedback and user_feedback.strip():
+                    feedback_clause = (
+                        "USER FEEDBACK & CRITICAL CORRECTIONS (Review notes from user on previous batch):\n"
+                        f"{user_feedback.strip()}\n"
+                        "MANDATORY: You MUST strictly adhere to this user feedback. Adjust timing, vocabulary, speaker assignments, and formatting accordingly!\n\n"
+                    )
+
+                silence_clause = (
+                    "CRITICAL SILENCE & NON-VOCAL RULE:\n"
+                    "- NEVER generate subtitles for instrumental music, background score, ambient noise, sound effects, applause, laughter, or silence.\n"
+                    "- ONLY transcribe when genuine human vocal speech is clearly audible and intelligible. If there is a section with only music or silence, leave that interval completely empty!\n\n"
+                )
+
                 prompt = (
+                    f"{feedback_clause}"
                     f"{context_clause}"
+                    f"{anchors_clause}"
+                    f"{silence_clause}"
                     f"Target Spoken Language: {resolved_language}\n"
                     f"{script_clause}"
                     f"{lang_directive}"
@@ -1893,26 +1932,31 @@ async def generate_subtitles_stream(
                     log_terminal(f"Gemini API unavailable for Batch {chunk_idx}. Falling back to local Whisper transcription...")
                     yield f"data: {json.dumps({'type': 'progress', 'chunk_index': chunk_idx, 'total_chunks': total_chunks, 'stage': f'Batch {chunk_idx}: Transcribing via local Whisper fallback...'})}\n\n"
                     
-                    subs = await asyncio.to_thread(
-                        transcribe_chunk_with_whisper,
-                        target_path,
-                        chunk_s,
-                        resolved_language,
-                        cpl_limit,
-                        whisper_model
-                    )
-                    if subs:
-                        parsed = {"subtitles": subs}
+                    if raw_cw:
+                        subs = group_whisper_words_into_subtitles(raw_cw, chunk_offset=0.0, cpl_limit=cpl_limit, target_language=resolved_language)
                         is_whisper_fallback = True
+                        parsed = {"subtitles": subs}
                     else:
-                        active_words = chunk_whisper_words if chunk_whisper_words else [w for w in whisper_words if w["start"] >= chunk_s - 0.2 and w["end"] <= chunk_e + 0.2]
-                        if active_words:
-                            subs = group_whisper_words_into_subtitles(active_words, chunk_s, cpl_limit=cpl_limit, target_language=resolved_language)
+                        subs = await asyncio.to_thread(
+                            transcribe_chunk_with_whisper,
+                            target_path,
+                            chunk_s,
+                            resolved_language,
+                            cpl_limit,
+                            whisper_model
+                        )
+                        if subs:
                             parsed = {"subtitles": subs}
                             is_whisper_fallback = True
                         else:
-                            yield f"data: {json.dumps({'type': 'batch_error', 'chunk_index': chunk_idx, 'total_chunks': total_chunks, 'error': str(last_error)})}\n\n"
-                            continue
+                            active_words = chunk_whisper_words if chunk_whisper_words else [w for w in whisper_words if w["start"] >= chunk_s - 0.2 and w["end"] <= chunk_e + 0.2]
+                            if active_words:
+                                subs = group_whisper_words_into_subtitles(active_words, chunk_s, cpl_limit=cpl_limit, target_language=resolved_language)
+                                parsed = {"subtitles": subs}
+                                is_whisper_fallback = True
+                            else:
+                                yield f"data: {json.dumps({'type': 'batch_error', 'chunk_index': chunk_idx, 'total_chunks': total_chunks, 'error': str(last_error)})}\n\n"
+                                continue
                 else:
                     parsed = extract_and_repair_subtitle_json(response.text)
                     is_whisper_fallback = False
@@ -1950,7 +1994,19 @@ async def generate_subtitles_stream(
                 for s in batch_raw:
                     split_batch.extend(split_and_balance_event(s, cpl_limit=cpl_limit, max_lines=max_lines, audio_path=target_path))
 
-                # Stage 2: Automated Quality Check
+                # Stage 2: Closed-Loop Acoustic Synchronization (Locks subtitles to exact spoken words & audio energy)
+                active_words = chunk_whisper_words if chunk_whisper_words else [w for w in whisper_words if w["start"] >= chunk_s - 0.5 and w["end"] <= chunk_e + 0.5]
+                if active_words and split_batch:
+                    log_terminal(f"Batch {chunk_idx}: Synchronizing {len(split_batch)} events acoustically with Whisper ({whisper_model})...")
+                    split_batch = align_subtitle_timestamps(
+                        split_batch,
+                        active_words,
+                        search_radius=8.0,
+                        prev_batch_end=prev_batch_end,
+                        audio_path=audio_path_out
+                    )
+
+                # Stage 3: Automated Quality Check (Audits the acoustically synchronized events)
                 batch_lint = lint_all_subtitles(
                     events=split_batch,
                     shot_changes=shot_changes,
@@ -1963,7 +2019,7 @@ async def generate_subtitles_stream(
                     custom_max_duration=max_duration,
                 )
 
-                # Stage 2B: Call AI again if QC errors detected (Gemini Self-Correction pass)
+                # Stage 3B: Call AI again if QC errors detected (Gemini Self-Correction pass)
                 from app.gemini_qc_fixer import coordinate_gemini_qc_fix, _has_fixable_errors
                 violating_events = [ev for ev in batch_lint.get("events", []) if _has_fixable_errors(ev.get("qc_errors", []))]
                 has_active_gemini = any(m not in exhausted_models for m in candidate_models)
@@ -1975,7 +2031,7 @@ async def generate_subtitles_stream(
                         async for item in execute_task_with_heartbeats(
                             coordinate_gemini_qc_fix,
                             events=split_batch,
-                            whisper_words=None,
+                            whisper_words=active_words,
                             shot_changes=shot_changes,
                             content_type=content_type,
                             frame_rate=frame_rate,
@@ -1997,41 +2053,6 @@ async def generate_subtitles_stream(
                             log_terminal(f"Batch {chunk_idx}: Gemini self-correction resolved issues. Score: {qc_fixed.get('compliance_score', 100)}%")
                     except Exception as qc_err:
                         log_terminal(f"Batch {chunk_idx} Gemini QC fix warning: {qc_err}")
-
-                # Stage 3: Whisper Acoustic Synchronization (only if transcribed by Gemini, not already by Whisper)
-                if not is_whisper_fallback:
-                    active_words = []
-                    if enable_whisper and total_duration > 180.0 and total_chunks > 1:
-                        try:
-                            raw_cw = []
-                            async for item in execute_task_with_heartbeats(
-                                get_whisper_word_timestamps,
-                                target_path,
-                                resolved_language,
-                                whisper_model,
-                                chunk_idx=chunk_idx,
-                                total_chunks=total_chunks,
-                                stage=f"Whisper ({whisper_model}) acoustic snapping for Part {chunk_idx}"
-                            ):
-                                if isinstance(item, tuple) and item[0] == "__RESULT__":
-                                    raw_cw = item[1]
-                                else:
-                                    yield item
-                            for w in raw_cw:
-                                active_words.append({
-                                    "word": w["word"],
-                                    "start": round(w["start"] + chunk_s, 3),
-                                    "end": round(w["end"] + chunk_s, 3),
-                                    "probability": w.get("probability", 1.0)
-                                })
-                        except Exception as e:
-                            log_terminal(f"Batch {chunk_idx} Whisper alignment fallback: {e}")
-                    elif whisper_words:
-                        active_words = [w for w in whisper_words if w["start"] >= chunk_s - 0.5 and w["end"] <= chunk_e + 0.5]
-
-                    if active_words and split_batch:
-                        log_terminal(f"Batch {chunk_idx}: Synchronizing {len(split_batch)} events acoustically with Whisper ({whisper_model})...")
-                        split_batch = align_subtitle_timestamps(split_batch, active_words, search_radius=8.0, prev_batch_end=prev_batch_end)
                 
                 # Stage 4: Non-destructive Netflix polish
                 processed_batch = polish_subtitle_events_netflix(

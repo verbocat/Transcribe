@@ -37,17 +37,62 @@ def format_timestamp(seconds: float) -> str:
     return f"{hrs:02d}:{mins:02d}:{secs:06.3f}"
 
 
-def parse_timestamp(timestamp_str: str) -> float:
-    """Parse HH:MM:SS.mmm or MM:SS.mmm or pure float seconds string."""
-    timestamp_str = timestamp_str.strip()
+def parse_timestamp(timestamp_val: Any) -> float:
+    """
+    Robustly parse timestamp into float seconds.
+    Handles:
+    - float / int seconds (e.g. 5.25)
+    - HH:MM:SS.mmm (e.g. 00:01:23.450)
+    - HH:MM:SS,mmm (SRT format e.g. 00:01:23,450)
+    - MM:SS:mmm (e.g. 00:05:250 -> 5.25s, fixing colon-before-millis bug)
+    - MM:SS.mmm (e.g. 05:23.450)
+    - HH:MM:SS:mmm (4 parts e.g. 00:00:05:250)
+    """
+    if timestamp_val is None:
+        return 0.0
+    if isinstance(timestamp_val, (int, float)):
+        return max(0.0, float(timestamp_val))
+    
+    ts_str = str(timestamp_val).strip()
+    if not ts_str:
+        return 0.0
+
+    # Normalize SRT style comma decimal separator
+    ts_str = ts_str.replace(",", ".")
+
     try:
-        if ":" in timestamp_str:
-            parts = timestamp_str.split(":")
-            if len(parts) == 3:
-                return int(parts[0]) * 3600 + int(parts[1]) * 60 + float(parts[2])
+        if ":" in ts_str:
+            parts = ts_str.split(":")
+            if len(parts) == 4:
+                # HH:MM:SS:mmm
+                h, m, s, ms = parts
+                ms_val = float(ms)
+                ms_div = 1000.0 if len(ms) <= 3 else (10.0 ** len(ms))
+                return max(0.0, int(h) * 3600 + int(m) * 60 + int(s) + ms_val / ms_div)
+            elif len(parts) == 3:
+                p0, p1, p2 = parts
+                # Disambiguate HH:MM:SS.mmm vs MM:SS:mmm
+                # If p2 has 3 digits without a dot, or float(p2) >= 60, it represents milliseconds!
+                try:
+                    val2 = float(p2)
+                    if val2 >= 60 or (len(p2) == 3 and "." not in p2):
+                        # MM:SS:mmm format (e.g. 00:05:250 -> 5.250s)
+                        return max(0.0, int(p0) * 60 + int(p1) + val2 / 1000.0)
+                    else:
+                        # Standard HH:MM:SS.mmm
+                        return max(0.0, int(p0) * 3600 + int(p1) * 60 + val2)
+                except Exception:
+                    return 0.0
             elif len(parts) == 2:
-                return int(parts[0]) * 60 + float(parts[1])
-        return float(timestamp_str)
+                p0, p1 = parts
+                try:
+                    val1 = float(p1)
+                    if val1 >= 60 or (len(p1) == 3 and "." not in p1):
+                        return max(0.0, int(p0) + val1 / 1000.0)
+                    return max(0.0, int(p0) * 60 + val1)
+                except Exception:
+                    return 0.0
+        return max(0.0, float(ts_str))
     except Exception:
         return 0.0
 
@@ -297,8 +342,8 @@ def detect_speech_boundaries(
 
 def snap_to_acoustic_boundaries(
     audio_path: str,
-    raw_start: float,
-    raw_end: float,
+    raw_start: Any,
+    raw_end: Any,
     collar_sec: float = 0.20,
 ) -> Tuple[float, float]:
     """
@@ -306,6 +351,11 @@ def snap_to_acoustic_boundaries(
     speech onset and decay within a tight local micro-collar (+/- 0.20s).
     Uses direct disk seek-reads (sub-millisecond, < 100KB RAM) to prevent memory spikes on long media.
     """
+    raw_start = parse_timestamp(raw_start)
+    raw_end = parse_timestamp(raw_end)
+    if not audio_path or not os.path.exists(audio_path):
+        return round(raw_start, 3), round(raw_end, 3)
+
     try:
         info = sf.info(audio_path)
         samplerate = info.samplerate

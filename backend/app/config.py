@@ -22,7 +22,7 @@ else:
     load_dotenv(BASE_DIR.parent / ".env")
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 DEFAULT_LANGUAGE = os.getenv("DEFAULT_LANGUAGE", "English")
 DEFAULT_SCRIPT = os.getenv("DEFAULT_SCRIPT", "Latin")

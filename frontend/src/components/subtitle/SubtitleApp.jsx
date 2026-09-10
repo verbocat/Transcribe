@@ -4,7 +4,8 @@ import {
   FileDown, Sliders, ShieldCheck, Film, Undo2, Redo2,
   SlidersHorizontal, Search, Split, Merge, Scissors, Trash2, Plus,
   ChevronDown, X, Play, Clock, Activity, FileText, Check, Settings,
-  Menu, Download, Eye, AlertTriangle, Layers, Type, Sun, Moon, Loader2, Globe
+  Menu, Download, Eye, AlertTriangle, Layers, Type, Sun, Moon, Loader2, Globe, Volume2,
+  MessageSquare, ChevronRight
 } from 'lucide-react';
 import { API_BASE } from '../../config';
 import VideoPlayer from './VideoPlayer';
@@ -224,6 +225,8 @@ export default function SubtitleApp({ onBackToHome }) {
   const [activeEventId, setActiveEventId] = useState(null);
   const editedEventIdsRef = useRef(new Set()); // Protected manual user edits across progressive batches
   const [qcNotification, setQcNotification] = useState(null); // { message, chunkIndex, totalChunks, timestamp }
+  const [batchPauseData, setBatchPauseData] = useState(null); // { chunkIndex, totalChunks, nextChunk, prevBatchEnd, prevEventsCount, prevContext, message }
+  const [userFeedbackText, setUserFeedbackText] = useState('');
 
   // Video playback sync state
   const [currentTime, setCurrentTime] = useState(0);
@@ -365,6 +368,7 @@ export default function SubtitleApp({ onBackToHome }) {
 
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [isFixingWithGemini, setIsFixingWithGemini] = useState(false);
+  const [isSyncingAudio, setIsSyncingAudio] = useState(false);
 
   // Sync settings to localStorage
   useEffect(() => {
@@ -994,6 +998,8 @@ export default function SubtitleApp({ onBackToHome }) {
     setResumeChunk(null);
     setTotalChunks(null);
     setCanResume(false);
+    setBatchPauseData(null);
+    setUserFeedbackText('');
 
     setIsGenerating(true);
     setProgressPercent(5);
@@ -1074,7 +1080,9 @@ export default function SubtitleApp({ onBackToHome }) {
           max_lines: maxLines,
           min_duration: minDuration,
           max_duration: maxDuration,
-          gemini_auto_fix: geminiAutoFix
+          gemini_auto_fix: geminiAutoFix,
+          batch_mode: 'all',
+          user_feedback: userFeedbackText.trim() || null
         })
       });
 
@@ -1112,7 +1120,9 @@ export default function SubtitleApp({ onBackToHome }) {
             max_lines: maxLines,
             min_duration: minDuration,
             max_duration: maxDuration,
-            gemini_auto_fix: geminiAutoFix
+            gemini_auto_fix: geminiAutoFix,
+            batch_mode: 'all',
+            user_feedback: userFeedbackText.trim() || null
           })
         });
       }
@@ -1207,6 +1217,27 @@ export default function SubtitleApp({ onBackToHome }) {
                 totalChunks: data.total_chunks,
                 timestamp: Date.now()
               });
+            } else if (data.type === 'batch_pause') {
+              streamCompleted = true;
+              setBatchPauseData({
+                chunkIndex: data.chunk_index,
+                totalChunks: data.total_chunks,
+                nextChunk: data.next_chunk,
+                prevBatchEnd: data.prev_batch_end,
+                prevEventsCount: data.prev_events_count,
+                prevContext: data.prev_context,
+                message: data.message
+              });
+              setResumeChunk(data.next_chunk);
+              setTotalChunks(data.total_chunks);
+              setCanResume(true);
+              const pct = Math.floor((data.chunk_index / data.total_chunks) * 100);
+              setProgressPercent(pct);
+              setProgressStage(`Batch ${data.chunk_index} of ${data.total_chunks} Ready for Review`);
+              setProgressDetail(data.message || `Batch ${data.chunk_index} ready. Provide feedback below or continue.`);
+              console.log(`[Subtitle Studio] Batch ${data.chunk_index}/${data.total_chunks} paused for review.`);
+              try { await reader.cancel(); } catch (_) { }
+              break;
             } else if (data.type === 'batch_error') {
               console.warn(`[Subtitle Studio] Batch ${data.chunk_index} notice:`, data.error);
               setProgressDetail(`Batch ${data.chunk_index} notice: ${data.error ? String(data.error).slice(0, 70) : 'issue processing'}`);
@@ -1217,6 +1248,8 @@ export default function SubtitleApp({ onBackToHome }) {
               streamCompleted = true;
               setCanResume(false);
               setResumeChunk(null);
+              setBatchPauseData(null);
+              setUserFeedbackText('');
               const res = data.result || {};
               const finalEvents = (res.events || accumulatedEvents).map(e => ({
                 ...e,
@@ -1310,7 +1343,7 @@ export default function SubtitleApp({ onBackToHome }) {
   };
 
   // ── Continue / Resume Subtitle Generation from Last Processed Batch ──
-  const handleContinueGenerate = async () => {
+  const handleContinueGenerate = async (targetMode = 'all', feedbackText = null) => {
     if (!selectedFile) {
       fileInputRef.current?.click();
       return;
@@ -1320,7 +1353,9 @@ export default function SubtitleApp({ onBackToHome }) {
     const prevEventsCount = events.length;
     const prevBatchEnd = events.length > 0 ? (events[events.length - 1].end_time ?? events[events.length - 1].end ?? 0.0) : 0.0;
     const prevContext = events.slice(-3).map(e => e.text).filter(Boolean);
+    const activeFeedback = (typeof feedbackText === 'string' && feedbackText.trim()) ? feedbackText.trim() : (userFeedbackText.trim() || null);
 
+    setBatchPauseData(null);
     setIsGenerating(true);
     setProgressPercent(Math.min(95, Math.floor(((chunkToStart - 1) / (totalChunks || chunkToStart)) * 100)));
     setProgressStage(`Resuming from Batch ${chunkToStart} of ${totalChunks || '?'}`);
@@ -1348,7 +1383,7 @@ export default function SubtitleApp({ onBackToHome }) {
         }
       }
 
-      console.log(`[Subtitle Studio] Resuming stream for Video ID: ${videoId} starting at Batch ${chunkToStart}`);
+      console.log(`[Subtitle Studio] Resuming stream for Video ID: ${videoId} starting at Batch ${chunkToStart} (mode: ${targetMode})`);
       let streamRes = await fetch(`${API_BASE}/api/subtitle/generate_stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1368,7 +1403,9 @@ export default function SubtitleApp({ onBackToHome }) {
           start_chunk: chunkToStart,
           prev_events_count: prevEventsCount,
           prev_batch_end: prevBatchEnd,
-          prev_context: prevContext
+          prev_context: prevContext,
+          batch_mode: targetMode,
+          user_feedback: activeFeedback
         })
       });
 
@@ -1400,7 +1437,9 @@ export default function SubtitleApp({ onBackToHome }) {
             start_chunk: chunkToStart,
             prev_events_count: prevEventsCount,
             prev_batch_end: prevBatchEnd,
-            prev_context: prevContext
+            prev_context: prevContext,
+            batch_mode: targetMode,
+            user_feedback: activeFeedback
           })
         });
       }
@@ -1474,6 +1513,27 @@ export default function SubtitleApp({ onBackToHome }) {
                 totalChunks: data.total_chunks,
                 timestamp: Date.now()
               });
+            } else if (data.type === 'batch_pause') {
+              streamCompleted = true;
+              setBatchPauseData({
+                chunkIndex: data.chunk_index,
+                totalChunks: data.total_chunks,
+                nextChunk: data.next_chunk,
+                prevBatchEnd: data.prev_batch_end,
+                prevEventsCount: data.prev_events_count,
+                prevContext: data.prev_context,
+                message: data.message
+              });
+              setResumeChunk(data.next_chunk);
+              setTotalChunks(data.total_chunks);
+              setCanResume(true);
+              const pct = Math.floor((data.chunk_index / data.total_chunks) * 100);
+              setProgressPercent(pct);
+              setProgressStage(`Batch ${data.chunk_index} of ${data.total_chunks} Ready for Review`);
+              setProgressDetail(data.message || `Batch ${data.chunk_index} ready. Check subtitles or provide AI guidance.`);
+              console.log(`[Subtitle Studio] Batch ${data.chunk_index}/${data.total_chunks} paused for review.`);
+              try { await reader.cancel(); } catch (_) { }
+              break;
             } else if (data.type === 'batch_error') {
               console.warn(`[Subtitle Studio] Batch ${data.chunk_index} issue:`, data.error);
               setProgressDetail(`Batch ${data.chunk_index} had an issue: continuing to next batch...`);
@@ -1484,6 +1544,8 @@ export default function SubtitleApp({ onBackToHome }) {
               streamCompleted = true;
               setCanResume(false);
               setResumeChunk(null);
+              setBatchPauseData(null);
+              setUserFeedbackText('');
               const res = data.result || {};
               setComplianceScore(res.compliance_score || 100);
               setTotalErrors(res.total_errors || 0);
@@ -1525,6 +1587,13 @@ export default function SubtitleApp({ onBackToHome }) {
         setBatchProgress(null);
       }, 2500);
     }
+  };
+
+  // ── Step Continue with AI Steering Guidance ──
+  const handleContinueBatchStep = async (mode = 'single') => {
+    const feedback = userFeedbackText.trim();
+    setBatchPauseData(null);
+    await handleContinueGenerate(mode, feedback);
   };
 
   // ── Open Custom Time Resume Modal ──
@@ -1807,6 +1876,58 @@ export default function SubtitleApp({ onBackToHome }) {
       console.error("Gemini fix failed:", err);
     } finally {
       setIsFixingWithGemini(false);
+    }
+  };
+
+  // ── Closed-Loop Acoustic Audio Synchronization Pass ──
+  const handleAcousticSync = async () => {
+    if (!events || events.length === 0 || !currentVideoId) return;
+    setIsSyncingAudio(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/subtitle/acoustic_sync`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          video_id: currentVideoId,
+          events: events,
+          language: language,
+          content_type: contentType,
+          frame_rate: frameRate,
+          cpl_limit: cplLimit,
+          max_cps: cpsLimit,
+          max_lines: maxLines,
+          min_duration: minDuration,
+          max_duration: maxDuration,
+          shot_changes: shotChanges
+        })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setOriginalEvents(events);
+        if (data.events) {
+          const clean = sanitizeEvents(data.events);
+          setEvents(clean);
+          pushToHistory(clean);
+          handleLint(clean);
+          setShowDiffModal(true);
+        }
+        if (data.lint_result) {
+          setComplianceScore(data.lint_result.compliance_score || 100);
+          setTotalErrors(data.lint_result.total_errors || 0);
+          setTotalWarnings(data.lint_result.total_warnings || 0);
+          setCpsStats(data.lint_result.cps_stats || null);
+        }
+        setAutoSaveStatus('Acoustically Synced to Audio ✓');
+        setTimeout(() => setAutoSaveStatus(''), 4000);
+      } else {
+        const err = await res.json();
+        alert(err.detail || "Acoustic audio synchronization failed.");
+      }
+    } catch (err) {
+      console.error("Acoustic sync failed:", err);
+      alert("Acoustic sync failed: " + err.message);
+    } finally {
+      setIsSyncingAudio(false);
     }
   };
 
@@ -2197,6 +2318,17 @@ export default function SubtitleApp({ onBackToHome }) {
             )}
           </button>
 
+          {/* Acoustic Audio Sync Button */}
+          <button
+            onClick={handleAcousticSync}
+            disabled={events.length === 0 || isSyncingAudio || !currentVideoId}
+            className="px-3 py-1 rounded text-xs font-semibold bg-emerald-950/70 border border-emerald-500/40 hover:bg-emerald-900/80 text-emerald-300 flex items-center gap-1.5 transition-all shadow-[0_0_10px_rgba(16,185,129,0.2)] cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+            title="Snap and re-synchronize all subtitles directly to speech audio acoustics (Whisper + VAD)"
+          >
+            <Volume2 className={`w-3.5 h-3.5 text-emerald-400 ${isSyncingAudio ? 'animate-bounce' : ''}`} />
+            <span>{isSyncingAudio ? 'Syncing...' : 'Sync Audio'}</span>
+          </button>
+
           {/* Export Button (CapCut Signature Neon Turquoise Action) */}
           <button
             onClick={() => setShowExportModal(true)}
@@ -2305,17 +2437,17 @@ export default function SubtitleApp({ onBackToHome }) {
         </div>
       )}
 
-      {/* Resume Paused Generation Notification Banner */}
+      {/* Resume Interrupted Generation Notification Banner */}
       {canResume && !isGenerating && events.length > 0 && (
         <div className="px-4 py-1.5 flex items-center justify-between border-b border-amber-500/40 bg-amber-950/70 text-amber-200 text-xs shrink-0 z-30 transition-all">
           <div className="flex items-center gap-2">
             <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
             <span>
-              <strong>Generation Paused:</strong> Completed through Batch {(resumeChunk || 2) - 1} of {totalChunks || '?'} ({events.length} subtitles generated). You can continue generating remaining batches anytime!
+              <strong>Generation Interrupted:</strong> Completed through Batch {(resumeChunk || 2) - 1} of {totalChunks || '?'} ({events.length} subtitles generated). You can continue generating remaining batches anytime!
             </span>
           </div>
           <button
-            onClick={handleContinueGenerate}
+            onClick={() => handleContinueGenerate('all')}
             className="px-3 py-1 bg-amber-500 hover:bg-amber-400 text-black font-bold rounded text-xs shrink-0 transition-colors cursor-pointer flex items-center gap-1.5 shadow-xs"
           >
             <Play className="w-3 h-3 fill-black" />
@@ -2445,6 +2577,8 @@ export default function SubtitleApp({ onBackToHome }) {
               onAutoFix={handleAutoFix}
               onGeminiFix={handleGeminiFix}
               isFixingWithGemini={isFixingWithGemini}
+              onAcousticSync={handleAcousticSync}
+              isSyncingAudio={isSyncingAudio}
               onExport={() => setShowExportModal(true)}
               onJumpToEvent={(id) => {
                 setActiveEventId(id);

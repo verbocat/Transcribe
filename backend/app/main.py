@@ -1158,6 +1158,8 @@ def resolve_active_session_video(video_id: str) -> Optional[str]:
     video_id = urllib.parse.unquote(str(video_id)).strip()
     if video_id in active_sessions and os.path.exists(active_sessions[video_id].get("file_path", "")):
         return active_sessions[video_id]["file_path"]
+    if os.path.exists(video_id):
+        return video_id
         
     supported_exts = get_supported_media_extensions()
 
@@ -1345,6 +1347,8 @@ async def generate_subtitles_stream_endpoint(payload: dict):
     prev_context = payload.get("prev_context", [])
     raw_start_time = payload.get("start_time")
     start_time = float(raw_start_time) if raw_start_time is not None else None
+    batch_mode = payload.get("batch_mode", "all")
+    user_feedback = payload.get("user_feedback")
     
     if not video_id:
         raise HTTPException(status_code=400, detail="video_id is required")
@@ -1371,6 +1375,8 @@ async def generate_subtitles_stream_endpoint(payload: dict):
             prev_batch_end=prev_batch_end,
             prev_context=prev_context,
             start_time=start_time,
+            batch_mode=batch_mode,
+            user_feedback=user_feedback,
         ),
         media_type="text/event-stream; charset=utf-8",
         headers={
@@ -1429,13 +1435,14 @@ async def gemini_fix_subtitles_endpoint(payload: dict):
     is_cloud = bool(os.getenv("RENDER") or os.getenv("PORT"))
     enable_whisper = os.getenv("ENABLE_WHISPER", "true").lower() == "true"
     whisper_model = os.getenv("WHISPER_MODEL", "tiny" if is_cloud else "base")
+    language = payload.get("language") or (active_sessions.get(video_id, {}).get("language") if video_id else None)
     if enable_whisper and video_id:
         video_path = resolve_active_session_video(video_id) or ""
         audio_path = os.path.splitext(video_path)[0] + ".wav" if video_path else ""
         if os.path.exists(audio_path):
             try:
                 from app.whisper_aligner import get_whisper_word_timestamps
-                whisper_words = await asyncio.to_thread(get_whisper_word_timestamps, audio_path, None, whisper_model)
+                whisper_words = await asyncio.to_thread(get_whisper_word_timestamps, audio_path, language, whisper_model)
             except Exception:
                 pass
 
@@ -1459,6 +1466,119 @@ async def gemini_fix_subtitles_endpoint(payload: dict):
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Gemini QC Fix failed: {str(e)}")
+
+
+@app.post("/api/subtitle/acoustic_sync")
+async def acoustic_sync_subtitles_endpoint(payload: dict):
+    """
+    Closed-loop acoustic synchronization:
+    Locks all subtitle events to exact audio speech timestamps using Whisper and VAD acoustic energy.
+    """
+    video_id = payload.get("video_id")
+    events = payload.get("events", [])
+    language = payload.get("language")
+    content_type = payload.get("content_type", "adult")
+    frame_rate = float(payload.get("frame_rate", 24.0))
+    cpl_limit = int(payload.get("cpl_limit", 42))
+    max_cps = float(payload.get("max_cps", 20.0 if content_type == "adult" else 17.0))
+    max_lines = int(payload.get("max_lines", 2))
+    min_duration = float(payload.get("min_duration", 0.833))
+    max_duration = float(payload.get("max_duration", 7.0))
+    shot_changes = payload.get("shot_changes", [])
+
+    if not video_id:
+        raise HTTPException(status_code=400, detail="video_id is required")
+
+    video_path = resolve_active_session_video(video_id)
+    if not video_path or not os.path.exists(video_path):
+        raise HTTPException(status_code=404, detail="Video session not found or expired.")
+
+    # Determine audio path (prioritize active session audio, then existing .wav, then extract)
+    audio_path = None
+    if video_id in active_sessions and active_sessions[video_id].get("audio_path"):
+        cand = active_sessions[video_id]["audio_path"]
+        if os.path.exists(cand):
+            audio_path = cand
+
+    if not audio_path:
+        audio_cand = os.path.splitext(video_path)[0] + ".wav"
+        if os.path.exists(audio_cand):
+            audio_path = audio_cand
+        else:
+            try:
+                audio_info = extract_audio_from_video(video_path)
+                audio_path = audio_info.get("audio_path", "")
+            except Exception as ex:
+                raise HTTPException(status_code=500, detail=f"Failed to extract audio: {ex}")
+
+    is_cloud = bool(os.getenv("RENDER") or os.getenv("PORT"))
+    whisper_model = payload.get("whisper_model") or os.getenv("WHISPER_MODEL", "tiny" if is_cloud else "base")
+
+    try:
+        from app.whisper_aligner import get_whisper_word_timestamps, align_subtitle_timestamps
+        from app.gemini_subtitle_generator import polish_subtitle_events_netflix
+
+        # 1. Run Whisper to get acoustic words
+        whisper_words = await asyncio.to_thread(
+            get_whisper_word_timestamps,
+            audio_path,
+            language if language and language.lower() not in ["auto", "auto-detect"] else None,
+            whisper_model
+        )
+
+        if not whisper_words:
+            raise HTTPException(status_code=500, detail="Whisper could not detect speech or failed to transcribe.")
+
+        # 2. Sequential Acoustic Alignment
+        aligned = await asyncio.to_thread(
+            align_subtitle_timestamps,
+            events,
+            whisper_words,
+            12.0,
+            0.0,
+            audio_path
+        )
+
+        # 3. Netflix Polish
+        polished = await asyncio.to_thread(
+            polish_subtitle_events_netflix,
+            events=aligned,
+            cpl_limit=cpl_limit,
+            max_cps=max_cps,
+            max_lines=max_lines,
+            min_duration=min_duration,
+            max_duration=max_duration,
+            frame_rate=frame_rate,
+            shot_changes=shot_changes,
+            prev_batch_end=0.0
+        )
+
+        # 4. Lint result
+        lint_result = lint_all_subtitles(
+            events=polished,
+            shot_changes=shot_changes,
+            content_type=content_type,
+            frame_rate=frame_rate,
+            custom_cpl=cpl_limit,
+            custom_cps=max_cps,
+            custom_max_lines=max_lines,
+            custom_min_duration=min_duration,
+            custom_max_duration=max_duration
+        )
+
+        return {
+            "events": polished,
+            "lint_result": lint_result,
+            "matched_words_count": len(whisper_words),
+            "whisper_model": whisper_model,
+            "message": f"Successfully synchronized {len(polished)} subtitles with audio acoustics."
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Acoustic synchronization failed: {str(e)}")
 
 
 @app.post("/api/subtitle/autofix")
