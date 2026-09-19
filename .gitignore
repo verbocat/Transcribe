@@ -29,6 +29,9 @@ backend/exports/*
 *.mp4
 *.m4a
 
+# Local SQLite database
+backend/data/transcribe_app.db
+
 # IDE & OS
 .vscode/
 .idea/
