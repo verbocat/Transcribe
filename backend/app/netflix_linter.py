@@ -718,7 +718,23 @@ def lint_subtitle_event(
                     "severity": "warning",
                     "suggested_fix": "Rebreak to move more words to the second line.",
                 })
-    
+
+    # ── Script Purity / Code-Mixing Check ──
+    # If target script is Devanagari, flag any Latin alphabet letters [a-zA-Z]
+    if script and script.lower() in ["devanagari", "hindi"]:
+        clean_no_tags = _strip_tags(text).strip()
+        latin_words = re.findall(r'\b[a-zA-Z]+\b', clean_no_tags)
+        if latin_words:
+            sample_words = ", ".join(latin_words[:4])
+            errors.append({
+                "event_id": event_id,
+                "rule_id": "NF-CODE-MIXED-SCRIPT",
+                "field": "text",
+                "message": f"Latin/English words detected in Devanagari script: '{sample_words}'. When target script is Devanagari, English words and sentences must be phonetically transliterated into Devanagari (e.g. 'I want to go' -> 'आई वांट टू गो', 'target' -> 'टारगेट').",
+                "severity": "error",
+                "suggested_fix": f"Phonetically transliterate foreign words ({sample_words}) into Devanagari characters.",
+            })
+
     # ── Gap / Overlap Checks ──
     if prev_event:
         prev_end = float(prev_event.get("end_time", 0))
@@ -976,49 +992,68 @@ def auto_chain_gaps(
     
     min_gap = _frames_to_seconds(MIN_GAP_FRAMES, frame_rate)
     
+    # 1. Critical invariant: ALWAYS sort strictly by start_time first
+    events.sort(key=lambda e: (float(e.get("start_time", 0.0)), float(e.get("end_time", 0.0))))
+    
     for i in range(len(events) - 1):
-        curr_end = float(events[i].get("end_time", 0))
-        next_start = float(events[i + 1].get("start_time", 0))
-        curr_start = float(events[i].get("start_time", 0))
-        next_end = float(events[i + 1].get("end_time", next_start + 2.0))
+        curr_start = float(events[i].get("start_time", 0.0))
+        curr_end = float(events[i].get("end_time", curr_start + 1.0))
+        next_start = float(events[i + 1].get("start_time", 0.0))
+        next_end = float(events[i + 1].get("end_time", next_start + 1.0))
+        
+        # Degenerate collision: next_start is before or equal to curr_start
+        if next_start <= curr_start + 0.05:
+            next_dur = max(min_duration, next_end - next_start)
+            next_start = round(curr_end + min_gap, 3)
+            next_end = round(next_start + next_dur, 3)
+            events[i + 1]["start_time"] = next_start
+            events[i + 1]["start"] = next_start
+            events[i + 1]["end_time"] = next_end
+            events[i + 1]["end"] = next_end
         
         gap_seconds = next_start - curr_end
         gap_frames = _seconds_to_frames(gap_seconds, frame_rate)
         
-        # Strict timeline non-overlap & gap enforcement
+        # Strict timeline non-overlap enforcement
         if gap_seconds < min_gap:
-            target_end = round(next_start - min_gap, 6)
-            if target_end - curr_start >= min_duration:
+            target_end = round(next_start - min_gap, 3)
+            if target_end > curr_start + 0.20:
                 events[i]["end_time"] = target_end
                 events[i]["end"] = target_end
             else:
-                # If shortening curr_end drops duration below min_duration:
-                # Try expanding curr_start BACKWARDS into preceding silence (NEVER push next_start into speech!)
-                prev_end = float(events[i - 1].get("end_time", 0.0)) if i > 0 else 0.0
-                earliest_start = round(prev_end + min_gap, 6) if (i > 0 or prev_end > 0.0) else 0.0
-                if target_end - earliest_start >= min_duration:
-                    new_curr_start = round(target_end - min_duration, 6)
-                    events[i]["start_time"] = new_curr_start
-                    events[i]["start"] = new_curr_start
-                    events[i]["end_time"] = target_end
-                    events[i]["end"] = target_end
-                else:
-                    # Preceding space is too tight: clamp end_time to target_end without shifting next_start!
-                    # Strictly preserves acoustic speech anchor of events[i+1] and avoids compounding forward drift.
-                    events[i]["end_time"] = target_end
-                    events[i]["end"] = target_end
+                # Event is too tight: separate by minimum legible speech window
+                events[i]["end_time"] = round(curr_start + 0.35, 3)
+                events[i]["end"] = events[i]["end_time"]
+                next_start = round(events[i]["end_time"] + min_gap, 3)
+                next_dur = max(min_duration, next_end - float(events[i + 1]["start_time"]))
+                events[i + 1]["start_time"] = next_start
+                events[i + 1]["start"] = next_start
+                events[i + 1]["end_time"] = round(next_start + next_dur, 3)
+                events[i + 1]["end"] = events[i + 1]["end_time"]
+                
         elif MIN_GAP_FRAMES < gap_frames < CHAIN_THRESHOLD_FRAMES:
             # Only bridge the gap if the pause is tiny (<= 0.18s) OR subtitle needs reading time (CPS > max_cps)
-            # This prevents subtitles from lingering on screen during natural 300-500ms conversational pauses.
             cur_dur = max(0.01, curr_end - curr_start)
             cur_cps = calculate_cps(events[i].get("text", ""), cur_dur)
             if gap_seconds <= 0.18 or cur_cps > max_cps or cur_dur < min_duration:
-                events[i]["end_time"] = round(next_start - min_gap, 6)
+                events[i]["end_time"] = round(next_start - min_gap, 3)
                 events[i]["end"] = events[i]["end_time"]
+    
+    # Final safety clamp: 100% guarantee no cur_end exceeds next_start - min_gap
+    for i in range(len(events) - 1):
+        c_et = float(events[i]["end_time"])
+        n_st = float(events[i + 1]["start_time"])
+        if c_et > n_st - min_gap:
+            events[i]["end_time"] = round(n_st - min_gap, 3)
+            events[i]["end"] = events[i]["end_time"]
     
     # Update durations and formatted timestamps
     for event in events:
-        event["duration"] = round(float(event["end_time"]) - float(event["start_time"]), 3)
+        st = float(event["start_time"])
+        et = float(event["end_time"])
+        event["duration"] = round(max(0.1, et - st), 3)
+        event["start_time_str"] = format_timestamp(st)
+        event["end_time_str"] = format_timestamp(et)
     
     return events
 
@@ -1628,6 +1663,7 @@ def auto_fix_subtitles(
     # Snap to shots if shot change list provided
     if shot_changes:
         fixed_events = auto_snap_to_shots(fixed_events, shot_changes, frame_rate)
+        fixed_events = auto_chain_gaps(fixed_events, frame_rate=frame_rate, min_duration=min_dur_limit, max_cps=cps_limit)
         
     # Re-lint to populate final qc_errors and score
     result = lint_all_subtitles(

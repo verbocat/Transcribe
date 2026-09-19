@@ -35,3 +35,7 @@ backend/exports/*
 .DS_Store
 Thumbs.db
 *.log
+
+# Local Plan Documents
+Plan 1*
+Plan 2*

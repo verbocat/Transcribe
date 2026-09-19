@@ -9,6 +9,31 @@ export default function ProjectNotesModal({ isOpen, onClose, filename }) {
   const [tags, setTags] = useState([]);
   const [newTagInput, setNewTagInput] = useState('');
   const [toast, setToast] = useState('');
+  const [isClosing, setIsClosing] = useState(false);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setIsClosing(false);
+      return;
+    }
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        handleDismiss();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen]);
+
+  const handleDismiss = () => {
+    if (isClosing) return;
+    setIsClosing(true);
+    setTimeout(() => {
+      setIsClosing(false);
+      onClose();
+    }, 220);
+  };
 
   useEffect(() => {
     if (isOpen) {
@@ -25,8 +50,8 @@ export default function ProjectNotesModal({ isOpen, onClose, filename }) {
     setToast('Project notes & tags saved locally ✓');
     setTimeout(() => {
       setToast('');
-      onClose();
-    }, 1200);
+      handleDismiss();
+    }, 800);
   };
 
   const handleAddTag = () => {
@@ -44,8 +69,17 @@ export default function ProjectNotesModal({ isOpen, onClose, filename }) {
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
-      <div className="bg-[#14151a] border border-[#262734] rounded-2xl w-full max-w-xl p-6 shadow-2xl flex flex-col max-h-[90vh] text-slate-200">
+    <div
+      className={`fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md transition-opacity duration-200 ${
+        isClosing ? 'animate-mac-backdrop-exit pointer-events-none' : 'animate-in fade-in'
+      }`}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) handleDismiss();
+      }}
+    >
+      <div className={`bg-[#14151a] border border-[#262734] rounded-2xl w-full max-w-xl p-6 shadow-2xl flex flex-col max-h-[90vh] text-slate-200 ${
+        isClosing ? 'animate-mac-squish-exit' : 'animate-mac-squish'
+      }`}>
         {/* Header */}
         <div className="flex items-center justify-between pb-4 border-b border-[#262734]">
           <div className="flex items-center gap-3">
@@ -58,7 +92,7 @@ export default function ProjectNotesModal({ isOpen, onClose, filename }) {
             </div>
           </div>
           <button
-            onClick={onClose}
+            onClick={handleDismiss}
             className="p-1.5 text-slate-400 hover:text-white rounded-xl bg-[#181920] hover:bg-[#22232c] border border-[#262734] transition-colors cursor-pointer"
           >
             <X className="w-4 h-4" />
@@ -139,7 +173,7 @@ export default function ProjectNotesModal({ isOpen, onClose, filename }) {
           <span className="text-[11px] text-slate-500">Stored in browser local storage</span>
           <div className="flex items-center gap-2">
             <button
-              onClick={onClose}
+              onClick={handleDismiss}
               className="px-3.5 py-1.5 bg-[#181920] hover:bg-[#22232c] text-slate-300 hover:text-white rounded-xl text-xs font-semibold border border-[#262734] transition-colors cursor-pointer"
             >
               Cancel

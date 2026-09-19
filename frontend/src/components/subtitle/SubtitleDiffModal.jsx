@@ -3,6 +3,31 @@ import { X, Check, CheckCheck, ArrowRight, AlertTriangle, RotateCcw, Diff, Spark
 
 export default function SubtitleDiffModal({ isOpen, onClose, originalEvents = [], fixedEvents = [], onAcceptAll = () => {}, onAcceptSelective = () => {} }) {
   const [selectedChanges, setSelectedChanges] = useState(new Set());
+  const [isClosing, setIsClosing] = useState(false);
+
+  React.useEffect(() => {
+    if (!isOpen) {
+      setIsClosing(false);
+      return;
+    }
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        handleDismiss();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen]);
+
+  const handleDismiss = () => {
+    if (isClosing) return;
+    setIsClosing(true);
+    setTimeout(() => {
+      setIsClosing(false);
+      onClose();
+    }, 220);
+  };
 
   // Compute changes between original and fixed events
   const changes = useMemo(() => {
@@ -124,8 +149,20 @@ export default function SubtitleDiffModal({ isOpen, onClose, originalEvents = []
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4" onClick={onClose}>
-      <div className="bg-[#14151a] border border-[#262734] rounded-2xl shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col overflow-hidden text-slate-200" onClick={e => e.stopPropagation()}>
+    <div
+      className={`fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md transition-opacity duration-200 ${
+        isClosing ? 'animate-mac-backdrop-exit pointer-events-none' : 'animate-in fade-in duration-200'
+      }`}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) handleDismiss();
+      }}
+    >
+      <div
+        className={`bg-[#14151a] border border-[#262734] rounded-2xl shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col overflow-hidden text-slate-200 ${
+          isClosing ? 'animate-mac-squish-exit' : 'animate-mac-squish'
+        }`}
+        onClick={e => e.stopPropagation()}
+      >
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-[#262734]">
           <div className="flex items-center gap-3">
@@ -137,7 +174,7 @@ export default function SubtitleDiffModal({ isOpen, onClose, originalEvents = []
               <p className="text-xs text-slate-400">{totalChanges} subtitle event{totalChanges !== 1 ? 's' : ''} corrected</p>
             </div>
           </div>
-          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-[#22232c] text-slate-400 hover:text-white transition-colors cursor-pointer">
+          <button onClick={handleDismiss} className="p-1.5 rounded-lg hover:bg-[#22232c] text-slate-400 hover:text-white transition-colors cursor-pointer">
             <X className="w-5 h-5" />
           </button>
         </div>

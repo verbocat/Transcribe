@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Settings, X, RotateCcw, Sparkles, Sliders, ShieldCheck, Check, Globe } from 'lucide-react';
 import { setCustomApiBase } from '../../config';
 
@@ -38,10 +38,47 @@ export default function SubtitleSettingsModal({
     }
   });
   const [testStatus, setTestStatus] = useState(null);
+  const [isClosing, setIsClosing] = useState(false);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setIsClosing(false);
+      return;
+    }
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        handleDismiss();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
+  const handleDismiss = () => {
+    if (isClosing) return;
+    setIsClosing(true);
+    setTimeout(() => {
+      setIsClosing(false);
+      onClose();
+    }, 220);
+  };
+
   const presets = [
+    {
+      name: 'Verbatim / Fast Speech',
+      desc: 'Dialogue-First · 42 CPL · 25 CPS · 0.5s Min',
+      apply: () => {
+        setCplLimit(42);
+        setCpsLimit(25);
+        setMaxLines(2);
+        setMinDuration(0.5);
+        setMaxDuration(7.0);
+        setContentType('adult');
+      }
+    },
     {
       name: 'Netflix Adult',
       desc: 'Standard 42 CPL · 20 CPS · 2 Lines',
@@ -105,9 +142,18 @@ export default function SubtitleSettingsModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200">
+    <div
+      className={`fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md transition-opacity duration-200 ${
+        isClosing ? 'animate-mac-backdrop-exit pointer-events-none' : 'animate-in fade-in duration-200'
+      }`}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) handleDismiss();
+      }}
+    >
       <div 
-        className="w-full max-w-2xl rounded-2xl border border-[#262734] shadow-2xl overflow-hidden flex flex-col max-h-[90vh] bg-[#14151a] text-slate-200"
+        className={`w-full max-w-2xl rounded-2xl border border-[#262734] shadow-2xl overflow-hidden flex flex-col max-h-[90vh] bg-[#14151a] text-slate-200 ${
+          isClosing ? 'animate-mac-squish-exit' : 'animate-mac-squish'
+        }`}
       >
         {/* Modal Header */}
         <div className="p-4 sm:p-5 border-b border-[#262734] bg-[#14151a] flex items-center justify-between">
@@ -121,7 +167,7 @@ export default function SubtitleSettingsModal({
             </div>
           </div>
           <button 
-            onClick={onClose}
+            onClick={handleDismiss}
             className="p-1.5 rounded-lg hover:bg-[#22232c] text-slate-400 hover:text-white transition-colors cursor-pointer"
           >
             <X className="w-5 h-5" />
@@ -136,7 +182,7 @@ export default function SubtitleSettingsModal({
             <label className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block mb-2">
               Industry Presets
             </label>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
               {presets.map(p => (
                 <button
                   key={p.name}
@@ -280,6 +326,9 @@ export default function SubtitleSettingsModal({
               <div>
                 <span className="font-bold text-xs flex items-center gap-1.5 text-white">
                   🎬 Video Frame Rate (FPS)
+                  <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[#00e5be]/15 text-[#00e5be] border border-[#00e5be]/30">
+                    Auto-Detected from Media
+                  </span>
                 </span>
                 <span className="text-[11px] text-slate-400">
                   Controls shot-change snap thresholds & 2-frame gap calculations ({((2.0 / (frameRate || 24.0))).toFixed(3)}s gap)
@@ -509,7 +558,7 @@ export default function SubtitleSettingsModal({
           </button>
           <div className="flex items-center gap-2">
             <button
-              onClick={onClose}
+              onClick={handleDismiss}
               className="px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-colors cursor-pointer border border-[#262734] bg-[#181920] hover:bg-[#22232c] text-slate-300 hover:text-white"
             >
               Cancel

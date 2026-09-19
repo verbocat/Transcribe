@@ -17,13 +17,22 @@
     --studio-text-muted: #5c5e70;
   }
 
+  html {
+    min-height: 100%;
+    overflow-x: hidden;
+    overflow-y: auto;
+    scroll-behavior: smooth;
+  }
+
   body {
+    min-height: 100%;
+    overflow-x: hidden;
+    overflow-y: visible;
     background-color: #0e0f12;
     color: #f1f2f6;
     font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-    overflow-x: hidden;
   }
 
   ::selection {
@@ -225,3 +234,143 @@ input:focus, textarea:focus, select:focus {
   font-size: 9px !important;
   color: #7a7c8e !important;
 }
+
+/* ==========================================================================
+   macOS Squish-and-Pop Modal Animation (Smooth Bottom Genie Squish)
+   ========================================================================== */
+@keyframes macSquishPop {
+  0% {
+    opacity: 0;
+    transform: translateY(42px) scale(0.93, 0.84);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1, 1);
+  }
+}
+
+@keyframes macSquishExit {
+  0% {
+    opacity: 1;
+    transform: translateY(0) scale(1, 1);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(38px) scale(0.93, 0.84);
+  }
+}
+
+@keyframes macBackdropExit {
+  0% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+.animate-mac-squish {
+  animation: macSquishPop 0.36s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  transform-origin: bottom center;
+}
+
+.animate-mac-squish-exit {
+  animation: macSquishExit 0.24s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  transform-origin: bottom center;
+}
+
+.animate-mac-backdrop-exit {
+  animation: macBackdropExit 0.24s ease-out forwards;
+}
+
+/* Dynamic Interactive Spotlight Card */
+.spotlight-card {
+  position: relative;
+  overflow: hidden;
+  transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.28s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.28s ease;
+}
+
+.spotlight-card::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  background: radial-gradient(
+    550px circle at var(--mouse-x, -500px) var(--mouse-y, -500px),
+    rgba(0, 229, 190, 0.16),
+    transparent 50%
+  );
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: 1;
+  opacity: 0;
+  transition: opacity 0.35s ease;
+}
+
+.spotlight-card:hover::before {
+  opacity: 1;
+}
+
+.spotlight-card::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    400px circle at var(--mouse-x, -500px) var(--mouse-y, -500px),
+    rgba(0, 201, 255, 0.08),
+    transparent 45%
+  );
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: 2;
+  opacity: 0;
+  transition: opacity 0.35s ease;
+}
+
+.spotlight-card:hover::after {
+  opacity: 1;
+}
+
+/* Subtle 3D Tilt Hover */
+.tilt-card {
+  transform-style: preserve-3d;
+  will-change: transform;
+}
+
+.tilt-card:hover {
+  transform: translateY(-4px) scale(1.012);
+}
+
+/* ==========================================================================
+   Studio Entrance & Tab Slide Navigation Animations
+   ========================================================================== */
+@keyframes studioEntrance {
+  0% {
+    opacity: 0;
+    transform: translateY(22px) scale(0.985);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.animate-studio-entrance {
+  animation: studioEntrance 0.38s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes tabSlideFade {
+  0% {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-tab-slide {
+  animation: tabSlideFade 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+

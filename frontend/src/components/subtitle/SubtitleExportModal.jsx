@@ -47,6 +47,31 @@ export default function SubtitleExportModal({ isOpen, onClose, events = [], file
   const [selectedFormat, setSelectedFormat] = useState('srt');
   const [isExporting, setIsExporting] = useState(false);
   const [customFilename, setCustomFilename] = useState('');
+  const [isClosing, setIsClosing] = useState(false);
+
+  React.useEffect(() => {
+    if (!isOpen) {
+      setIsClosing(false);
+      return;
+    }
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        handleDismiss();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen]);
+
+  const handleDismiss = () => {
+    if (isClosing) return;
+    setIsClosing(true);
+    setTimeout(() => {
+      setIsClosing(false);
+      onClose();
+    }, 220);
+  };
 
   const exportFilename = customFilename.trim() || filename.replace(/\.[^/.]+$/, '') || 'subtitles';
   const selectedFormatInfo = EXPORT_FORMATS.find(f => f.key === selectedFormat);
@@ -126,15 +151,27 @@ export default function SubtitleExportModal({ isOpen, onClose, events = [], file
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4" onClick={onClose}>
-      <div className="bg-[#14151a] border border-[#262734] rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden text-slate-200" onClick={e => e.stopPropagation()}>
+    <div
+      className={`fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md transition-opacity duration-200 ${
+        isClosing ? 'animate-mac-backdrop-exit pointer-events-none' : 'animate-in fade-in duration-200'
+      }`}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) handleDismiss();
+      }}
+    >
+      <div
+        className={`bg-[#14151a] border border-[#262734] rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden text-slate-200 ${
+          isClosing ? 'animate-mac-squish-exit' : 'animate-mac-squish'
+        }`}
+        onClick={e => e.stopPropagation()}
+      >
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-[#262734]">
           <div>
             <h2 className="text-base font-bold text-white uppercase tracking-wider">Export Timed Text Deliverables</h2>
             <p className="text-xs text-slate-400 mt-0.5">{events.length} subtitle events · {exportFilename}{selectedFormatInfo?.ext}</p>
           </div>
-          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-[#22232c] text-slate-400 hover:text-white transition-colors cursor-pointer">
+          <button onClick={handleDismiss} className="p-1.5 rounded-lg hover:bg-[#22232c] text-slate-400 hover:text-white transition-colors cursor-pointer">
             <X className="w-5 h-5" />
           </button>
         </div>
@@ -211,7 +248,7 @@ export default function SubtitleExportModal({ isOpen, onClose, events = [], file
         {/* Footer */}
         <div className="flex items-center justify-end gap-2.5 px-6 py-4 mt-3 border-t border-[#262734]">
           <button
-            onClick={onClose}
+            onClick={handleDismiss}
             className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-300 bg-[#181920] hover:bg-[#22232c] border border-[#262734] transition-colors cursor-pointer"
           >
             Cancel

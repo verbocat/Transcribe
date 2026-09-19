@@ -13,6 +13,31 @@ export default function ProjectsModal({
   onDeleteProject
 }) {
   const [searchQuery, setSearchQuery] = useState('');
+  const [isClosing, setIsClosing] = useState(false);
+
+  React.useEffect(() => {
+    if (!isOpen) {
+      setIsClosing(false);
+      return;
+    }
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        handleDismiss();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen]);
+
+  const handleDismiss = () => {
+    if (isClosing) return;
+    setIsClosing(true);
+    setTimeout(() => {
+      setIsClosing(false);
+      onClose();
+    }, 220);
+  };
 
   if (!isOpen) return null;
 
@@ -38,19 +63,26 @@ export default function ProjectsModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in">
-      <div className="bg-[#14151a] rounded-2xl max-w-2xl w-full max-h-[85vh] shadow-2xl border border-[#262734] overflow-hidden flex flex-col text-slate-200">
+    <div
+      className={`fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md transition-opacity duration-200 ${
+        isClosing ? 'animate-mac-backdrop-exit pointer-events-none' : 'animate-in fade-in'
+      }`}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) handleDismiss();
+      }}
+    >
+      <div className={`bg-[#14151a] rounded-2xl max-w-2xl w-full max-h-[85vh] shadow-2xl border border-[#262734] overflow-hidden flex flex-col text-slate-200 ${
+        isClosing ? 'animate-mac-squish-exit' : 'animate-mac-squish'
+      }`}>
         {/* Modal Header */}
         <div className="flex items-center justify-between p-5 border-b border-[#262734] bg-[#14151a]">
           <div className="flex items-center gap-2.5">
-            <div className="p-2 bg-[#00e5be]/15 text-[#00e5be] border border-[#00e5be]/30 rounded-xl">
+            <div className="p-2 rounded-xl bg-[#00e5be]/15 text-[#00e5be] border border-[#00e5be]/30">
               <Database className="w-5 h-5" />
             </div>
             <div>
-              <h2 className="text-base font-bold text-white">Neon Cloud Projects Library</h2>
-              <p className="text-xs text-slate-400">
-                All audio transcriptions & segments saved in your Neon PostgreSQL database
-              </p>
+              <h2 className="text-base font-bold text-white tracking-tight">Saved Cloud Workstation Sessions</h2>
+              <p className="text-xs text-slate-400">PostgreSQL / Neon database synced project archives</p>
             </div>
           </div>
 

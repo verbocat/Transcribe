@@ -12,6 +12,7 @@ from collections import defaultdict
 from pathlib import Path
 from contextlib import asynccontextmanager
 from typing import List, Optional
+from pydantic import BaseModel
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Response, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
@@ -95,12 +96,119 @@ def _cleanup_old_uploads():
             pass
 
 
+def purge_media_files_for_stem(
+    clean_stem: Optional[str] = None,
+    raw_stem: Optional[str] = None,
+    video_id: Optional[str] = None,
+    exclude_prefixes: Optional[List[str]] = None
+) -> List[str]:
+    """
+    Surgically purge all previous media files (.wav, .mp3, .mp4, .peaks.json, .part, temp_chunk_*.wav)
+    and active_sessions matching a given media stem.
+    If exclude_prefixes is provided, leaves current active upload prefix untouched.
+    """
+    stems_to_match = set()
+    if clean_stem:
+        c = re.sub(r'[^\w\.-]', '_', str(clean_stem)).strip('_')
+        c = re.sub(r'_+', '_', c)
+        if len(c) >= 2:
+            stems_to_match.add(c.lower())
+    if raw_stem:
+        r = Path(str(raw_stem)).stem
+        if len(r) >= 2:
+            stems_to_match.add(r.lower())
+            r_clean = re.sub(r'[^\w\.-]', '_', r).strip('_')
+            r_clean = re.sub(r'_+', '_', r_clean)
+            if len(r_clean) >= 2:
+                stems_to_match.add(r_clean.lower())
+    if video_id:
+        v_unquoted = urllib.parse.unquote(str(video_id)).strip()
+        stems_to_match.add(v_unquoted.lower())
+        v_stem = Path(v_unquoted).stem
+        if len(v_stem) >= 2:
+            stems_to_match.add(v_stem.lower())
+        unprefixed = re.sub(r'^(?:up_[a-z0-9]+|[a-f0-9]{8})_', '', v_unquoted, flags=re.IGNORECASE).strip('_')
+        if len(unprefixed) >= 2:
+            stems_to_match.add(unprefixed.lower())
+
+    valid_stems = {s for s in stems_to_match if len(s) >= 2}
+    extra_stems = set()
+    for s in valid_stems:
+        base = re.sub(r'_(?:audio|16k)$', '', s, flags=re.IGNORECASE).strip('_')
+        if len(base) >= 2:
+            extra_stems.add(base.lower())
+        if '_' in s:
+            extra_stems.add(s.replace('_', ' ').strip().lower())
+        if ' ' in s:
+            extra_stems.add(s.replace(' ', '_').strip().lower())
+    valid_stems.update(extra_stems)
+
+    if not valid_stems:
+        return []
+
+    deleted_files = []
+    upload_root = UPLOAD_DIR.resolve()
+    supported_media = get_supported_media_extensions()
+    exclude_list = [p.lower() for p in (exclude_prefixes or []) if p]
+
+    for file_path in list(UPLOAD_DIR.glob("*")):
+        if not file_path.is_file():
+            continue
+
+        try:
+            if upload_root not in file_path.resolve().parents:
+                continue
+        except Exception:
+            continue
+
+        fname_lower = file_path.name.lower()
+        fext_lower = file_path.suffix.lower()
+
+        # Check if this file belongs to an excluded current prefix (e.g. current in-flight upload)
+        if any(fname_lower.startswith(prefix) for prefix in exclude_list):
+            continue
+
+        is_peaks_cache = fname_lower.endswith(".peaks.json")
+        is_wav = fext_lower == ".wav"
+        is_part = fext_lower == ".part"
+        is_media = fext_lower in supported_media
+        is_temp_chunk = fname_lower.startswith("temp_chunk_") and fext_lower == ".wav"
+
+        if not (is_peaks_cache or is_wav or is_part or is_media or is_temp_chunk):
+            continue
+
+        if any(s in fname_lower for s in valid_stems):
+            try:
+                file_path.unlink(missing_ok=True)
+                deleted_files.append(file_path.name)
+            except Exception as e:
+                print(f"Non-fatal error deleting {file_path.name}: {e}")
+
+    # Evict matching entries from active_sessions
+    for sess_id in list(active_sessions.keys()):
+        if any(sess_id.lower().startswith(p) for p in exclude_list):
+            continue
+        sess_info = active_sessions.get(sess_id, {})
+        sess_fname = str(sess_info.get("filename", "")).lower()
+        sess_path = str(sess_info.get("file_path", "")).lower()
+        sess_id_lower = str(sess_id).lower()
+
+        if any(s in sess_id_lower or s in sess_fname or s in sess_path for s in valid_stems):
+            active_sessions.pop(sess_id, None)
+
+    return deleted_files
+
+
+from app.auth_module import auth_router
+from app.auth_module.database import init_auth_db
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown lifecycle handler."""
     _cleanup_old_uploads()
     _evict_expired_sessions()
     init_db()
+    init_auth_db()
     yield
 
 
@@ -110,11 +218,11 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan
 )
+app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
 
 # CORS configuration with explicit Vercel and local dev support
 DEFAULT_ALLOWED_ORIGINS = [
     "https://transcribe-eight-eta.vercel.app",
-    "https://transcribes.vercel.app",
     "http://localhost:5173",
     "http://localhost:3000",
     "http://127.0.0.1:5173",
@@ -231,6 +339,10 @@ async def upload_audio(request: Request, file: UploadFile = File(...)):
             status_code=413,
             detail=f"File too large. Maximum supported audio file size is 200MB."
         )
+
+    # Surgically delete any older uploads of this same media
+    raw_stem = Path(file.filename).stem
+    purge_media_files_for_stem(raw_stem=raw_stem)
 
     unique_prefix = uuid.uuid4().hex[:8]
     safe_filename = f"{unique_prefix}_{file.filename}"
@@ -993,11 +1105,15 @@ async def upload_video(request: Request, file: UploadFile = File(...)):
             detail=f"Unsupported format {ext}. Supported formats: {', '.join(sorted(get_supported_media_extensions()))}"
         )
 
-    unique_prefix = uuid.uuid4().hex[:8]
     raw_stem = Path(file.filename).stem
     # Sanitize filename stem to eliminate unsafe characters that break URLs or filesystems
     clean_stem = re.sub(r'[^\w\.-]', '_', raw_stem).strip()
     clean_stem = re.sub(r'_+', '_', clean_stem)
+
+    # Surgically delete any previous files from older uploads of this same media (prevents stale baggage)
+    purge_media_files_for_stem(clean_stem=clean_stem, raw_stem=raw_stem)
+
+    unique_prefix = uuid.uuid4().hex[:8]
     safe_filename = f"{unique_prefix}_{clean_stem}{ext}"
     file_path = UPLOAD_DIR / safe_filename
     
@@ -1093,9 +1209,12 @@ async def _process_saved_media(file_path: Path, safe_filename: str, clean_stem: 
         "created_at": time.time()
     }
 
+    fps = round(float(metadata.get("frame_rate", 24.0)), 3) if metadata else 24.0
+
     return {
         "video_id": video_id,
         "filename": safe_filename,
+        "frame_rate": fps,
         "metadata": metadata,
         "peaks": peaks_payload,
         "points_per_sec": 50
@@ -1126,6 +1245,14 @@ async def upload_video_chunk(
     clean_stem = re.sub(r'_+', '_', clean_stem)
     safe_filename = f"{clean_upload_id}_{clean_stem}{ext}"
     part_path = UPLOAD_DIR / f"{safe_filename}.part"
+
+    # Surgically purge previous files for this media on the very first chunk (excluding current upload_id)
+    if chunk_index == 0:
+        purge_media_files_for_stem(
+            clean_stem=clean_stem,
+            raw_stem=raw_stem,
+            exclude_prefixes=[f"{clean_upload_id}_"]
+        )
 
     # Append chunk data to .part file
     mode = "ab" if (chunk_index > 0 and part_path.exists()) else "wb"
@@ -1329,6 +1456,45 @@ async def probe_media_endpoint(file: UploadFile = File(...)):
                 os.unlink(tmp_path)
             except Exception:
                 pass
+
+
+class DiscardMediaRequest(BaseModel):
+    filename: Optional[str] = None
+    video_id: Optional[str] = None
+
+
+@app.post("/api/media/discard")
+@app.post("/api/subtitle/discard")
+async def discard_media_endpoint(payload: DiscardMediaRequest):
+    """
+    Surgically delete all files in UPLOAD_DIR associated with a specific audio/video file
+    (e.g., when the user clicks 'Discard & Start Fresh' upon re-uploading a previous file).
+    Removes:
+      - Raw uploaded media (.mp4, .mp3, .mkv, .mov, etc.)
+      - Extracted mono/16k audio tracks (.wav, _audio.wav, _16k.wav)
+      - Waveform peak caches (*.peaks.json)
+      - Sliced upload parts (*.part)
+      - Temporary chunk slices (temp_chunk_*.wav)
+      - In-memory active_sessions for this media
+    Guarantees no other user's files or unrelated uploads are affected.
+    """
+    raw_filename = (payload.filename or "").strip()
+    raw_video_id = (payload.video_id or "").strip()
+
+    if not raw_filename and not raw_video_id:
+        raise HTTPException(status_code=400, detail="Either filename or video_id must be provided.")
+
+    deleted_files = purge_media_files_for_stem(
+        raw_stem=raw_filename if raw_filename else None,
+        video_id=raw_video_id if raw_video_id else None
+    )
+
+    return {
+        "success": True,
+        "message": f"Discarded {len(deleted_files)} media, audio, and peaks files cleanly.",
+        "deleted_count": len(deleted_files),
+        "deleted_files": deleted_files
+    }
 
 
 @app.post("/api/subtitle/generate")

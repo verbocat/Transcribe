@@ -13,6 +13,31 @@ function srtTime(secs) {
 export default function SrtPreviewModal({ isOpen, onClose, segments, filename }) {
   const [copied, setCopied] = useState(false);
   const [activeTab, setActiveTab] = useState('formatted');
+  const [isClosing, setIsClosing] = useState(false);
+
+  React.useEffect(() => {
+    if (!isOpen) {
+      setIsClosing(false);
+      return;
+    }
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        handleDismiss();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen]);
+
+  const handleDismiss = () => {
+    if (isClosing) return;
+    setIsClosing(true);
+    setTimeout(() => {
+      setIsClosing(false);
+      onClose();
+    }, 220);
+  };
 
   const { srtLines, issues, lineItems } = useMemo(() => {
     if (!segments || segments.length === 0) {
@@ -101,8 +126,17 @@ export default function SrtPreviewModal({ isOpen, onClose, segments, filename })
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
-      <div className="bg-[#14151a] border border-[#262734] rounded-2xl w-full max-w-3xl p-5 shadow-2xl flex flex-col max-h-[90vh] text-slate-200">
+    <div
+      className={`fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md transition-opacity duration-200 ${
+        isClosing ? 'animate-mac-backdrop-exit pointer-events-none' : 'animate-in fade-in'
+      }`}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) handleDismiss();
+      }}
+    >
+      <div className={`bg-[#14151a] border border-[#262734] rounded-2xl w-full max-w-3xl p-5 shadow-2xl flex flex-col max-h-[90vh] text-slate-200 ${
+        isClosing ? 'animate-mac-squish-exit' : 'animate-mac-squish'
+      }`}>
         {/* Header */}
         <div className="flex items-center justify-between pb-3 border-b border-[#262734]">
           <div className="flex items-center gap-2.5">
@@ -156,7 +190,7 @@ export default function SrtPreviewModal({ isOpen, onClose, segments, filename })
             </button>
 
             <button
-              onClick={onClose}
+              onClick={handleDismiss}
               className="p-1.5 text-slate-400 hover:text-white rounded-xl bg-[#181920] hover:bg-[#22232c] border border-[#262734] transition-colors cursor-pointer"
             >
               <X className="w-4 h-4" />
@@ -260,7 +294,7 @@ export default function SrtPreviewModal({ isOpen, onClose, segments, filename })
           </span>
           <div className="flex items-center gap-2">
             <button
-              onClick={onClose}
+              onClick={handleDismiss}
               className="px-3.5 py-1.5 bg-[#181920] hover:bg-[#22232c] text-slate-300 hover:text-white rounded-xl font-semibold border border-[#262734] transition-colors cursor-pointer"
             >
               Close

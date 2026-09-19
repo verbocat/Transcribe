@@ -232,6 +232,8 @@ def transcribe_chunk_with_whisper(
     try:
         from app.whisper_aligner import get_whisper_word_timestamps
         is_cloud = bool(os.getenv("RENDER") or os.getenv("PORT"))
+        # Phase 1 Fix 1: Use tiny on cloud (RAM-constrained), base on local.
+        # Medium hallucinates under greedy decode + CPU and is used only for timing, not transcription.
         model_name = whisper_model or os.getenv("WHISPER_MODEL", "tiny" if is_cloud else "base")
         
         resolved_lang, _ = normalize_language_and_script(language)
@@ -332,6 +334,7 @@ def get_netflix_subtitle_system_prompt(
 ) -> str:
     """Generate dynamic system prompt with user-configured CPL, CPS, max lines, and target language enforcement."""
     is_english = target_language.lower() in ["english", "en"]
+    is_hindi_indic = target_language.lower() in ["hindi", "hi", "hinglish"] or target_script.lower() in ["devanagari", "hindi"]
     lang_directive = ""
     if is_english:
         lang_directive = (
@@ -340,6 +343,16 @@ def get_netflix_subtitle_system_prompt(
             "   - ABSOLUTE PROHIBITION: NEVER output Urdu, Arabic script (e.g. اردو, ی, ہ, etc.), Devanagari, or random symbols/gibberish.\n"
             "   - If the audio is in English: transcribe the spoken words verbatim into English subtitles.\n"
             "   - If the audio dialogue is spoken in Hindi, Urdu, or another language: translate the spoken dialogue accurately and fluently into natural English subtitles.\n"
+        )
+    elif is_hindi_indic:
+        lang_directive = (
+            "CRITICAL MANDATE: TARGET SUBTITLE LANGUAGE IS 100% HINDI IN DEVANAGARI SCRIPT.\n"
+            "   - 100% of the output text MUST be in Devanagari script. Every single character must be in Devanagari.\n"
+            "   - VERBATIM PHONETIC TRANSLITERATION ONLY (DO NOT TRANSLATE TO HINDI MEANING):\n"
+            "     * If any English sentence or phrase is spoken (e.g. 'I want to go', 'You are wrong', 'Come on bro'), you MUST transliterate it phonetically AS-IS into Devanagari script: 'आई वांट टू गो', 'यू आर रॉन्ग', 'कम ऑन ब्रो'.\n"
+            "     * ABSOLUTE PROHIBITION: DO NOT translate English sentences into Hindi meaning! (e.g. NEVER translate 'I want to go' into 'मैं जाना चाहता हूँ' — it must be 'आई वांट टू गो').\n"
+            "     * ABSOLUTE PROHIBITION: NEVER leave English words in the Latin/English alphabet (e.g. NEVER write 'I want to go' or 'target').\n"
+            "     * Transliterate all English loan words, slang, and phrases verbatim: 'target' -> 'टारगेट', 'eliminate' -> 'एलिमिनेट', 'sorry' -> 'सॉरी', 'game plan' -> 'गेम प्लान', 'finalist' -> 'फाइनलिस्ट', 'brother' -> 'ब्रदर', 'task' -> 'टास्क', 'bro' -> 'ब्रो'.\n"
         )
     elif target_language != "Auto-Detect":
         lang_directive = (
@@ -354,9 +367,10 @@ Your task is to generate millimeter-precise, timed subtitles following strict Ne
 
 ### CRITICAL RULES:
 
-1. 100% ACCURACY & DIALOGUE FIDELITY:
-   - Capture the EXACT message and dialogue spoken by every speaker.
-   - Retain every spoken dialogue element, slang, and expression naturally.
+1. 100% VERBATIM ACCURACY & COMPLETE DIALOGUE FIDELITY (HIGHEST PRIORITY):
+   - Capture the EXACT spoken dialogue of EVERY speaker word-for-word.
+   - Retain every single spoken word, syllable, stutter, repetition, filler ('um', 'uh', 'haan', 'arre', 'you know'), and interjection.
+   - ABSOLUTE PROHIBITION: NEVER drop, summarize, paraphrase, omit, or shorten dialogue just because a speaker is talking rapidly or back-to-back!
    - Do NOT censor profanity.
    - Do NOT invent or hallucinate words, repeating punctuation, or random symbols.
 
@@ -366,7 +380,10 @@ Your task is to generate millimeter-precise, timed subtitles following strict Ne
 
 3. STRICT TARGET LANGUAGE & SCRIPT PURITY:
 {lang_directive}   - If Target Language is Hindi and Target Script is Devanagari:
-     * Transcribe 100% in Hindi using standard Devanagari script (e.g. "तरुण, क्या हाल है?").
+     * Output 100% in Devanagari script (e.g. "तरुण, क्या हाल है?").
+     * Phonetically transliterate all English words, loan words, and English sentences verbatim into Devanagari (e.g. 'I want to go' -> 'आई वांट टू गो', 'sorry' -> 'सॉरी', 'game' -> 'गेम', 'target' -> 'टारगेट', 'brother' -> 'ब्रदर').
+     * NEVER translate English sentences into Hindi meaning (do NOT convert 'I want to go' to 'मैं जाना चाहता हूँ'). Transcribe the sounds as-is in Devanagari!
+     * NEVER leave English words in the Latin/English alphabet.
      * Do NOT translate Hindi dialogue into English.
    - If Target Language is Hindi and Target Script is Latin / Hinglish:
      * Transcribe conversational Hindi phonetically in Latin alphabet (e.g. "Tarun, kya haal hai?").
@@ -381,8 +398,9 @@ Your task is to generate millimeter-precise, timed subtitles following strict Ne
 5. PRECISE ACOUSTIC TIMING & READING SPEED (CPS):
    - `start_time`: Must match the EXACT millisecond the speaker begins vocalizing the first syllable.
    - `end_time`: Must match the EXACT millisecond the speaker completes vocalizing the last syllable.
-   - Reading speed MUST stay comfortable: maximum {max_cps} characters per second (CPS = length / duration).
-   - If a sentence is long or fast, ensure it has adequate duration (at least character_count / {max_cps} seconds), or split it into two sequential complete subtitle events!
+   - Target comfortable reading speed (~{max_cps} CPS).
+   - CRITICAL RULE FOR FAST SPEECH: When speech is naturally rapid or excited, you MUST STILL transcribe 100% of the words verbatim.
+   - In rapid dialogue, output shorter, tighter sequential subtitle events (e.g. 1-line rapid events) instead of dropping words to force a low CPS! NEVER omit spoken words to satisfy reading speed limits.
 
 6. LINE BREAKS & CLAUSE SPLITTING (HINDI & ALL LANGUAGES):
    - Maximum {cpl_limit} characters per line (CPL).
@@ -776,20 +794,40 @@ def stitch_cross_chunk_seam(
     c_end = float(first_curr.get("end_time", first_curr.get("end", c_start + 1.0)))
 
     # Only process if current event starts within the overlap collar window
-    if c_start > p_end + collar_sec + 0.3:
+    if c_start > p_end + collar_sec + 0.5:
         return prev_batch_events, current_batch_events
 
     sim = SequenceMatcher(None, p_text, c_text).ratio() if (p_text and c_text) else 0.0
 
-    # Case 1: Exact or near duplicate caused by overlap collar
-    if sim >= 0.78 or (p_text and c_text and (p_text in c_text or c_text in p_text) and abs(len(p_text) - len(c_text)) <= 4):
-        current_batch_events.pop(0)
-        return prev_batch_events, current_batch_events
+    p_start = float(last_prev.get("start_time", last_prev.get("start", 0.0)))
+    words_count = len(p_text.split())
+
+    # Case 1: Exact or verified duplicate caused by overlap collar
+    # Must have high string similarity (>= 0.88) AND physical acoustic coincidence.
+    # If c_start starts at or after p_end - 0.05s, Chunk N already stopped speaking;
+    # an identical word in Chunk N+1 is a genuine new dialogue utterance, NEVER a collar duplicate!
+    if p_text and c_text:
+        has_match = (sim >= 0.88 and words_count >= 3) or (p_text == c_text)
+        if has_match:
+            is_true_collar_dup = False
+            if words_count >= 3:
+                # 3+ words: only a duplicate if c_start overlaps Chunk N's active speech window
+                is_true_collar_dup = (c_start < p_end - 0.15) or (abs(c_start - p_start) <= 1.0)
+            else:
+                # 1-2 words: only a duplicate if timestamps coincide closely in time (within 0.40s)
+                is_true_collar_dup = (abs(c_start - p_start) <= 0.40) or (c_start < p_end - 0.25 and c_end <= p_end + 0.25)
+
+            if is_true_collar_dup:
+                current_batch_events.pop(0)
+                return prev_batch_events, current_batch_events
 
     # Case 2: Continuation / Sentence extension across seam
     # Example: Chunk N was cut off ("We must go to the"), Chunk N+1 heard full ("We must go to the market now")
-    if p_text and c_text and c_text.startswith(p_text[:min(len(p_text), 15)]):
-        if len(first_curr.get("text", "")) > len(last_prev.get("text", "")):
+    # Only merge if last_prev has at least 3 words, does NOT end with sentence terminator (.?!।), and curr starts with full prev text
+    raw_p_text = last_prev.get("text", "").strip()
+    is_terminal = bool(raw_p_text and raw_p_text[-1] in ".?!।॥")
+    if p_text and c_text and len(p_text.split()) >= 3 and not is_terminal and c_text.startswith(p_text):
+        if len(first_curr.get("text", "")) > len(raw_p_text):
             last_prev["text"] = first_curr.get("text", "")
             last_prev["end_time"] = max(p_end, c_end)
             last_prev["end"] = last_prev["end_time"]
@@ -798,7 +836,7 @@ def stitch_cross_chunk_seam(
             current_batch_events.pop(0)
             return prev_batch_events, current_batch_events
 
-    # Case 3: Distinct events that collide on the timeline due to collar
+    # Case 3: Distinct events that collide on the timeline due to overlap collar
     if c_start < p_end + min_gap_sec:
         new_c_start = round(p_end + min_gap_sec, 3)
         new_c_end = max(round(new_c_start + min_duration, 3), c_end)
@@ -809,6 +847,28 @@ def stitch_cross_chunk_seam(
         first_curr["end"] = new_c_end
         first_curr["end_time_str"] = format_timestamp(new_c_end)
         first_curr["duration"] = round(new_c_end - new_c_start, 3)
+
+        # CRITICAL: Cascade this shift across subsequent events in current_batch_events
+        # Without this, event 1 and event 2 collide with event 0, causing 2 or 3 subtitles to overlap!
+        cursor = new_c_end
+        for k in range(1, len(current_batch_events)):
+            ev_k = current_batch_events[k]
+            k_st = float(ev_k.get("start_time", 0.0))
+            k_et = float(ev_k.get("end_time", k_st + 1.0))
+            k_dur = max(min_duration, round(k_et - k_st, 3))
+            if k_st < cursor + min_gap_sec:
+                k_st = round(cursor + min_gap_sec, 3)
+                k_et = round(k_st + k_dur, 3)
+                ev_k["start_time"] = k_st
+                ev_k["start"] = k_st
+                ev_k["end_time"] = k_et
+                ev_k["end"] = k_et
+                ev_k["duration"] = round(k_et - k_st, 3)
+                ev_k["start_time_str"] = format_timestamp(k_st)
+                ev_k["end_time_str"] = format_timestamp(k_et)
+                cursor = k_et
+            else:
+                break
 
     return prev_batch_events, current_batch_events
 
@@ -948,7 +1008,14 @@ def split_and_balance_event(
 
 
 def merge_short_fragments(events: List[Dict[str, Any]], cpl_limit: int = 42, max_lines: int = 2) -> List[Dict[str, Any]]:
-    """Merge tiny fragments (<= 3 words or duration < 1.0s) into the preceding event only if same speaker and grammatically sound."""
+    """
+    Safely merges ONLY true grammatically stranded fragments (e.g. dangling prepositions/conjunctions).
+    GUARANTEES that complete conversational dialogues, questions, answers, and short interjections
+    ('हाँ', 'नहीं', 'तू सुन', 'मत कर', 'क्या हुआ', 'leave it', 'watch out') are NEVER swallowed or lost!
+    """
+    if not events:
+        return []
+
     merged = []
     for ev in events:
         text = ev.get("text", "").strip()
@@ -963,26 +1030,48 @@ def merge_short_fragments(events: List[Dict[str, Any]], cpl_limit: int = 42, max
             prev_et = float(prev["end_time"])
             combined_dur = et - prev_st
 
-            # Do NOT merge across different speakers!
+            # Rule 1: Do NOT merge across different speakers!
             prev_spk = prev.get("speaker") or (prev.get("speakers")[0] if prev.get("speakers") else "Speaker 1")
             ev_spk = ev.get("speaker") or (ev.get("speakers")[0] if ev.get("speakers") else "Speaker 1")
             if prev_spk != ev_spk or "-" in prev.get("text", "") or "-" in text:
                 merged.append(ev)
                 continue
 
-            # Do NOT merge if prev ends with terminal punctuation (. ? ! । ॥) and ev is a conversational reply
+            # Rule 2: NEVER merge across terminal sentence punctuation (., ?, !, ।, ॥, …)
             prev_strip = prev.get("text", "").rstrip()
-            conversational_starters = [
-                "yes", "yeah", "yep", "no", "nah", "nope", "hi", "hello", "right", "okay", "ok", "fine", "sure",
-                "हाँ", "नहीं", "ना", "अच्छा", "ठीक", "अरे", "नमस्ते", "शुक्रिया", "धन्यवाद",
-                "haan", "nahi", "nahin", "achha", "theek", "are", "namaste", "dhanyawad"
-            ]
-            if prev_strip.endswith((".", "?", "!", "।", "॥")) and any(text.lower().startswith(w) for w in conversational_starters):
+            if prev_strip.endswith((".", "?", "!", "।", "॥", "…")):
                 merged.append(ev)
                 continue
 
-            # Merge if gap <= 0.6s and combined duration <= 7.0s
-            if combined_dur <= 7.0 and (st - prev_et) <= 0.6:
+            # Rule 3: NEVER merge if ev itself is a complete utterance, exclamation, or question
+            ev_strip = text.rstrip()
+            if ev_strip.endswith((".", "?", "!", "।", "॥")):
+                merged.append(ev)
+                continue
+
+            # Rule 4: NEVER merge independent conversational starters, verbs, question words, or particles
+            conversational_words = {
+                # English conversational starters, verbs, interjections
+                "yes", "yeah", "yep", "no", "nah", "nope", "hi", "hello", "hey", "right", "okay", "ok", "fine", "sure",
+                "wait", "listen", "what", "why", "how", "who", "when", "where", "well", "see", "look", "please", "thanks", "sorry",
+                "stop", "come", "go", "don't", "dont", "let", "lets", "let's", "call", "watch", "leave", "shut",
+                # Hindi Devanagari conversational starters, verbs, imperatives
+                "हाँ", "नहीं", "ना", "अच्छा", "ठीक", "अरे", "नमस्ते", "शुक्रिया", "धन्यवाद", "सुनो", "रुको", "क्या", "क्यों", "भाई",
+                "चल", "हट", "रुक", "देख", "बता", "बोल", "सॉरी", "टारगेट", "मत", "तू", "तुम", "आप", "छोड़", "छोड़", "आया", "गया",
+                "कहा", "बोला", "होगा", "कहाँ", "कैसे", "कौन", "किधर", "कब", "कितना", "साहब", "सर", "मैडम", "यार", "दोस्त",
+                # Hinglish / Latin equivalents
+                "haan", "nahi", "nahin", "achha", "theek", "are", "namaste", "dhanyawad", "suno", "ruko", "kya", "kyun", "bhai",
+                "chal", "hat", "ruk", "dekh", "bata", "bol", "sorry", "target", "mat", "tu", "tum", "aap", "chhod", "aaya", "gaya",
+                "kaha", "bola", "hoga", "kahan", "kaise", "kaun", "kidhar", "kab", "kitna", "yaar", "dost"
+            }
+            first_w = words[0].lower().strip(".,!?।॥\"'()—–-") if words else ""
+            if first_w in conversational_words:
+                merged.append(ev)
+                continue
+
+            # Rule 5: Only merge if gap is very tight (<= 0.12s) AND combined duration <= 5.0s
+            # AND the preceding line ended without complete clause boundary
+            if combined_dur <= 5.0 and (st - prev_et) <= 0.12:
                 combined_text = prev["text"].replace('\n', ' ') + ' ' + text
                 balanced = balance_text_to_lines(combined_text, cpl_limit=cpl_limit, max_lines=max_lines)
                 if balanced:
@@ -1033,6 +1122,9 @@ def polish_subtitle_events_netflix(
     # Step 2: Merge orphan tiny fragments that fit into previous event
     expanded_events = merge_short_fragments(expanded_events, cpl_limit=cpl_limit, max_lines=max_lines)
 
+    # Invariant: Sort strictly by start_time so non-overlap checks work in true chronological sequence
+    expanded_events.sort(key=lambda x: (float(x.get("start_time", 0.0)), float(x.get("end_time", 0.0))))
+
     # Guarantee first event does not collide with previous batch end (only if prev_batch_end is adjacent to first event)
     first_st = float(expanded_events[0].get("start_time", 0.0)) if expanded_events else 0.0
     eff_prev_end = prev_batch_end if (0.0 < prev_batch_end <= first_st + 2.0 and prev_batch_end >= first_st - 5.0) else 0.0
@@ -1045,6 +1137,20 @@ def polish_subtitle_events_netflix(
             first_ev["start"] = first_ev["start_time"]
             first_ev["end_time"] = round(max(float(first_ev.get("end_time", 0.0)), first_ev["start_time"] + min_duration), 3)
             first_ev["end"] = first_ev["end_time"]
+            # Cascade forward if needed
+            cur_end = float(first_ev["end_time"])
+            for k in range(1, len(expanded_events)):
+                k_st = float(expanded_events[k].get("start_time", 0.0))
+                k_dur = max(min_duration, float(expanded_events[k].get("end_time", k_st + 1.0)) - k_st)
+                if k_st < cur_end + min_gap_sec:
+                    k_st = round(cur_end + min_gap_sec, 3)
+                    expanded_events[k]["start_time"] = k_st
+                    expanded_events[k]["start"] = k_st
+                    expanded_events[k]["end_time"] = round(k_st + k_dur, 3)
+                    expanded_events[k]["end"] = expanded_events[k]["end_time"]
+                    cur_end = float(expanded_events[k]["end_time"])
+                else:
+                    break
     
     n = len(expanded_events)
     for idx, ev in enumerate(expanded_events):
@@ -1078,73 +1184,9 @@ def polish_subtitle_events_netflix(
         ev["start_time"] = st
         ev["end_time"] = et
 
-    # Step 3: Final Dedicated Gap Enforcement Pass (Strict Non-Overlapping Order)
-    for i in range(len(expanded_events) - 1):
-        cur = expanded_events[i]
-        nxt = expanded_events[i + 1]
-        cur_st = float(cur["start_time"])
-        cur_et = float(cur["end_time"])
-        nxt_st = float(nxt["start_time"])
-        
-        # Check if cur_et bleeds across a shot change cut by 1-2 frames
-        if shot_changes:
-            for sc in shot_changes:
-                if 0.0 < (cur_et - sc) <= (3.0 / frame_rate):
-                    cur_et = round(sc - min_gap_sec, 3)
-                if 0.0 < (sc - cur_st) <= (3.0 / frame_rate):
-                    cur_st = round(sc, 3)
-                    
-        gap = nxt_st - cur_et
-        
-        if gap < min_gap_sec:
-            cur_et = round(nxt_st - min_gap_sec, 3)
-            if cur_et - cur_st < min_duration:
-                prev_et = float(expanded_events[i - 1]["end_time"]) if i > 0 else eff_prev_end
-                earliest_st = prev_et + min_gap_sec if (i > 0 or eff_prev_end > 0.0) else 0.0
-                cur_st = max(earliest_st, round(cur_et - min_duration, 3))
-                cur["start_time"] = cur_st
-                cur["start"] = cur_st
-            cur["end_time"] = cur_et
-            cur["end"] = cur_et
-            cur["duration"] = max(0.01, round(cur_et - cur_st, 3))
-            
-        elif min_gap_sec < gap < (12.0 / frame_rate):
-            # Only bridge the gap if the pause is tiny (<= 0.18s) OR subtitle needs reading time (CPS > max_cps)
-            # This prevents subtitles from lingering on screen during natural 300-500ms conversational pauses.
-            cur_dur = max(0.01, cur_et - cur_st)
-            cur_cps = calculate_cps(cur.get("text", ""), cur_dur)
-            if gap <= 0.18 or cur_cps > max_cps or cur_dur < min_duration:
-                cur_et = round(nxt_st - min_gap_sec, 3)
-                cur["end_time"] = cur_et
-                cur["end"] = cur_et
-                cur["duration"] = max(0.01, round(cur_et - cur_st, 3))
-
-        # Guarantee minimum duration (strictly sequential)
-        if cur_et - cur_st < min_duration:
-            needed = min_duration - (cur_et - cur_st)
-            avail_post = (nxt_st - min_gap_sec) - cur_et
-            if avail_post >= needed:
-                cur_et = round(cur_et + needed, 3)
-            else:
-                prev_et = float(expanded_events[i - 1]["end_time"]) if i > 0 else eff_prev_end
-                earliest_st = prev_et + min_gap_sec if (i > 0 or eff_prev_end > 0.0) else 0.0
-                cur_st = max(earliest_st, round(cur_et - min_duration, 3))
-                cur_et = round(min(nxt_st - min_gap_sec, cur_st + min_duration), 3)
-            cur["start_time"] = cur_st
-            cur["start"] = cur_st
-            cur["end_time"] = cur_et
-            cur["end"] = cur_et
-            cur["duration"] = max(0.01, round(cur_et - cur_st, 3))
-
-    # Final guarantee for strictly non-overlapping sequential events
-    for i in range(len(expanded_events) - 1):
-        nxt_st = expanded_events[i + 1]["start_time"]
-        cur_et = expanded_events[i]["end_time"]
-        if cur_et > nxt_st - min_gap_sec:
-            expanded_events[i]["end_time"] = round(nxt_st - min_gap_sec, 3)
-            if expanded_events[i]["end_time"] - expanded_events[i]["start_time"] < min_duration:
-                prev_e = expanded_events[i - 1]["end_time"] if i > 0 else eff_prev_end
-                expanded_events[i]["start_time"] = max(prev_e + min_gap_sec if (i > 0 or eff_prev_end > 0.0) else 0.0, round(expanded_events[i]["end_time"] - min_duration, 3))
+    # Step 3: Enforce strict Netflix gap chaining & zero-overlap guarantee
+    from app.netflix_linter import auto_chain_gaps
+    expanded_events = auto_chain_gaps(expanded_events, frame_rate=frame_rate, min_duration=min_duration, max_cps=max_cps)
 
     for ev in expanded_events:
         st = float(ev["start_time"])
@@ -1229,9 +1271,9 @@ def post_process_subtitles(
         if e_time <= s_time:
             e_time = s_time + 1.5
 
-        # 1. Micro-collar acoustic boundary snapping (+/- 0.15s)
+        # 1. Acoustic vocal boundary snapping (Silero VAD, +/- 0.80s search window)
         try:
-            s_time, e_time = snap_to_acoustic_boundaries(audio_path, s_time, e_time, collar_sec=0.15)
+            s_time, e_time = snap_to_acoustic_boundaries(audio_path, s_time, e_time, collar_sec=0.80)
         except Exception:
             pass
 
@@ -1246,9 +1288,16 @@ def post_process_subtitles(
                 if e_time > max_speech_end + 1.2:
                     e_time = round(max_speech_end + 0.250, 3)
 
-        # 3. Monotonic non-overlapping ordering with 50ms breathing room (prevents flicker)
+        # 3. Acoustic Anchor Principle: Lock s_time to speech onset; trim lingering previous event rather than pushing s_time into the future
         if s_time < prev_end:
-            s_time = round(prev_end + 0.050, 3)
+            target_prev_end = round(s_time - 0.050, 3)
+            if events and target_prev_end > events[-1]["start_time"] + 0.20:
+                events[-1]["end_time"] = target_prev_end
+                events[-1]["end"] = target_prev_end
+                events[-1]["duration"] = round(target_prev_end - events[-1]["start_time"], 3)
+                prev_end = target_prev_end
+            else:
+                s_time = round(prev_end + 0.050, 3)
         elif s_time == prev_end and i > 1:
             s_time = round(prev_end + 0.050, 3)
 
@@ -1414,9 +1463,12 @@ def generate_subtitles(
     dual_ch_info = detect_dual_channel_layout(audio_path_out)
     is_dual_channel = dual_ch_info.get("is_dual_channel", False)
     
-    # 6. Run Whisper on audio for word-level timestamps (guarded for cloud 512MB RAM using tiny model)
+    # 6. Run Whisper on audio for word-level timestamps
     is_cloud = bool(os.getenv("RENDER") or os.getenv("PORT"))
     enable_whisper = os.getenv("ENABLE_WHISPER", "true").lower() == "true"
+    # Phase 1 Fix 1: Use tiny on cloud (RAM-constrained), base on local.
+    # Whisper is used ONLY for acoustic word timestamps, not transcription.
+    # Base gives tighter word-level timestamps with far lower hallucination than medium on CPU.
     whisper_model = os.getenv("WHISPER_MODEL", "tiny" if is_cloud else "base")
     whisper_words = []
     if enable_whisper:
@@ -1458,10 +1510,14 @@ def generate_subtitles(
     video_id = str(uuid.uuid4())[:8]
     rolling_context = []
     
+    # Phase 3 Fix 3: Speaker registry for non-streaming batch loop
+    speaker_registry = {}
+    speaker_lock_clause = ""
+    
     for chunk_idx, (chunk_s, chunk_e) in enumerate(chunks, 1):
         log_terminal(f"Processing Chunk {chunk_idx}/{len(chunks)} [{chunk_s:.2f}s -> {chunk_e:.2f}s] with Gemini AI...")
         
-        collar_sec = 1.0
+        collar_sec = 2.0
         collar_left = collar_sec if chunk_s >= collar_sec else 0.0
         collar_right = collar_sec if (chunk_e + collar_sec) <= total_duration else 0.0
         slice_s = max(0.0, round(chunk_s - collar_left, 3))
@@ -1489,7 +1545,12 @@ def generate_subtitles(
                 context_clause = (
                     f"PREVIOUS CONVERSATION CONTEXT (from previous minutes for conversational continuity, speaker identity & proper nouns — DO NOT re-transcribe):\n"
                     f"{formatted_prev}\n\n"
+                    f"CRITICAL SEAM CONTINUITY: If a sentence was spoken across or near the boundary transition, transcribe the COMPLETE full sentence in this chunk so zero words or syllables are cut off!\n\n"
                 )
+
+            # Phase 3 Fix 3: Inject speaker identity lock from batch 2 onwards
+            if speaker_lock_clause:
+                context_clause = speaker_lock_clause + context_clause
 
             script_clause = f"Target Script: {resolved_script}\n" if resolved_script != "Auto-Detect" else ""
             prompt = (
@@ -1499,7 +1560,7 @@ def generate_subtitles(
                 f"SDH Mode: {sdh_mode}\n"
                 f"Content Type: {content_type}\n"
                 f"MANDATORY FORMATTING & TIMING SPECIFICATIONS:\n"
-                f"1. 100% VERBATIM ACCURACY: Transcribe the EXACT words spoken by the speaker word-for-word. NEVER summarize, paraphrase, simplify, omit, smooth grammar, or alter dialogue in any way.\n"
+                f"1. 100% VERBATIM ACCURACY (HIGHEST PRIORITY): Transcribe the EXACT words spoken word-for-word. NEVER summarize, paraphrase, simplify, omit, smooth grammar, or alter dialogue in any way, even when speakers talk rapidly!\n"
                 f"2. ABSOLUTE PROPER NOUN PRESERVATION & ANTI-ANGLICIZATION:\n"
                 f"   - NEVER anglicize, westernize, or substitute South Asian, Indian, regional, or culturally specific names, places, or titles (e.g. 'Tarun' must ALWAYS remain 'Tarun' or 'तरुण', NEVER replace with Western names like 'Tyrone').\n"
                 f"   - Transcribe names with phonetic fidelity.\n"
@@ -1509,7 +1570,7 @@ def generate_subtitles(
                 f"   - If Target Language is English: Output in English.\n"
                 f"4. MAXIMUM CHARACTERS PER LINE (CPL): Exactly <= {cpl_limit} characters per line.\n"
                 f"   - When a sentence exceeds {cpl_limit - 4} characters, insert a newline ('\\n') at a natural linguistic pause.\n"
-                f"5. MAXIMUM READING SPEED (CPS): Exactly <= {max_cps} characters per second (CPS = length / duration).\n"
+                f"5. READING SPEED (CPS): Target comfortable reading speed (~{max_cps} CPS). In fast dialogue, prioritize 100% verbatim capture and output tighter, shorter sequential subtitle events rather than dropping words!\n"
                 f"6. MAXIMUM LINES: Exactly <= {max_lines} lines per subtitle event.\n"
                 f"7. COMPLETE CLAUSES & SYNTACTIC BOUNDARIES: Subtitle events MUST break at natural clause boundaries.\n"
                 f"8. SPEAKER SEPARATION & DUAL SPEAKER FORMATTING: Separate different speakers cleanly.\n"
@@ -1610,6 +1671,26 @@ def generate_subtitles(
                     rolling_context.append(f"{spk}: \"{txt}\"")
             if len(rolling_context) > 10:
                 rolling_context = rolling_context[-10:]
+
+            # Phase 3 Fix 3: Update speaker registry & lock clause across batches
+            for ev in resolved_chunk_subs:
+                spk = (ev.get("speakers") or ["Speaker 1"])[0]
+                if spk not in speaker_registry:
+                    speaker_registry[spk] = {"count": 0, "first_seen": chunk_idx}
+                speaker_registry[spk]["count"] += 1
+
+            if chunk_idx == 1 and not speaker_lock_clause and speaker_registry:
+                ordered_spks = sorted(speaker_registry.keys(),
+                                      key=lambda s: (speaker_registry[s]["first_seen"], -speaker_registry[s]["count"]))
+                spk_lines = []
+                for rank, spk_label in enumerate(ordered_spks[:4], 1):
+                    spk_lines.append(f"  - {spk_label}: voice #{rank} heard in the audio (maintain this label for this same voice throughout)")
+                speaker_lock_clause = (
+                    "SPEAKER IDENTITY LOCK (established from the first segment — do NOT reassign):\n"
+                    + "\n".join(spk_lines) + "\n"
+                    "CRITICAL: Use EXACTLY these speaker labels for the same voices. Do NOT flip, swap, or rename speakers.\n\n"
+                )
+                log_terminal(f"Chunk {chunk_idx}: Speaker registry locked: {list(speaker_registry.keys())}")
                     
             # For long audio (> 180s), extract Whisper words on this slice with resolved language (if enabled)
             if enable_whisper and total_duration > 180.0 and len(chunks) > 1:
@@ -1809,6 +1890,7 @@ async def generate_subtitles_stream(
         # 3. Whisper acoustic alignment settings (executed per-chunk to guarantee zero stream delay and unlimited video length)
         is_cloud = bool(os.getenv("RENDER") or os.getenv("PORT"))
         enable_whisper = os.getenv("ENABLE_WHISPER", "true").lower() == "true"
+        # Phase 1 Fix 1: Use tiny on cloud (RAM-constrained), base on local.
         whisper_model = os.getenv("WHISPER_MODEL", "tiny" if is_cloud else "base")
         whisper_words = []
         whisper_lang_target = resolved_language if resolved_language not in ["auto", "Auto-Detect"] else None
@@ -1871,7 +1953,13 @@ async def generate_subtitles_stream(
             candidate_models.insert(0, primary)
         
         exhausted_models = set()
-        
+
+        # Phase 3 Fix 3: Speaker registry — tracks which speaker label maps to which
+        # acoustic identity (first-heard, gender/pitch hints) so labels stay
+        # consistent across all batches even when Gemini resets each chunk.
+        speaker_registry = {}    # e.g. {'Speaker 1': {'count': 12, 'first_seen': 1}}
+        speaker_lock_clause = ""  # Injected into prompt from batch 2 onwards
+
         # Process each batch from start_chunk onwards
         for chunk_idx, (chunk_s, chunk_e) in enumerate(chunks, 1):
             if chunk_idx < start_chunk:
@@ -1881,7 +1969,7 @@ async def generate_subtitles_stream(
             
             yield f"data: {json.dumps({'type': 'progress', 'chunk_index': chunk_idx, 'total_chunks': total_chunks, 'stage': f'Processing Batch {chunk_idx} of {total_chunks}'})}\n\n"
             
-            collar_sec = 1.0
+            collar_sec = 2.0
             collar_left = collar_sec if chunk_s >= collar_sec else 0.0
             collar_right = collar_sec if (chunk_e + collar_sec) <= total_duration else 0.0
             slice_s = max(0.0, round(chunk_s - collar_left, 3))
@@ -1943,20 +2031,36 @@ async def generate_subtitles_stream(
                     context_clause = (
                         f"PREVIOUS CONVERSATION CONTEXT (from previous minutes for continuity & speaker/term consistency — DO NOT re-transcribe):\n"
                         f"{formatted_prev}\n\n"
+                        f"CRITICAL SEAM CONTINUITY: If a sentence was spoken across or near the boundary transition, transcribe the COMPLETE full sentence in this chunk so zero words or syllables are cut off!\n\n"
                     )
 
+                # Phase 3 Fix 3 Step C: Inject speaker identity lock from batch 2 onwards.
+                # This prevents Gemini from reassigning Speaker 1/2 labels independently per chunk.
+                if speaker_lock_clause:
+                    context_clause = speaker_lock_clause + context_clause
+
                 anchors_clause = ""
-                if acoustic_anchors:
-                    anchor_lines = [f"- [{a['start']:.2f}s -> {a['end']:.2f}s]: {a['text']}" for a in acoustic_anchors[:15]]
+                if acoustic_anchors or raw_cw:
+                    phrase_lines = [f"  [{a['start']:.3f}s–{a['end']:.3f}s]: \"{a['text']}\"" for a in acoustic_anchors[:18]]
+                    word_lines = []
+                    for w in raw_cw[:60]:  # cap at 60 words to stay within token budget
+                        word_lines.append(f"  {w['word']} ({w['start']:.3f}s–{w['end']:.3f}s)")
                     anchors_clause = (
-                        "ACOUSTIC SPEECH TIMELINE GROUNDING (Genuine spoken segments detected in audio):\n"
-                        + "\n".join(anchor_lines) + "\n"
-                        "CRITICAL TIMING RULE: Your subtitle timestamps MUST closely align with these physical acoustic speech intervals.\n"
-                        "Never hallucinate or stretch dialogue into the pauses between these intervals!\n\n"
+                        "ACOUSTIC REFERENCE — WHISPER DETECTED SPEECH TIMESTAMPS:\n"
+                        "(These are detected speech intervals from the audio waveform.)\n"
+                        "(Use these as timing anchors when speech is clearly present in these intervals.)\n"
+                        "(IMPORTANT: Whisper on CPU may under-detect or miss faint speech during background music, effects, or low volume. If you hear genuine human dialogue in the audio, YOU MUST transcribe it and timestamp it accurately based on what you hear in the audio. NEVER omit speech just because Whisper missed it.)\n\n"
                     )
+                    if phrase_lines:
+                        anchors_clause += "Spoken Phrase Intervals (silence-separated speech bursts):\n"
+                        anchors_clause += "\n".join(phrase_lines) + "\n\n"
+                    if word_lines:
+                        anchors_clause += "Per-Word Acoustic Timestamps (exact word-level onset/offset):\n"
+                        anchors_clause += "\n".join(word_lines) + "\n\n"
 
                 script_clause = f"Target Script: {resolved_script}\n" if resolved_script != "Auto-Detect" else ""
                 lang_directive = ""
+                is_chunk_hindi_indic = resolved_language.lower() in ["hindi", "hi", "hinglish"] or resolved_script.lower() in ["devanagari", "hindi"]
                 if resolved_language.lower() in ["english", "en"]:
                     lang_directive = (
                         "CRITICAL LANGUAGE RULE (ENGLISH ONLY):\n"
@@ -1964,6 +2068,17 @@ async def generate_subtitles_stream(
                         "- ABSOLUTELY FORBIDDEN: NEVER output Urdu, Arabic script (e.g. اردو, ی, ہ, etc.), Devanagari, or random symbols/characters.\n"
                         "- If speech is in English: transcribe verbatim in English.\n"
                         "- If speech is in another language (e.g. Hindi, Urdu, etc.): translate dialogue into natural, accurate English subtitles.\n"
+                    )
+                elif is_chunk_hindi_indic:
+                    lang_directive = (
+                        "CRITICAL LANGUAGE & TRANSLITERATION RULE (HINDI / DEVANAGARI ONLY):\n"
+                        "- Target Language is 100% HINDI in DEVANAGARI script.\n"
+                        "- 100% of all subtitle characters MUST be in Devanagari script. Zero Latin/English letters permitted.\n"
+                        "- VERBATIM PHONETIC TRANSLITERATION ONLY (DO NOT TRANSLATE TO HINDI MEANING):\n"
+                        "  * If any English sentence or phrase is spoken (e.g. 'I want to go', 'You are wrong', 'Shut up', 'Come on bro'), you MUST transliterate it phonetically AS-IS into Devanagari script: 'आई वांट टू गो', 'यू आर रॉन्ग', 'शट अप', 'कम ऑन ब्रो'.\n"
+                        "  * ABSOLUTELY FORBIDDEN: NEVER translate English sentences into Hindi meaning! (e.g. NEVER translate 'I want to go' into 'मैं जाना चाहता हूँ' — it must be 'आई वांट टू गो').\n"
+                        "  * ABSOLUTELY FORBIDDEN: NEVER leave English words in the Latin/English alphabet (e.g. NEVER write 'I want to go' or 'target').\n"
+                        "  * Transliterate all English loan words, slang, and phrases verbatim: 'target' -> 'टारगेट', 'eliminate' -> 'एलिमिनेट', 'sorry' -> 'सॉरी', 'game plan' -> 'गेम प्लान', 'finalist' -> 'फाइनलिस्ट', 'brother' -> 'ब्रदर', 'task' -> 'टास्क', 'bro' -> 'ब्रो'.\n"
                     )
                 elif resolved_language != "Auto-Detect":
                     lang_directive = (
@@ -1997,21 +2112,20 @@ async def generate_subtitles_stream(
                     f"SDH Mode: {sdh_mode}\n"
                     f"Content Type: {content_type}\n"
                     f"MANDATORY FORMATTING & TIMING SPECIFICATIONS:\n"
-                    f"1. 100% VERBATIM ACCURACY: Transcribe the EXACT words spoken by the speaker word-for-word. NEVER summarize, paraphrase, simplify, omit, smooth grammar, or alter dialogue in any way.\n"
+                    f"1. 100% VERBATIM ACCURACY (HIGHEST PRIORITY): Transcribe the EXACT words spoken word-for-word. NEVER summarize, paraphrase, simplify, omit, smooth grammar, or alter dialogue in any way, even when speakers talk rapidly!\n"
                     f"2. ABSOLUTE PROPER NOUN PRESERVATION & ANTI-ANGLICIZATION:\n"
                     f"   - NEVER anglicize, westernize, or substitute South Asian, Indian, regional, or culturally specific names, places, or titles (e.g. 'Tarun' must ALWAYS remain 'Tarun' or 'तरुण', NEVER replace with Western names like 'Tyrone').\n"
                     f"   - Transcribe names with phonetic fidelity.\n"
                     f"3. STRICT LANGUAGE & SCRIPT PURITY:\n"
                     f"   - If Target Language is English: Output strictly in English using Latin characters. Never output Urdu or Arabic symbols.\n"
-                    f"   - If Target Language is Hindi and Script is Devanagari: Output 100% in Hindi using standard Devanagari script. Do NOT translate into English!\n"
+                    f"   - If Target Language is Hindi and Script is Devanagari: Output 100% in Devanagari script. Phonetically transliterate all English words, loan words, and English sentences verbatim into Devanagari (e.g. 'I want to go' -> 'आई वांट टू गो', 'sorry' -> 'सॉरी', 'game' -> 'गेम', 'target' -> 'टारगेट', 'brother' -> 'ब्रदर'). NEVER translate English sentences into Hindi meaning (do NOT convert 'I want to go' to 'मैं जाना चाहता हूँ'). Transcribe the sounds as-is in Devanagari! NEVER leave English words in Latin alphabet. Do NOT translate into English!\n"
                     f"   - If Target Language is Hindi and Script is Latin (Hinglish): Output conversational Hindi in the Latin alphabet (e.g. 'Tarun, kya haal hai?'). Do NOT translate into English!\n"
                     f"4. MAXIMUM CHARACTERS PER LINE (CPL): Exactly <= {cpl_limit} characters per line.\n"
                     f"   - When a sentence exceeds {cpl_limit - 4} characters, insert a newline ('\\n') at a natural linguistic pause.\n"
                     f"   - HINDI & ALL LANGUAGES: Break at punctuation ('।', '॥', ',', '?') or before conjunctions ('और', 'या', 'लेकिन', 'मगर', 'क्योंकि', 'इसलिए', 'ताकि', 'कि', 'तो', 'and', 'but').\n"
                     f"   - CRITICAL HINDI RULE: NEVER break right before a Hindi postposition ('ने', 'को', 'से', 'का', 'के', 'की', 'में', 'पर', 'पे', 'तक') leaving it stranded on the next line! Keep postpositions with the preceding noun.\n"
                     f"   - NEVER break in the middle of a person's name or title ('श्री', 'श्रीमती', 'डॉ.', 'Mr.', 'Mrs.').\n"
-                    f"5. MAXIMUM READING SPEED (CPS): Exactly <= {max_cps} characters per second (CPS = length / duration).\n"
-                    f"   - Split long, rapid, or dense dialogue into sequential subtitle events so that NO subtitle event ever exceeds {max_cps} CPS!\n"
+                    f"5. READING SPEED (CPS): Target comfortable reading speed (~{max_cps} CPS). In fast dialogue, prioritize 100% verbatim capture and output tighter, shorter sequential subtitle events rather than dropping words!\n"
                     f"6. MAXIMUM LINES: Exactly <= {max_lines} lines per subtitle event.\n"
                     f"7. COMPLETE CLAUSES & SYNTACTIC BOUNDARIES:\n"
                     f"   - Subtitle events MUST break at natural clause boundaries.\n"
@@ -2123,6 +2237,10 @@ async def generate_subtitles_stream(
                                 is_whisper_fallback = True
                             else:
                                 yield f"data: {json.dumps({'type': 'batch_error', 'chunk_index': chunk_idx, 'total_chunks': total_chunks, 'error': str(last_error)})}\n\n"
+                                # Phase 1 Fix 6: Advance cursor to chunk_e even on complete batch failure.
+                                # Without this, prev_batch_end stays stale and the next batch can produce
+                                # subtitle timestamps that jump backward in time.
+                                prev_batch_end = max(prev_batch_end, chunk_e)
                                 continue
                 else:
                     parsed = extract_and_repair_subtitle_json(response.text)
@@ -2171,21 +2289,24 @@ async def generate_subtitles_stream(
                 active_words = chunk_whisper_words if chunk_whisper_words else [w for w in whisper_words if w["start"] >= chunk_s - 0.5 and w["end"] <= chunk_e + 0.5]
                 split_batch = []
                 for s in batch_raw:
-                    split_batch.extend(split_and_balance_event(s, cpl_limit=cpl_limit, max_lines=max_lines, audio_path=target_path, whisper_words=active_words, min_duration=min_duration, frame_rate=frame_rate))
+                    split_batch.extend(split_and_balance_event(s, cpl_limit=cpl_limit, max_lines=max_lines, audio_path=audio_path_out, whisper_words=active_words, min_duration=min_duration, frame_rate=frame_rate))
 
                 # Stage 2: Closed-Loop Acoustic Synchronization (Locks subtitles to exact spoken words & audio energy)
                 if active_words and split_batch:
                     log_terminal(f"Batch {chunk_idx}: Synchronizing {len(split_batch)} events acoustically with Whisper ({whisper_model})...")
-                    split_batch = align_subtitle_timestamps(
-                        split_batch,
-                        active_words,
-                        search_radius=8.0,
-                        prev_batch_end=prev_batch_end,
-                        audio_path=audio_path_out,
-                        frame_rate=frame_rate,
-                        min_duration=min_duration,
-                        max_duration=max_duration
-                    )
+                    try:
+                        split_batch = align_subtitle_timestamps(
+                            split_batch,
+                            active_words,
+                            search_radius=8.0,
+                            prev_batch_end=prev_batch_end,
+                            audio_path=audio_path_out,
+                            frame_rate=frame_rate,
+                            min_duration=min_duration,
+                            max_duration=max_duration
+                        )
+                    except Exception as align_err:
+                        log_terminal(f"Batch {chunk_idx} acoustic sync fallback (preserving Gemini timestamps): {align_err}")
 
                 # Stage 3: Automated Quality Check (Audits the acoustically synchronized events)
                 batch_lint = lint_all_subtitles(
@@ -2193,6 +2314,7 @@ async def generate_subtitles_stream(
                     shot_changes=shot_changes,
                     content_type=content_type,
                     frame_rate=frame_rate,
+                    script=resolved_script,
                     custom_cpl=cpl_limit,
                     custom_cps=max_cps,
                     custom_max_lines=max_lines,
@@ -2250,10 +2372,13 @@ async def generate_subtitles_stream(
                 )
 
                 # 5. Monotonic ID assignment & timeline tracking
-                for ev in processed_batch:
-                    ev["id"] = current_event_id
-                    current_event_id += 1
-                    prev_batch_end = ev["end_time"]
+                if processed_batch:
+                    for ev in processed_batch:
+                        ev["id"] = current_event_id
+                        current_event_id += 1
+                        prev_batch_end = ev["end_time"]
+                else:
+                    prev_batch_end = max(prev_batch_end, chunk_e)
 
                 # Record last dialogue lines into rolling context for subsequent batches
                 for item in processed_batch[-5:]:
@@ -2263,6 +2388,29 @@ async def generate_subtitles_stream(
                         rolling_context.append(f"{spk}: \"{txt}\"")
                 if len(rolling_context) > 10:
                     rolling_context = rolling_context[-10:]
+
+                # Phase 3 Fix 3 Step B: After first batch, build speaker registry + lock clause.
+                # After every batch, update speaker counts for cross-batch normalization.
+                for ev in processed_batch:
+                    spk = (ev.get("speakers") or ["Speaker 1"])[0]
+                    if spk not in speaker_registry:
+                        speaker_registry[spk] = {"count": 0, "first_seen": chunk_idx}
+                    speaker_registry[spk]["count"] += 1
+
+                # Build speaker_lock_clause after first successful batch so batch 2+ stays aligned
+                if chunk_idx == start_chunk and not speaker_lock_clause and speaker_registry:
+                    # Determine canonical label order by first-seen then count
+                    ordered_spks = sorted(speaker_registry.keys(),
+                                          key=lambda s: (speaker_registry[s]["first_seen"], -speaker_registry[s]["count"]))
+                    spk_lines = []
+                    for rank, spk_label in enumerate(ordered_spks[:4], 1):
+                        spk_lines.append(f"  - {spk_label}: voice #{rank} heard in the audio (maintain this label for this same voice throughout)")
+                    speaker_lock_clause = (
+                        "SPEAKER IDENTITY LOCK (established from the first segment — do NOT reassign):\n"
+                        + "\n".join(spk_lines) + "\n"
+                        "CRITICAL: Use EXACTLY these speaker labels for the same voices. Do NOT flip, swap, or rename speakers.\n\n"
+                    )
+                    log_terminal(f"Batch {chunk_idx}: Speaker registry locked: {list(speaker_registry.keys())}")
 
                 all_aligned_subtitles.extend(processed_batch)
                 

@@ -16,6 +16,8 @@ import SubtitleExportModal from './SubtitleExportModal';
 import SubtitleDiffModal from './SubtitleDiffModal';
 import SubtitleSettingsModal from './SubtitleSettingsModal';
 import CustomTimeResumeModal from './CustomTimeResumeModal';
+import AccountMenuDropdown from '../AccountMenuDropdown';
+import ReloadConfirmModal from '../ReloadConfirmModal';
 import { extractAudioFromMedia, computeWaveformPeaks } from '../../utils/audioExtractor';
 
 function formatTime(seconds) {
@@ -200,7 +202,7 @@ async function detectVideoFrameRate(file, apiBase) {
   });
 }
 
-export default function SubtitleApp({ onBackToHome }) {
+export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
   // ── Theme State: Unified Dark Creative Suite ──
   const [theme] = useState('dark');
   const isDark = true;
@@ -294,6 +296,12 @@ export default function SubtitleApp({ onBackToHome }) {
               if (data.peaks && data.peaks.length > 0) {
                 setInitialWaveformPeaks(data.peaks);
               }
+              const fps = data.frame_rate || data.metadata?.frame_rate;
+              if (fps && fps > 0) {
+                setFrameRate(fps);
+                setDetectedFpsNotice(`${fps} fps (Auto)`);
+                setTimeout(() => setDetectedFpsNotice(''), 4500);
+              }
               uploadSucceeded = true;
               return data.video_id;
             }
@@ -312,6 +320,12 @@ export default function SubtitleApp({ onBackToHome }) {
             setCurrentVideoId(chunkData.video_id);
             if (chunkData.peaks && chunkData.peaks.length > 0) {
               setInitialWaveformPeaks(chunkData.peaks);
+            }
+            const fps = chunkData.frame_rate || chunkData.metadata?.frame_rate;
+            if (fps && fps > 0) {
+              setFrameRate(fps);
+              setDetectedFpsNotice(`${fps} fps (Auto)`);
+              setTimeout(() => setDetectedFpsNotice(''), 4500);
             }
             return chunkData.video_id;
           }
@@ -388,8 +402,10 @@ export default function SubtitleApp({ onBackToHome }) {
   const [historyIndex, setHistoryIndex] = useState(-1);
 
   // Modals & Panels UI
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
   const [showDiffModal, setShowDiffModal] = useState(false);
+  const [showReloadConfirmModal, setShowReloadConfirmModal] = useState(false);
   const [showQcDrawer, setShowQcDrawer] = useState(false);
   const [showSettingsDropdown, setShowSettingsDropdown] = useState(false);
   const [showFileDropdown, setShowFileDropdown] = useState(false);
@@ -412,6 +428,54 @@ export default function SubtitleApp({ onBackToHome }) {
     checkConnection();
     return () => { isMounted = false; };
   }, []);
+
+  // ── Browser Reload Protection & Studio-Themed Confirmation Modal ──
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      // ESC key dismisses active modal
+      if (e.key === 'Escape') {
+        if (showReloadConfirmModal) { setShowReloadConfirmModal(false); return; }
+        if (showSettingsModal) { setShowSettingsModal(false); return; }
+        if (showExportModal) { setShowExportModal(false); return; }
+        if (showDiffModal) { setShowDiffModal(false); return; }
+        if (showCustomTimeModal) { setShowCustomTimeModal(false); return; }
+      }
+
+      // Intercept F5 or Ctrl+R / Cmd+R reload shortcuts
+      if (
+        e.key === 'F5' ||
+        ((e.ctrlKey || e.metaKey) && (e.key === 'r' || e.key === 'R'))
+      ) {
+        e.preventDefault();
+        setShowReloadConfirmModal(true);
+      }
+    };
+
+    const handleBeforeUnload = (e) => {
+      // Prompt before native window unload / browser reload button if active project exists
+      if (selectedFile || events.length > 0 || isGenerating) {
+        e.preventDefault();
+        e.returnValue = 'Are you sure you want to reload? Any active generation or unsaved progress may be lost.';
+        return e.returnValue;
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [
+    selectedFile,
+    events.length,
+    isGenerating,
+    showReloadConfirmModal,
+    showSettingsModal,
+    showExportModal,
+    showDiffModal,
+    showCustomTimeModal
+  ]);
 
   // Resizable Layout Dimensions (Default: Left 480px, Bottom 210px)
   const [leftPanelWidth, setLeftPanelWidth] = useState(480);
@@ -481,7 +545,6 @@ export default function SubtitleApp({ onBackToHome }) {
     }
   });
 
-  const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [isFixingWithGemini, setIsFixingWithGemini] = useState(false);
   const [isSyncingAudio, setIsSyncingAudio] = useState(false);
 
@@ -503,10 +566,66 @@ export default function SubtitleApp({ onBackToHome }) {
     return events.find(e => (e.id === activeEventId || e.event_id === activeEventId)) || events[0] || null;
   }, [events, activeEventId]);
 
-  // Sanitize helper to purge any cached/legacy NF-PYRAMID errors
+  // Sanitize helper: Enforces zero overlaps, chronological order, and purges legacy errors
   const sanitizeEvents = useCallback((evs) => {
     if (!evs || !Array.isArray(evs)) return [];
-    return evs.map(e => ({
+
+    // 1. Filter out empty or whitespace-only events
+    const valid = evs.filter(e => e && typeof e === 'object' && (e.text || '').trim().length > 0);
+
+    // 2. Strict chronological sort by start time
+    valid.sort((a, b) => {
+      const stA = a.start_time !== undefined ? Number(a.start_time) : (a.start !== undefined ? Number(a.start) : 0);
+      const stB = b.start_time !== undefined ? Number(b.start_time) : (b.start !== undefined ? Number(b.start) : 0);
+      if (stA !== stB) return stA - stB;
+      const etA = a.end_time !== undefined ? Number(a.end_time) : (a.end !== undefined ? Number(a.end) : 0);
+      const etB = b.end_time !== undefined ? Number(b.end_time) : (b.end !== undefined ? Number(b.end) : 0);
+      return etA - etB;
+    });
+
+    // 3. Cascade non-overlap enforcement (min gap = 2 frames @ 24fps = 0.083s)
+    const minGap = 0.083;
+    for (let i = 0; i < valid.length - 1; i++) {
+      const cur = valid[i];
+      const nxt = valid[i + 1];
+      const curSt = cur.start_time !== undefined ? Number(cur.start_time) : (cur.start !== undefined ? Number(cur.start) : 0);
+      let curEt = cur.end_time !== undefined ? Number(cur.end_time) : (cur.end !== undefined ? Number(cur.end) : curSt + 1.0);
+      let nxtSt = nxt.start_time !== undefined ? Number(nxt.start_time) : (nxt.start !== undefined ? Number(nxt.start) : 0);
+      let nxtEt = nxt.end_time !== undefined ? Number(nxt.end_time) : (nxt.end !== undefined ? Number(nxt.end) : nxtSt + 1.0);
+
+      // Degenerate identical or inverted start times: sequence next cleanly after current
+      if (nxtSt <= curSt + 0.05) {
+        const nextDur = Math.max(0.5, nxtEt - nxtSt);
+        nxtSt = Number((curEt + minGap).toFixed(3));
+        nxtEt = Number((nxtSt + nextDur).toFixed(3));
+        nxt.start_time = nxtSt;
+        nxt.start = nxtSt;
+        nxt.end_time = nxtEt;
+        nxt.end = nxtEt;
+      }
+
+      // Overlap: cur ends after nxt starts
+      if (curEt > nxtSt - minGap) {
+        const targetEnd = Number((nxtSt - minGap).toFixed(3));
+        if (targetEnd > curSt + 0.20) {
+          curEt = targetEnd;
+        } else {
+          curEt = Number((curSt + 0.35).toFixed(3));
+          nxtSt = Number((curEt + minGap).toFixed(3));
+          const nextDur = Math.max(0.5, nxtEt - (nxt.start_time || 0));
+          nxtEt = Number((nxtSt + nextDur).toFixed(3));
+          nxt.start_time = nxtSt;
+          nxt.start = nxtSt;
+          nxt.end_time = nxtEt;
+          nxt.end = nxtEt;
+        }
+        cur.end_time = curEt;
+        cur.end = curEt;
+      }
+      cur.duration = Number(Math.max(0.1, curEt - curSt).toFixed(3));
+    }
+
+    return valid.map(e => ({
       ...e,
       qc_errors: (e.qc_errors || e.errors || []).filter(err => {
         const rid = (err.rule_id || '').toUpperCase();
@@ -919,6 +1038,61 @@ export default function SubtitleApp({ onBackToHome }) {
       }
     }
   };
+
+  // Discard previous work for currently selected media: purges local drafts and deletes backend audio/peaks/chunks
+  const handleDiscardPreviousWork = useCallback(async (customFileName = null, customVideoId = null) => {
+    const fileNameToDiscard = customFileName || selectedFile?.name;
+    const videoIdToDiscard = customVideoId || currentVideoId;
+
+    try {
+      if (fileNameToDiscard) {
+        localStorage.removeItem(`karya_subtitle_autosave_${fileNameToDiscard}`);
+      }
+      localStorage.removeItem('karya_subtitle_autosave_draft_subtitle');
+    } catch (_) { }
+
+    setPendingDraft(null);
+    setEvents([]);
+    setOriginalEvents([]);
+    setCanResume(false);
+    setResumeChunk(null);
+    setTotalChunks(null);
+    setActiveEventId(null);
+    setBatchPauseData(null);
+    editedEventIdsRef.current.clear();
+    setComplianceScore(100);
+    setTotalErrors(0);
+    setTotalWarnings(0);
+
+    // Call backend to purge all .wav, .mp3, .mp4, .peaks.json, .part files related to this media
+    if (fileNameToDiscard || videoIdToDiscard) {
+      try {
+        await fetch(`${API_BASE}/api/media/discard`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            filename: fileNameToDiscard,
+            video_id: videoIdToDiscard
+          })
+        });
+      } catch (discardErr) {
+        console.warn('[Subtitle Studio] Non-fatal discard cleanup error:', discardErr);
+      }
+    }
+
+    // Reset media cache state
+    setCurrentVideoId(null);
+    extractedAudioFileRef.current = null;
+    setInitialWaveformPeaks([]);
+
+    // If a media file is currently loaded in the studio, start fresh upload & waveform extraction immediately
+    if (selectedFile) {
+      uploadPromiseRef.current = processAndUploadMedia(selectedFile, isAudioFile);
+    }
+
+    setAutoSaveStatus('Previous work discarded & started fresh ✓');
+    setTimeout(() => setAutoSaveStatus(''), 3000);
+  }, [selectedFile, currentVideoId, isAudioFile, processAndUploadMedia]);
 
   // Single Subtitle Event Update (Instant 0ms latency typing)
   const handleUpdateEvent = useCallback((id, field, value) => {
@@ -1628,7 +1802,7 @@ export default function SubtitleApp({ onBackToHome }) {
                     if (idx !== -1) merged[idx] = newEv;
                   }
                 }
-                return merged;
+                return sanitizeEvents(merged);
               });
               const nextToResume = lastBatchIndex + 1;
               if (nextToResume <= (data.total_chunks || totalExpectedChunks)) {
@@ -1904,7 +2078,7 @@ export default function SubtitleApp({ onBackToHome }) {
                     if (idx !== -1) merged[idx] = newEv;
                   }
                 }
-                return merged;
+                return sanitizeEvents(merged);
               });
               const nextToResume = lastBatchIndex + 1;
               if (nextToResume <= (data.total_chunks || totalExpectedChunks)) {
@@ -2166,7 +2340,7 @@ export default function SubtitleApp({ onBackToHome }) {
   };
 
   return (
-    <div className="h-screen w-screen overflow-hidden flex flex-col font-sans select-none transition-colors duration-150 bg-[#0e0f12] text-[#f1f2f6]">
+    <div className="h-screen w-screen overflow-hidden flex flex-col font-sans select-none transition-colors duration-150 bg-[#0e0f12] text-[#f1f2f6] animate-studio-entrance">
       {/* Hidden File Upload Inputs */}
       <input
         type="file"
@@ -2183,39 +2357,39 @@ export default function SubtitleApp({ onBackToHome }) {
         className="hidden"
       />
 
-      {/* ── Top Header Bar (Sleek NLE Studio Menu) ── */}
-      <nav ref={headerMenuRef} className="border-b border-[#262734] bg-[#121318] px-3 py-1 flex items-center justify-between shadow-xs shrink-0 z-40 transition-colors">
-        {/* Left: Brand & Studio Title */}
-        <div className="flex items-center gap-2">
+      {/* ── Top Header Row 1: Hub, Subtitle Studio Brand, Media Info & Account Section ── */}
+      <header className="border-b border-[#20222c] bg-[#101116] px-3.5 py-1.5 flex items-center justify-between shadow-xs shrink-0 z-40">
+        {/* Left: Hub, Tool Identity, Media Badge, Auto-Save Status */}
+        <div className="flex items-center gap-2.5 min-w-0">
           <button
             onClick={onBackToHome}
-            className="p-1 px-2 rounded transition-colors cursor-pointer flex items-center gap-1.5 text-xs font-semibold border border-[#262734] hover:bg-[#181920] text-slate-300 hover:text-white"
+            className="p-1 px-2.5 rounded-md transition-colors cursor-pointer flex items-center gap-1.5 text-xs font-semibold border border-[#262734] bg-[#14151a] hover:bg-[#1c1e26] text-slate-300 hover:text-white shrink-0"
             title="Return to Hub"
           >
             <ArrowLeft className="w-3.5 h-3.5 text-[#00e5be]" />
             <span>Hub</span>
           </button>
 
-          <div className="h-4 w-px bg-[#262734]" />
+          <div className="h-4 w-px bg-[#262734] shrink-0" />
 
-          <div className="flex items-center gap-2">
-            <div className="w-5 h-5 rounded bg-gradient-to-tr from-[#00e5be] to-[#00b4d8] text-black flex items-center justify-center font-black shadow-xs">
-              <Film className="w-3 h-3" />
+          <div className="flex items-center gap-2 shrink-0">
+            <div className="w-5 h-5 rounded-md bg-gradient-to-tr from-[#00e5be] to-[#0099ff] text-black flex items-center justify-center shadow-[0_0_10px_rgba(0,229,190,0.3)]">
+              <Film className="w-3 h-3 text-black fill-black/20" />
             </div>
             <div className="flex items-center gap-1.5">
-              <h1 className="text-xs font-bold tracking-tight uppercase font-mono text-white">
-                SUBTITLE STUDIO
+              <h1 className="text-xs font-extrabold tracking-tight text-white flex items-center gap-1 font-sans">
+                <span>Subtitle</span>
+                <span className="text-transparent bg-clip-text bg-gradient-to-r from-[#00e5be] to-[#00c9ff]">Studio</span>
               </h1>
-              <span className="text-[8px] font-black uppercase tracking-wider px-1.5 py-0.2 bg-[#00e5be]/15 text-[#00e5be] rounded border border-[#00e5be]/40">
+              <span className="text-[8px] font-mono font-bold uppercase tracking-wider px-1.5 py-0.2 bg-[#00e5be]/15 text-[#00e5be] rounded border border-[#00e5be]/40 shadow-xs">
                 PRO
               </span>
             </div>
           </div>
 
           {selectedFile && (
-            <span className="text-[10px] font-mono px-2 py-0.5 rounded border border-[#262734] truncate max-w-[220px] text-slate-300 bg-[#181920] flex items-center gap-1.5" title={selectedFile.name}>
-              <span className={`px-1 py-0.2 rounded text-[9px] font-bold ${isAudioFile ? 'bg-cyan-500/20 text-[#00e5ff] border border-cyan-500/40' : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
-                }`}>
+            <span className="text-[10px] font-mono px-2 py-0.5 rounded border border-[#262734] truncate max-w-[260px] text-slate-300 bg-[#181920] flex items-center gap-1.5 shrink-0" title={selectedFile.name}>
+              <span className={`px-1 py-0.2 rounded text-[9px] font-bold ${isAudioFile ? 'bg-cyan-500/20 text-[#00e5ff] border border-cyan-500/40' : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'}`}>
                 {isAudioFile ? '🎵 AUDIO' : '🎬 VIDEO'}
               </span>
               <span className="truncate">{selectedFile.name}</span>
@@ -2223,140 +2397,96 @@ export default function SubtitleApp({ onBackToHome }) {
           )}
 
           {autoSaveStatus && (
-            <span className="text-[10px] text-[#00e5be] font-mono font-bold animate-pulse">
+            <span className="text-[10px] text-[#00e5be] font-mono font-bold animate-pulse shrink-0">
               {autoSaveStatus}
             </span>
           )}
         </div>
 
-        {/* Center / Non-Blocking Streaming Indicator Banner */}
-        {isGenerating ? (
-          <div className="flex items-center gap-2 px-3 py-1 rounded-full border border-[#00e5be]/50 bg-[#181920] text-[#00e5be] shadow-sm">
-            <Loader2 className="w-3.5 h-3.5 animate-spin text-[#00e5be]" />
-            <span className="text-[11px] font-bold">{progressStage}</span>
-            {batchProgress && (
-              <span className="text-[10px] font-mono font-black px-1.5 py-0.2 bg-[#00e5be] text-black rounded">
-                Batch {batchProgress.current}/{batchProgress.total}
-              </span>
+        {/* Right: Username Account Section */}
+        <div className="flex items-center gap-2 shrink-0">
+          {user && (
+            <AccountMenuDropdown
+              user={user}
+              onOpenLogoutModal={onOpenLogoutModal || onLogout}
+            />
+          )}
+        </div>
+      </header>
+
+      {/* ── Toolbar Row 2: File Actions, Settings, Language, Script & Studio Controls ── */}
+      <nav ref={headerMenuRef} className="border-b border-[#262734] bg-[#14151a] px-3.5 py-1.5 flex items-center justify-between gap-2 shadow-xs shrink-0 z-30 transition-colors">
+        {/* Left: File Menu & Settings */}
+        <div className="flex items-center gap-2 shrink-0">
+          {/* File Dropdown */}
+          <div className="relative shrink-0">
+            <button
+              onClick={() => { setShowFileDropdown(!showFileDropdown); setShowSettingsDropdown(false); }}
+              className="px-2.5 py-1 rounded-md text-xs font-semibold flex items-center gap-1 transition-colors cursor-pointer border border-[#262734] bg-[#181920] hover:bg-[#22232c] text-slate-300 hover:text-white"
+            >
+              <span>File</span>
+              <ChevronDown size={12} />
+            </button>
+
+            {showFileDropdown && (
+              <div className="absolute top-full left-0 mt-1 w-56 rounded-lg shadow-xl border border-[#262734] p-1 z-50 animate-in fade-in zoom-in-95 duration-150 bg-[#181920] text-slate-200">
+                <button
+                  onClick={() => { fileInputRef.current?.click(); setShowFileDropdown(false); }}
+                  className="w-full text-left px-3 py-2 text-xs rounded flex items-center gap-2 cursor-pointer hover:bg-[#22232c] text-slate-200"
+                >
+                  <Upload size={13} className="text-[#00e5be]" />
+                  <span>Open Media (Video / Audio)...</span>
+                </button>
+                <button
+                  onClick={() => { srtImportRef.current?.click(); setShowFileDropdown(false); }}
+                  className="w-full text-left px-3 py-2 text-xs rounded flex items-center gap-2 cursor-pointer hover:bg-[#22232c] text-slate-200"
+                >
+                  <FileText size={13} className="text-emerald-400" />
+                  <span>Import Subtitle (SRT/VTT)...</span>
+                </button>
+                <div className="h-px my-1 bg-[#262734]" />
+                <button
+                  onClick={() => { setShowExportModal(true); setShowFileDropdown(false); }}
+                  className="w-full text-left px-3 py-2 text-xs rounded flex items-center gap-2 font-bold cursor-pointer hover:bg-[#22232c] text-[#00e5be]"
+                >
+                  <Download size={13} />
+                  <span>Export Subtitles...</span>
+                </button>
+                <div className="h-px my-1 bg-[#262734]" />
+                <button
+                  onClick={() => {
+                    if (window.confirm("Clear all current subtitles, remove saved draft, and purge server audio/peaks cache for this media?")) {
+                      handleDiscardPreviousWork();
+                    }
+                    setShowFileDropdown(false);
+                  }}
+                  className={`w-full text-left px-3 py-2 text-xs rounded flex items-center gap-2 font-medium cursor-pointer text-rose-400 hover:bg-rose-950/40`}
+                >
+                  <Trash2 size={13} />
+                  <span>Clear Subtitles & Draft</span>
+                </button>
+              </div>
             )}
-            <span className="text-[10px] font-mono opacity-80">({Math.round(progressPercent)}%)</span>
-            <span className="text-[10px] font-mono opacity-60">[{elapsedSeconds}s]</span>
           </div>
-        ) : (
-          <div className="flex items-center gap-1">
-            {/* File Dropdown */}
-            <div className="relative">
-              <button
-                onClick={() => { setShowFileDropdown(!showFileDropdown); setShowSettingsDropdown(false); }}
-                className="px-2 py-1 rounded text-xs font-semibold flex items-center gap-1 transition-colors cursor-pointer border border-[#262734] hover:bg-[#181920] text-slate-300 hover:text-white"
-              >
-                <span>File</span>
-                <ChevronDown size={12} />
-              </button>
 
-              {showFileDropdown && (
-                <div className="absolute top-full left-0 mt-1 w-56 rounded-lg shadow-xl border border-[#262734] p-1 z-50 animate-in fade-in zoom-in-95 duration-150 bg-[#181920] text-slate-200">
-                  <button
-                    onClick={() => { fileInputRef.current?.click(); setShowFileDropdown(false); }}
-                    className="w-full text-left px-3 py-2 text-xs rounded flex items-center gap-2 cursor-pointer hover:bg-[#22232c] text-slate-200"
-                  >
-                    <Upload size={13} className="text-[#00e5be]" />
-                    <span>Open Media (Video / Audio)...</span>
-                  </button>
-                  <button
-                    onClick={() => { srtImportRef.current?.click(); setShowFileDropdown(false); }}
-                    className="w-full text-left px-3 py-2 text-xs rounded flex items-center gap-2 cursor-pointer hover:bg-[#22232c] text-slate-200"
-                  >
-                    <FileText size={13} className="text-emerald-400" />
-                    <span>Import Subtitle (SRT/VTT)...</span>
-                  </button>
-                  <div className="h-px my-1 bg-[#262734]" />
-                  <button
-                    onClick={() => { setShowExportModal(true); setShowFileDropdown(false); }}
-                    className="w-full text-left px-3 py-2 text-xs rounded flex items-center gap-2 font-bold cursor-pointer hover:bg-[#22232c] text-[#00e5be]"
-                  >
-                    <Download size={13} />
-                    <span>Export Subtitles...</span>
-                  </button>
-                  <div className="h-px my-1 bg-[#262734]" />
-                  <button
-                    onClick={() => {
-                      if (window.confirm("Clear all current subtitles and remove any saved draft for this video?")) {
-                        try {
-                          if (selectedFile?.name) {
-                            localStorage.removeItem(`karya_subtitle_autosave_${selectedFile.name}`);
-                          }
-                        } catch (_) { }
-                        setEvents([]);
-                        setComplianceScore(100);
-                        setTotalErrors(0);
-                        setTotalWarnings(0);
-                        setActiveEventId(null);
-                        setPendingDraft(null);
-                      }
-                      setShowFileDropdown(false);
-                    }}
-                    className={`w-full text-left px-3 py-2 text-xs rounded flex items-center gap-2 font-medium cursor-pointer text-rose-400 hover:bg-rose-950/40`}
-                  >
-                    <Trash2 size={13} />
-                    <span>Clear Subtitles & Draft</span>
-                  </button>
-                </div>
-              )}
-            </div>
+          {/* Settings Modal Trigger Button */}
+          <button
+            onClick={() => setShowSettingsModal(true)}
+            className="px-2.5 py-1 rounded-md text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer border border-[#262734] bg-[#181920] hover:bg-[#22232c] text-slate-300 hover:text-white shrink-0"
+            title="Configure CPL, CPS, Frame Rate (FPS), Line Limits & AI Auto-Fix"
+          >
+            <Settings size={13} className="text-[#00e5be]" />
+            <span>Settings</span>
+            <span className="text-[10px] font-mono text-slate-400 bg-[#0e0f12] px-1.5 py-0.5 rounded border border-[#262734] font-medium">
+              {cplLimit} CPL · {cpsLimit} CPS · {frameRate} FPS
+            </span>
+          </button>
+        </div>
 
-            {/* Settings Modal Trigger Button */}
-            <button
-              onClick={() => setShowSettingsModal(true)}
-              className="px-2 py-1 rounded text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer border hover:bg-[#181920] text-slate-300 border-[#262734]"
-              title="Configure CPL, CPS, Frame Rate (FPS), Line Limits & AI Auto-Fix"
-            >
-              <Settings size={13} className="text-[#00e5be]" />
-              <span>Settings</span>
-              <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-[#00e5be]/15 text-[#00e5be] border border-[#00e5be]/30">
-                {cplLimit} CPL · {cpsLimit} CPS · {frameRate} FPS
-              </span>
-            </button>
-
-            {/* Quick Frame Rate Indicator / Selector Badge */}
-            <button
-              onClick={() => setShowSettingsModal(true)}
-              className={`px-2 py-1 rounded text-xs font-mono font-semibold flex items-center gap-1 transition-all cursor-pointer border ${detectedFpsNotice
-                  ? 'bg-[#00e5be] text-black border-[#00e5be] shadow-[0_0_10px_rgba(0,229,190,0.4)] animate-pulse'
-                  : 'bg-[#14151a] hover:bg-[#181920] text-slate-300 border-[#262734] hover:border-slate-500'
-                }`}
-              title="Click to view or change Video Frame Rate (FPS)"
-            >
-              <span>🎬</span>
-              <span>{detectedFpsNotice ? `FPS: ${detectedFpsNotice}` : `${frameRate} fps`}</span>
-            </button>
-
-            {/* Undo / Redo */}
-            <div className="flex items-center border border-[#262734] bg-[#14151a] rounded overflow-hidden">
-              <button
-                onClick={handleUndo}
-                disabled={historyIndex <= 0}
-                className="p-1.5 transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed hover:bg-[#1f2638] text-slate-300 hover:text-white"
-                title="Undo (Ctrl+Z)"
-              >
-                <Undo2 size={13} />
-              </button>
-              <button
-                onClick={handleRedo}
-                disabled={historyIndex >= history.length - 1}
-                className="p-1.5 transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed border-l border-[#262734] hover:bg-[#1f2638] text-slate-300 hover:text-white"
-                title="Redo (Ctrl+Y)"
-              >
-                <Redo2 size={13} />
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Right Menu Strip (CapCut Aesthetic) */}
-        <div className="flex items-center gap-1.5">
-          {/* Language & Script Fast Selectors */}
-          <div className="flex items-center gap-1.5 bg-[#181920] border border-[#262734] px-2 py-0.5 rounded text-xs">
+        {/* Right: Remaining Tools, Selectors & Actions */}
+        <div className="flex items-center gap-1.5 shrink-0 flex-wrap sm:flex-nowrap">
+          {/* Language & Script Selectors (Native text and scripts) */}
+          <div className="flex items-center gap-1.5 bg-[#181920] border border-[#262734] px-2 py-0.5 rounded-md text-xs shrink-0">
             <Globe size={12} className="text-[#00e5be] shrink-0" />
             <select
               value={language}
@@ -2389,7 +2519,7 @@ export default function SubtitleApp({ onBackToHome }) {
               <option value="ar" className="bg-[#181920]">Arabic (العربية)</option>
             </select>
 
-            <div className="h-3 w-px bg-[#262734]" />
+            <div className="h-3.5 w-px bg-[#262734]" />
 
             <select
               value={script}
@@ -2411,54 +2541,43 @@ export default function SubtitleApp({ onBackToHome }) {
           <button
             onClick={handleAutoFix}
             disabled={isGenerating || events.length === 0}
-            className="px-2.5 py-1 rounded text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer border border-emerald-500/40 bg-[#181920] hover:bg-[#22232c] text-emerald-400 shadow-xs disabled:opacity-40 disabled:cursor-not-allowed"
+            className="px-2 py-1 rounded-md text-[11px] font-semibold flex items-center gap-1 transition-colors cursor-pointer border border-emerald-500/30 bg-[#181920] hover:bg-[#22232c] text-emerald-400 shadow-xs disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
             title="Auto-Fix Netflix Compliance Rules"
           >
             <Sparkles className="w-3 h-3 text-emerald-400" />
             <span>Auto-Fix</span>
           </button>
 
-          {/* Continue Subtitle Generation Button - ALWAYS VISIBLE */}
+          {/* Continue Subtitle Generation Button */}
           <button
             onClick={() => handleOpenCustomTimeModal('lastSub')}
             disabled={isGenerating}
-            className={`px-3 py-1 rounded text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-xs ${canResume || events.length > 0
-                ? 'bg-amber-500 hover:bg-amber-400 text-black shadow-[0_0_12px_rgba(245,158,11,0.35)]'
-                : 'bg-[#181920] hover:bg-[#22232c] border border-amber-500/50 text-amber-300'
+            className={`px-2 py-1 rounded-md text-[11px] font-bold flex items-center gap-1 transition-all cursor-pointer shadow-xs shrink-0 ${canResume || events.length > 0
+              ? 'bg-amber-500 hover:bg-amber-400 text-black shadow-[0_0_10px_rgba(245,158,11,0.3)]'
+              : 'bg-[#181920] hover:bg-[#22232c] border border-amber-500/40 text-amber-300'
               } disabled:opacity-40 disabled:cursor-not-allowed`}
-            title={
-              canResume
-                ? `Continue generation from Batch ${resumeChunk} of ${totalChunks}`
-                : events.length > 0
-                  ? `Continue generating subtitles from where you left off (${formatTime(events[events.length - 1]?.end_time ?? events[events.length - 1]?.end ?? 0)}) or choose timeline time`
-                  : `Continue / start generating subtitles from specific timeline time`
-            }
+            title="Continue / start generating subtitles from specific timeline time"
           >
-            <Play className={`w-3.5 h-3.5 ${canResume || events.length > 0 ? 'fill-black text-black' : 'fill-amber-300 text-amber-300'}`} />
+            <Play className={`w-3 h-3 ${canResume || events.length > 0 ? 'fill-black text-black' : 'fill-amber-300 text-amber-300'}`} />
             <span>Continue</span>
-            {canResume ? (
-              <span className="text-[10px] font-mono opacity-90">(Batch {resumeChunk}/{totalChunks})</span>
-            ) : events.length > 0 ? (
-              <span className="text-[10px] font-mono opacity-85">({formatTime(events[events.length - 1]?.end_time ?? events[events.length - 1]?.end ?? 0).slice(0, 5)})</span>
-            ) : null}
           </button>
 
           {/* Auto-Generate AI Button */}
           <button
             onClick={handleGenerate}
             disabled={isGenerating}
-            className="px-3 py-1 rounded text-xs font-semibold bg-[#22232c] hover:bg-[#2c2d38] border border-[#00e5be]/50 text-[#00e5be] flex items-center gap-1.5 transition-all shadow-xs cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+            className="px-2 py-1 rounded-md text-[11px] font-semibold bg-[#181920] hover:bg-[#22232c] border border-[#00e5be]/40 text-[#00e5be] flex items-center gap-1 transition-all shadow-xs cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
             title="Run Gemini AI Netflix Subtitle Pipeline"
           >
             {isGenerating ? (
               <>
-                <Loader2 className="w-3.5 h-3.5 animate-spin text-[#00e5be]" />
+                <Loader2 className="w-3 h-3 animate-spin text-[#00e5be]" />
                 <span>Generating...</span>
               </>
             ) : (
               <>
-                <Sparkles className="w-3.5 h-3.5 text-[#00e5be]" />
-                <span>Auto-Generate</span>
+                <Sparkles className="w-3 h-3 text-[#00e5be]" />
+                <span className="hidden sm:inline">Auto-</span><span>Generate</span>
               </>
             )}
           </button>
@@ -2467,45 +2586,62 @@ export default function SubtitleApp({ onBackToHome }) {
           <button
             onClick={handleAcousticSync}
             disabled={events.length === 0 || isSyncingAudio || !currentVideoId}
-            className="px-3 py-1 rounded text-xs font-semibold bg-emerald-950/70 border border-emerald-500/40 hover:bg-emerald-900/80 text-emerald-300 flex items-center gap-1.5 transition-all shadow-[0_0_10px_rgba(16,185,129,0.2)] cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+            className="px-2 py-1 rounded-md text-[11px] font-semibold bg-[#181920] border border-emerald-500/30 hover:bg-[#22232c] text-emerald-300 flex items-center gap-1 transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
             title="Snap and re-synchronize all subtitles directly to speech audio acoustics (Whisper + VAD)"
           >
-            <Volume2 className={`w-3.5 h-3.5 text-emerald-400 ${isSyncingAudio ? 'animate-bounce' : ''}`} />
-            <span>{isSyncingAudio ? 'Syncing...' : 'Sync Audio'}</span>
+            <Volume2 className={`w-3 h-3 text-emerald-400 ${isSyncingAudio ? 'animate-bounce' : ''}`} />
+            <span className="hidden lg:inline">Sync Audio</span>
+            <span className="lg:hidden">Sync</span>
           </button>
 
-          {/* Export Button (CapCut Signature Neon Turquoise Action) */}
+          {/* Export Button */}
           <button
             onClick={() => setShowExportModal(true)}
             disabled={events.length === 0}
-            className="px-3.5 py-1 rounded text-xs font-bold bg-[#00e5be] hover:bg-[#00c9a7] text-black flex items-center gap-1.5 transition-all shadow-[0_0_12px_rgba(0,229,190,0.25)] cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+            className="px-2.5 py-1 rounded-md text-[11px] font-bold bg-[#00e5be] hover:bg-[#00c9a7] text-black flex items-center gap-1 transition-all shadow-[0_0_10px_rgba(0,229,190,0.25)] cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
             title="Export TTML / SRT / VTT"
           >
-            <FileDown className="w-3.5 h-3.5" />
+            <FileDown className="w-3 h-3" />
             <span>Export</span>
-          </button>
-
-          {/* Netflix QC Score Capsule */}
-          <button
-            onClick={() => setShowQcDrawer(!showQcDrawer)}
-            className={`px-2.5 py-1 rounded text-xs font-mono font-bold flex items-center gap-1.5 transition-colors cursor-pointer border ${complianceScore >= 98
-              ? 'bg-[#181920] border-emerald-500/50 text-emerald-400'
-              : complianceScore >= 80
-                ? 'bg-[#181920] border-amber-500/50 text-amber-400'
-                : 'bg-[#181920] border-rose-500/50 text-rose-400'
-              }`}
-            title="Open Netflix Quality Control Dashboard"
-          >
-            <ShieldCheck className="w-3.5 h-3.5" />
-            <span>QC: {complianceScore}%</span>
-            {totalErrors > 0 && (
-              <span className="px-1.5 py-0.2 bg-rose-500 text-white rounded-full text-[9px] font-black">
-                {totalErrors}
-              </span>
-            )}
           </button>
         </div>
       </nav>
+
+      {/* ── Broadcast-Grade AI Streaming Progress Bar & Stage Status (Below Nav, Zero Nav Overflow) ── */}
+      {isGenerating && (
+        <div className="px-4 py-2 flex items-center justify-between border-b border-[#00e5be]/30 bg-[#0c1413]/95 backdrop-blur-xs text-slate-200 text-xs shrink-0 z-30 transition-all">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <Loader2 className="w-3.5 h-3.5 animate-spin text-[#00e5be] shrink-0" />
+            <span className="font-bold text-[#00e5be] text-xs tracking-tight">
+              {progressStage || 'Generating Subtitles...'}
+            </span>
+            {batchProgress && (
+              <span className="px-2 py-0.5 rounded text-[10px] font-mono font-black bg-[#00e5be] text-black shrink-0 shadow-xs">
+                Batch {batchProgress.current} of {batchProgress.total}
+              </span>
+            )}
+            {progressDetail && (
+              <span className="text-slate-400 text-[11px] truncate hidden sm:inline opacity-80">
+                · {progressDetail}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-3 shrink-0 font-mono text-[11px]">
+            <span className="w-12 text-right font-bold text-[#00e5be] tabular-nums">
+              {Math.round(progressPercent)}%
+            </span>
+            <div className="w-24 sm:w-36 h-1.5 bg-[#181920] rounded-full overflow-hidden border border-[#262734]">
+              <div
+                className="h-full bg-gradient-to-r from-[#00e5be] via-[#00c9a7] to-[#0099ff] transition-all duration-300 shadow-[0_0_8px_rgba(0,229,190,0.4)]"
+                style={{ width: `${progressPercent}%` }}
+              />
+            </div>
+            <span className="w-16 text-right tabular-nums text-slate-400 font-medium">
+              [{elapsedSeconds.toFixed(1)}s]
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* Backend Connection Warning Banner */}
       {backendConnected === false && (
@@ -2568,13 +2704,9 @@ export default function SubtitleApp({ onBackToHome }) {
               Restore Draft
             </button>
             <button
-              onClick={() => {
-                try {
-                  localStorage.removeItem(`karya_subtitle_autosave_${selectedFile?.name}`);
-                } catch (_) { }
-                setPendingDraft(null);
-              }}
-              className="px-3 py-1 rounded cursor-pointer transition-colors bg-[#22232c] hover:bg-[#2c2d38] text-slate-300"
+              onClick={() => handleDiscardPreviousWork()}
+              className="px-3 py-1 rounded cursor-pointer transition-colors bg-[#22232c] hover:bg-rose-950/40 hover:text-rose-300 text-slate-300"
+              title="Discard previous draft and delete all previous audio, video, and peaks files on the server"
             >
               Discard & Start Fresh
             </button>
@@ -2839,6 +2971,18 @@ export default function SubtitleApp({ onBackToHome }) {
         videoDuration={videoDuration}
         events={events}
         onStartGeneration={handleStartGenerationFromCustomTime}
+      />
+
+      {/* ── Custom Studio-Themed Reload Confirmation Modal ── */}
+      <ReloadConfirmModal
+        isOpen={showReloadConfirmModal}
+        onClose={() => setShowReloadConfirmModal(false)}
+        onConfirm={() => {
+          setShowReloadConfirmModal(false);
+          window.location.reload();
+        }}
+        title="Reload Subtitle Studio?"
+        description="Are you sure you want to reload? Any active AI subtitle streaming, acoustic audio syncing, or unsaved draft changes will be interrupted."
       />
     </div>
   );

@@ -23,6 +23,12 @@ else:
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
+# "base" is the correct default for this pipeline. Whisper is used ONLY for
+# acoustic word timestamps (not full transcription). base gives tighter
+# word-level timestamps, lower hallucination rate under greedy decode, and
+# processes all 30s audio chunks without memory pressure on CPU.
+# On cloud (Render), whisper_aligner.py overrides this to "tiny" automatically.
+WHISPER_MODEL = os.getenv("WHISPER_MODEL", "base")
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 DEFAULT_LANGUAGE = os.getenv("DEFAULT_LANGUAGE", "English")
 DEFAULT_SCRIPT = os.getenv("DEFAULT_SCRIPT", "Latin")

@@ -16,26 +16,277 @@ import DiffModal from './components/DiffModal';
 import ProjectNotesModal from './components/ProjectNotesModal';
 import LandingPage from './components/LandingPage';
 import SubtitleApp from './components/subtitle/SubtitleApp';
+import LogoutConfirmModal from './components/LogoutConfirmModal';
+import ReloadConfirmModal from './components/ReloadConfirmModal';
 import { parseSubtitles } from './utils/subtitleParser';
 import { API_BASE } from './config';
+import { AuthProvider, useAuth } from './auth_views/AuthContext';
+import AuthScreen from './auth_views/AuthScreen';
 
 export default function App() {
-  // ── Tool Selector (Landing Page Router) ──
-  const [activeTool, setActiveTool] = useState(null);
-
-  if (activeTool === null) {
-    return <LandingPage onSelect={setActiveTool} />;
-  }
-
-  if (activeTool === 'subtitle') {
-    return <SubtitleApp onBackToHome={() => setActiveTool(null)} />;
-  }
-
-  // activeTool === 'transcribe' → render the existing Transcribe UI below
-  return <TranscribeApp onBackToHome={() => setActiveTool(null)} />;
+  return (
+    <AuthProvider>
+      <AppContent />
+    </AuthProvider>
+  );
 }
 
-function TranscribeApp({ onBackToHome }) {
+function AppContent() {
+  const { isAuthenticated, isLoading, user, logout } = useAuth();
+
+  // Helper to read initial tool from browser URL path or history state
+  const getToolFromLocation = () => {
+    if (typeof window === 'undefined') return null;
+    const path = window.location.pathname.replace(/^\/+/, '').toLowerCase();
+    if (path.startsWith('subtitle')) return 'subtitle';
+    if (path.startsWith('transcribe')) return 'transcribe';
+    return window.history.state?.tool || null;
+  };
+
+  // Check if URL indicates a direct auth route (e.g. /login, /signup, /verify-email, ?token=...)
+  const isDirectAuthRoute = () => {
+    if (typeof window === 'undefined') return false;
+    const path = window.location.pathname.toLowerCase();
+    const search = window.location.search;
+    return (
+      path.includes('login') ||
+      path.includes('signup') ||
+      path.includes('verify') ||
+      path.includes('reset') ||
+      search.includes('token')
+    );
+  };
+
+  const [activeTool, setActiveTool] = useState(getToolFromLocation);
+  const [showAuthScreen, setShowAuthScreen] = useState(isDirectAuthRoute);
+  const [authInitialView, setAuthInitialView] = useState('login');
+  const [showLogoutModal, setShowLogoutModal] = useState(false);
+
+  // Clean /login or /signup from address bar whenever authenticated
+  useEffect(() => {
+    if (isAuthenticated) {
+      const path = window.location.pathname.toLowerCase();
+      if (path.includes('login') || path.includes('signup')) {
+        const targetUrl = activeTool ? `/${activeTool}` : '/';
+        window.history.replaceState({ tool: activeTool }, '', targetUrl);
+      }
+    }
+  }, [isAuthenticated, activeTool]);
+
+  // Synchronize state with browser Back/Forward navigation (Chrome history)
+  useEffect(() => {
+    if (isLoading) return; // Wait until initial token check completes
+
+    // If not authenticated and on a studio route, redirect cleanly to '/'
+    if (!isAuthenticated) {
+      const path = window.location.pathname.replace(/^\/+/, '').toLowerCase();
+      if (path.startsWith('subtitle') || path.startsWith('transcribe')) {
+        window.history.replaceState({ tool: null }, '', '/');
+        setActiveTool(null);
+        setShowAuthScreen(false);
+      }
+    } else {
+      // Record initial authenticated state in history
+      if (!window.history.state || window.history.state.tool === undefined) {
+        const initialTool = getToolFromLocation();
+        const targetUrl = initialTool ? `/${initialTool}` : '/';
+        window.history.replaceState({ tool: initialTool }, '', targetUrl);
+      }
+    }
+
+    const handlePopState = (e) => {
+      const path = window.location.pathname.replace(/^\/+/, '').toLowerCase();
+
+      // Popping to an auth route
+      if (path.includes('login') || path.includes('signup') || path.includes('verify')) {
+        setShowAuthScreen(true);
+        setActiveTool(null);
+        return;
+      }
+
+      // Popping to root Landing Page
+      if (path === '' || path === '/') {
+        setShowAuthScreen(false);
+        setActiveTool(null);
+        return;
+      }
+
+      // Popping to Subtitle Studio
+      if (path.startsWith('subtitle')) {
+        if (!isAuthenticated) {
+          window.history.replaceState({ tool: null }, '', '/');
+          setActiveTool(null);
+          setShowAuthScreen(false);
+        } else {
+          setActiveTool('subtitle');
+          setShowAuthScreen(false);
+        }
+        return;
+      }
+
+      // Popping to Transcribe Studio
+      if (path.startsWith('transcribe')) {
+        if (!isAuthenticated) {
+          window.history.replaceState({ tool: null }, '', '/');
+          setActiveTool(null);
+          setShowAuthScreen(false);
+        } else {
+          setActiveTool('transcribe');
+          setShowAuthScreen(false);
+        }
+        return;
+      }
+
+      // Fallback
+      setActiveTool(null);
+      setShowAuthScreen(false);
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [isAuthenticated, isLoading]);
+
+  const handleSelectTool = (tool) => {
+    if (!isAuthenticated) {
+      // Prompt sign in if not authenticated
+      setAuthInitialView('login');
+      setShowAuthScreen(true);
+      if (window.location.pathname !== '/login') {
+        window.history.pushState({ tool: null, auth: 'login' }, '', '/login');
+      }
+      return;
+    }
+    const targetUrl = tool ? `/${tool}` : '/';
+    if (window.location.pathname !== targetUrl) {
+      window.history.pushState({ tool }, '', targetUrl);
+    }
+    setActiveTool(tool);
+    setShowAuthScreen(false);
+  };
+
+  const handleBackToHome = () => {
+    if (window.location.pathname !== '/') {
+      window.history.pushState({ tool: null }, '', '/');
+    }
+    setActiveTool(null);
+    setShowAuthScreen(false);
+  };
+
+  const handleLogout = () => {
+    logout();
+    setActiveTool(null);
+    setShowAuthScreen(false);
+    setShowLogoutModal(false);
+    // Replace URL cleanly with '/' so no previous /subtitle remains in history
+    if (window.history.replaceState) {
+      window.history.replaceState({ tool: null }, '', '/');
+    }
+  };
+
+  const handleOpenAuth = (initialView = 'login') => {
+    const view = initialView === 'signup' ? 'signup' : 'login';
+    setAuthInitialView(view);
+    setShowAuthScreen(true);
+    const targetUrl = `/${view}`;
+    if (window.location.pathname !== targetUrl) {
+      window.history.pushState({ tool: null, auth: view }, '', targetUrl);
+    }
+  };
+
+  // If initial token validation is running
+  if (isLoading) {
+    return (
+      <div style={{
+        minHeight: '100vh',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: '#0e0f12',
+        color: '#94a3b8',
+        fontFamily: 'sans-serif',
+        flexDirection: 'column',
+        gap: '12px'
+      }}>
+        <Loader2 className="animate-spin" size={36} color="#00e5be" />
+        <span style={{ fontSize: '14px', color: '#f1f2f6' }}>Verifying VerboLabs session...</span>
+      </div>
+    );
+  }
+
+  // If user requested AuthScreen (Login / Signup / Verify Email) while unauthenticated
+  if (!isAuthenticated && showAuthScreen) {
+    return (
+      <AuthScreen
+        initialView={authInitialView}
+        onBackToHome={() => {
+          setShowAuthScreen(false);
+          if (window.history.replaceState) {
+            window.history.replaceState({ tool: null }, '', '/');
+          }
+        }}
+      />
+    );
+  }
+
+  // ── Tool Routing for authenticated users ──
+  if (isAuthenticated && activeTool === 'subtitle') {
+    return (
+      <>
+        <SubtitleApp
+          onBackToHome={handleBackToHome}
+          user={user}
+          onLogout={() => setShowLogoutModal(true)}
+          onOpenLogoutModal={() => setShowLogoutModal(true)}
+        />
+        <LogoutConfirmModal
+          isOpen={showLogoutModal}
+          onClose={() => setShowLogoutModal(false)}
+          onConfirm={handleLogout}
+          user={user}
+        />
+      </>
+    );
+  }
+
+  if (isAuthenticated && activeTool === 'transcribe') {
+    return (
+      <>
+        <TranscribeApp
+          onBackToHome={handleBackToHome}
+          user={user}
+          onLogout={() => setShowLogoutModal(true)}
+          onOpenLogoutModal={() => setShowLogoutModal(true)}
+        />
+        <LogoutConfirmModal
+          isOpen={showLogoutModal}
+          onClose={() => setShowLogoutModal(false)}
+          onConfirm={handleLogout}
+          user={user}
+        />
+      </>
+    );
+  }
+
+  // ── Public Home Landing Page (default route for all visitors & authenticated users at root) ──
+  return (
+    <>
+      <LandingPage
+        onSelect={handleSelectTool}
+        user={user}
+        onLogout={() => setShowLogoutModal(true)}
+        onOpenAuth={handleOpenAuth}
+      />
+      <LogoutConfirmModal
+        isOpen={showLogoutModal}
+        onClose={() => setShowLogoutModal(false)}
+        onConfirm={handleLogout}
+        user={user}
+      />
+    </>
+  );
+}
+
+function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
   const [showGuidelines, setShowGuidelines] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
   const [showSrtPreview, setShowSrtPreview] = useState(false);
@@ -51,8 +302,8 @@ function TranscribeApp({ onBackToHome }) {
   const [history, setHistory] = useState([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
 
-  // Neon DB Project History State
   const [showProjectsModal, setShowProjectsModal] = useState(false);
+  const [showReloadConfirmModal, setShowReloadConfirmModal] = useState(false);
   const [savedProjects, setSavedProjects] = useState([]);
   const [isLoadingProjects, setIsLoadingProjects] = useState(false);
   const [isSavingToDb, setIsSavingToDb] = useState(false);
@@ -62,7 +313,6 @@ function TranscribeApp({ onBackToHome }) {
   const [audioUrl, setAudioUrl] = useState(null);
   const [targetLanguage, setTargetLanguage] = useState('Auto-Detect');
   const [targetScript, setTargetScript] = useState('Auto-Detect');
-  
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [selectedExportFormats, setSelectedExportFormats] = useState(['csv', 'docx', 'xlsx', 'srt', 'json']);
@@ -83,6 +333,58 @@ function TranscribeApp({ onBackToHome }) {
   const [complianceScore, setComplianceScore] = useState(100.0);
   const [totalErrors, setTotalErrors] = useState(0);
   const [totalWarnings, setTotalWarnings] = useState(0);
+
+  // Intercept reload shortcuts (F5, Ctrl+R, Cmd+R), ESC key for all modals & beforeunload in Transcribe Studio
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        if (showReloadConfirmModal) { setShowReloadConfirmModal(false); return; }
+        if (showGuidelines) { setShowGuidelines(false); return; }
+        if (showExportModal) { setShowExportModal(false); return; }
+        if (showSrtPreview) { setShowSrtPreview(false); return; }
+        if (showStatsModal) { setShowStatsModal(false); return; }
+        if (showSpeakerModal) { setShowSpeakerModal(false); return; }
+        if (showDiffModal) { setShowDiffModal(false); return; }
+        if (showNotesModal) { setShowNotesModal(false); return; }
+        if (showProjectsModal) { setShowProjectsModal(false); return; }
+      }
+      if (
+        e.key === 'F5' ||
+        ((e.ctrlKey || e.metaKey) && (e.key === 'r' || e.key === 'R'))
+      ) {
+        e.preventDefault();
+        setShowReloadConfirmModal(true);
+      }
+    };
+
+    const handleBeforeUnload = (e) => {
+      if (selectedFile || (segments && segments.length > 0) || isTranscribing) {
+        e.preventDefault();
+        e.returnValue = 'Are you sure you want to reload? Any unsaved edits will be lost.';
+        return e.returnValue;
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [
+    selectedFile,
+    segments,
+    isTranscribing,
+    showReloadConfirmModal,
+    showGuidelines,
+    showExportModal,
+    showSrtPreview,
+    showStatsModal,
+    showSpeakerModal,
+    showDiffModal,
+    showNotesModal,
+    showProjectsModal
+  ]);
 
   useEffect(() => {
     fetchHealth();
@@ -726,7 +1028,7 @@ function TranscribeApp({ onBackToHome }) {
   };
 
   return (
-    <div className="min-h-screen bg-[#0e0f12] text-[#f1f2f6] flex flex-col font-sans select-none">
+    <div className="min-h-screen bg-[#0e0f12] text-[#f1f2f6] flex flex-col font-sans select-none animate-studio-entrance">
       {/* Top Navbar (Ultra Compact) */}
       <Navbar
         hasApiKey={hasApiKey}
@@ -746,6 +1048,8 @@ function TranscribeApp({ onBackToHome }) {
         complianceScore={segments.length > 0 ? complianceScore : null}
         totalErrors={totalErrors}
         totalWarnings={totalWarnings}
+        user={user}
+        onOpenLogoutModal={onOpenLogoutModal}
       />
 
       {/* Main Studio Area (Maximized Screen Height & Space) */}
@@ -1066,6 +1370,18 @@ function TranscribeApp({ onBackToHome }) {
           <span>{dbSaveToast || autoSaveStatus}</span>
         </div>
       )}
+
+      {/* ── Transcribe Studio Reload Confirmation Modal ── */}
+      <ReloadConfirmModal
+        isOpen={showReloadConfirmModal}
+        onClose={() => setShowReloadConfirmModal(false)}
+        onConfirm={() => {
+          setShowReloadConfirmModal(false);
+          window.location.reload();
+        }}
+        title="Reload Transcribe Studio?"
+        description="Are you sure you want to reload? Any active audio transcription, waveform alignments, or unsaved segment edits will be interrupted."
+      />
     </div>
   );
 }

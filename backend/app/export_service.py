@@ -252,8 +252,36 @@ def export_rejection_csv(rejected_items: List[Dict[str, Any]]) -> str:
     return output.getvalue()
 
 
+def _prepare_sorted_events(events: list) -> list:
+    """Sort events chronologically and clamp any overlapping end times before export."""
+    if not events:
+        return []
+    def _get_st(ev):
+        val = ev.get("start_time", ev.get("start", 0.0)) if isinstance(ev, dict) else getattr(ev, "start_time", getattr(ev, "start", 0.0))
+        return float(val or 0.0)
+    sorted_evs = sorted(events, key=_get_st)
+    for i in range(len(sorted_evs) - 1):
+        cur = sorted_evs[i]
+        nxt = sorted_evs[i + 1]
+        c_et = float(cur.get("end_time", cur.get("end", 0.0)) if isinstance(cur, dict) else getattr(cur, "end_time", getattr(cur, "end", 0.0)))
+        n_st = float(nxt.get("start_time", nxt.get("start", 0.0)) if isinstance(nxt, dict) else getattr(nxt, "start_time", getattr(nxt, "start", 0.0)))
+        if c_et > n_st - 0.04:
+            new_et = round(max(n_st - 0.04, 0.0), 3)
+            if isinstance(cur, dict):
+                cur["end_time"] = new_et
+                cur["end"] = new_et
+            else:
+                try:
+                    setattr(cur, "end_time", new_et)
+                    setattr(cur, "end", new_et)
+                except Exception:
+                    pass
+    return sorted_evs
+
+
 def export_netflix_srt(events: list) -> str:
     """Generate Netflix-compliant SRT format."""
+    events = _prepare_sorted_events(events)
     def format_time(seconds: float) -> str:
         if seconds is None:
             seconds = 0.0
@@ -283,6 +311,7 @@ def export_netflix_srt(events: list) -> str:
 
 def export_netflix_vtt(events: list) -> str:
     """Generate Netflix-compliant WebVTT format."""
+    events = _prepare_sorted_events(events)
     def format_time(seconds: float) -> str:
         if seconds is None:
             seconds = 0.0
@@ -315,6 +344,7 @@ def export_netflix_vtt(events: list) -> str:
 
 def export_netflix_ttml(events: list, language: str = "en") -> str:
     """Generate Netflix TTML/DFXP format."""
+    events = _prepare_sorted_events(events)
     def format_time(seconds: float) -> str:
         if seconds is None:
             seconds = 0.0

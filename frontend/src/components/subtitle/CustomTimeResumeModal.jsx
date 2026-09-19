@@ -35,6 +35,31 @@ export default function CustomTimeResumeModal({
 }) {
   const [timeInputStr, setTimeInputStr] = useState('');
   const [shouldPreserve, setShouldPreserve] = useState(true);
+  const [isClosing, setIsClosing] = useState(false);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setIsClosing(false);
+      return;
+    }
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        handleDismiss();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen]);
+
+  const handleDismiss = () => {
+    if (isClosing) return;
+    setIsClosing(true);
+    setTimeout(() => {
+      setIsClosing(false);
+      onClose();
+    }, 220);
+  };
 
   const lastEvent = events.length > 0 ? events[events.length - 1] : null;
   const lastSubEnd = lastEvent ? (lastEvent.end_time ?? lastEvent.end ?? 0) : 0;
@@ -73,8 +98,17 @@ export default function CustomTimeResumeModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200">
-      <div className="w-full max-w-lg rounded-2xl border border-[#262734] shadow-2xl overflow-hidden flex flex-col bg-[#14151a] text-slate-200">
+    <div
+      className={`fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md transition-opacity duration-200 ${
+        isClosing ? 'animate-mac-backdrop-exit pointer-events-none' : 'animate-in fade-in duration-200'
+      }`}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) handleDismiss();
+      }}
+    >
+      <div className={`w-full max-w-lg rounded-2xl border border-[#262734] shadow-2xl overflow-hidden flex flex-col bg-[#14151a] text-slate-200 ${
+        isClosing ? 'animate-mac-squish-exit' : 'animate-mac-squish'
+      }`}>
         
         {/* Modal Header */}
         <div className="p-4 sm:p-5 border-b border-[#262734] bg-[#14151a] flex items-center justify-between">
@@ -93,7 +127,8 @@ export default function CustomTimeResumeModal({
             </div>
           </div>
           <button 
-            onClick={onClose}
+            type="button"
+            onClick={handleDismiss}
             className="p-1.5 rounded-lg hover:bg-[#22232c] text-slate-400 hover:text-white transition-colors cursor-pointer"
           >
             <X className="w-5 h-5" />
@@ -235,7 +270,7 @@ export default function CustomTimeResumeModal({
           <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-[#262734]">
             <button
               type="button"
-              onClick={onClose}
+              onClick={handleDismiss}
               className="px-4 py-2 rounded-lg text-xs font-semibold hover:bg-[#22232c] text-slate-400 hover:text-white transition-colors cursor-pointer"
             >
               Cancel

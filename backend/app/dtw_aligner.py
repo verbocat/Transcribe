@@ -91,6 +91,34 @@ def normalize_token(text: str) -> str:
 
 from functools import lru_cache
 
+# Devanagari to phonetic Roman mapping for cross-script alignment
+_DEVANAGARI_TO_ROMAN = {
+    'क': 'k', 'ख': 'kh', 'ग': 'g', 'घ': 'gh', 'ङ': 'n',
+    'च': 'ch', 'छ': 'chh', 'ज': 'j', 'झ': 'jh', 'ञ': 'n',
+    'ट': 't', 'ठ': 'th', 'ड': 'd', 'ढ': 'dh', 'ण': 'n',
+    'त': 't', 'थ': 'th', 'द': 'd', 'ध': 'dh', 'न': 'n',
+    'प': 'p', 'फ': 'f', 'ब': 'b', 'भ': 'bh', 'म': 'm',
+    'य': 'y', 'र': 'r', 'ल': 'l', 'व': 'v', 'श': 'sh',
+    'ष': 'sh', 'स': 's', 'ह': 'h',
+    'अ': 'a', 'आ': 'aa', 'इ': 'i', 'ई': 'ee', 'उ': 'u', 'ऊ': 'oo',
+    'ए': 'e', 'ऐ': 'ai', 'ओ': 'o', 'औ': 'au', 'ऑ': 'o', 'ॲ': 'e',
+    'ा': 'aa', 'ि': 'i', 'ी': 'ee', 'ु': 'u', 'ू': 'oo',
+    'े': 'e', 'ै': 'ai', 'ो': 'o', 'ौ': 'au', 'ॉ': 'o', 'ॅ': 'e',
+    '्': '', 'ं': 'n', 'ँ': 'n', '़': ''
+}
+
+def devanagari_to_roman(text: str) -> str:
+    """Converts Devanagari text to phonetic Roman approximation for cross-script token matching."""
+    if not text or not any('\u0900' <= ch <= '\u097f' for ch in text):
+        return text
+    out = []
+    for ch in text:
+        out.append(_DEVANAGARI_TO_ROMAN.get(ch, ch))
+    res = ''.join(out)
+    res = res.replace('ee', 'i').replace('oo', 'u').replace('aa', 'a').replace('w', 'v')
+    return res
+
+
 @lru_cache(maxsize=8192)
 def token_distance(t1: str, t2: str) -> float:
     """
@@ -103,7 +131,7 @@ def token_distance(t1: str, t2: str) -> float:
     if t1 == t2:
         return 0.0
 
-    # 1. Number equivalence check ("10" <-> "ten", "२" <-> "दो")
+    # 1. Number equivalence check ("10" <-> "ten", "2" <-> "दो")
     if t1 in _DIGIT_TO_WORDS and t2 in _DIGIT_TO_WORDS[t1]:
         return 0.05
     if t2 in _DIGIT_TO_WORDS and t1 in _DIGIT_TO_WORDS[t2]:
@@ -111,6 +139,15 @@ def token_distance(t1: str, t2: str) -> float:
     if t1 in _WORD_TO_DIGIT and t2 in _WORD_TO_DIGIT:
         if _WORD_TO_DIGIT[t1] == _WORD_TO_DIGIT[t2]:
             return 0.05
+
+    # 2. Cross-script phonetic normalizer for Devanagari <-> Latin loan words & transliterations
+    t1_rom = devanagari_to_roman(t1)
+    t2_rom = devanagari_to_roman(t2)
+    if t1_rom == t2_rom:
+        return 0.0
+    if t1_rom != t1 or t2_rom != t2:
+        t1 = t1_rom
+        t2 = t2_rom
 
     # 2. Common speech reductions and slang contractions
     _SLANG_MAP = {
@@ -381,9 +418,10 @@ def align_events_dtw(
                     "start": w_item["start"],
                     "end": w_item["end"],
                     "dist": dist,
+                    "word_idx": g_item["word_idx"],
                 })
 
-    # 5. Build per-event aligned boundaries
+    # 5. Build per-event aligned boundaries with Outlier Filtering & Head/Tail Extrapolation
     results = []
     for ev_idx in range(len(gemini_events)):
         matches = event_matches.get(ev_idx, [])
@@ -402,20 +440,48 @@ def align_events_dtw(
             })
             continue
 
-        matched_st = min(m["start"] for m in matches)
-        matched_et = max(m["end"] for m in matches)
-        avg_sim = 1.0 - (sum(m["dist"] for m in matches) / len(matches))
-        coverage = len(matches) / max(1, total_ev_words)
+        # 1. Outlier filtering: remove tokens whose timestamp breaks monotonic coherence (> 2.5s from median)
+        st_list = [m["start"] for m in matches]
+        med_st = float(np.median(st_list))
+        clean_matches = [m for m in matches if abs(m["start"] - med_st) <= 2.5]
+        if not clean_matches:
+            clean_matches = matches
+
+        # Sort clean matches by word position in sentence
+        clean_matches.sort(key=lambda m: m["word_idx"])
+        first_m = clean_matches[0]
+        last_m = clean_matches[-1]
+
+        matched_st = first_m["start"]
+        matched_et = last_m["end"]
+
+        # 2. Speaking rate estimation (seconds per word)
+        matched_span = max(0.1, matched_et - matched_st)
+        num_matched_words = max(1, len(clean_matches))
+        avg_word_dur = min(0.35, max(0.15, matched_span / num_matched_words))
+
+        # 3. Head Extrapolation: If Whisper missed the first K words, extrapolate start backwards to true speech onset
+        head_words_missing = first_m["word_idx"]
+        if head_words_missing > 0:
+            matched_st = max(0.0, matched_st - (head_words_missing * avg_word_dur))
+
+        # 4. Tail Extrapolation: If Whisper missed the trailing words, extrapolate end forwards so dialogue is not cut short
+        tail_words_missing = (total_ev_words - 1) - last_m["word_idx"]
+        if tail_words_missing > 0:
+            matched_et = matched_et + (tail_words_missing * avg_word_dur)
+
+        avg_sim = 1.0 - (sum(m["dist"] for m in clean_matches) / len(clean_matches))
+        coverage = len(clean_matches) / max(1, total_ev_words)
         confidence = round(avg_sim * 0.6 + coverage * 0.4, 3)
 
-        is_confident = (confidence >= min_confidence) and (coverage >= 0.30)
+        is_confident = (confidence >= max(min_confidence, 0.48)) and (coverage >= 0.35)
 
         results.append({
             "event_idx": ev_idx,
             "matched_start": round(matched_st, 3),
             "matched_end": round(matched_et, 3),
             "confidence": confidence,
-            "aligned_words_count": len(matches),
+            "aligned_words_count": len(clean_matches),
             "total_words_count": total_ev_words,
             "is_confident": is_confident,
         })

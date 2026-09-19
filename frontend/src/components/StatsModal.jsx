@@ -1,7 +1,33 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import { X, BarChart2, Clock, Users, Type, ShieldCheck, Activity } from 'lucide-react';
 
 export default function StatsModal({ isOpen, onClose, segments, audioInfo, filename, complianceScore }) {
+  const [isClosing, setIsClosing] = useState(false);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setIsClosing(false);
+      return;
+    }
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        handleDismiss();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen]);
+
+  const handleDismiss = () => {
+    if (isClosing) return;
+    setIsClosing(true);
+    setTimeout(() => {
+      setIsClosing(false);
+      onClose();
+    }, 220);
+  };
+
   const stats = useMemo(() => {
     if (!segments || segments.length === 0) {
       return null;
@@ -59,8 +85,17 @@ export default function StatsModal({ isOpen, onClose, segments, audioInfo, filen
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
-      <div className="bg-[#14151a] border border-[#262734] rounded-2xl w-full max-w-2xl p-6 shadow-2xl flex flex-col max-h-[90vh] overflow-y-auto text-slate-200 custom-scrollbar">
+    <div
+      className={`fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md transition-opacity duration-200 ${
+        isClosing ? 'animate-mac-backdrop-exit pointer-events-none' : 'animate-in fade-in duration-200'
+      }`}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) handleDismiss();
+      }}
+    >
+      <div className={`bg-[#14151a] border border-[#262734] rounded-2xl w-full max-w-2xl p-6 shadow-2xl flex flex-col max-h-[90vh] overflow-y-auto text-slate-200 custom-scrollbar ${
+        isClosing ? 'animate-mac-squish-exit' : 'animate-mac-squish'
+      }`}>
         {/* Header */}
         <div className="flex items-center justify-between pb-4 border-b border-[#262734] mb-5">
           <div className="flex items-center gap-3">
@@ -73,7 +108,7 @@ export default function StatsModal({ isOpen, onClose, segments, audioInfo, filen
             </div>
           </div>
           <button
-            onClick={onClose}
+            onClick={handleDismiss}
             className="p-1.5 text-slate-400 hover:text-white rounded-xl bg-[#181920] hover:bg-[#22232c] border border-[#262734] transition-colors cursor-pointer"
           >
             <X className="w-4 h-4" />
@@ -187,7 +222,7 @@ export default function StatsModal({ isOpen, onClose, segments, audioInfo, filen
 
         <div className="mt-5 pt-3 border-t border-[#262734] flex justify-end">
           <button
-            onClick={onClose}
+            onClick={handleDismiss}
             className="px-4 py-2 bg-[#00e5be] hover:bg-[#00c8a5] text-black rounded-xl text-xs font-bold transition-all shadow-[0_0_15px_rgba(0,229,190,0.2)] cursor-pointer"
           >
             Close

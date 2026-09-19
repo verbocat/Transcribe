@@ -77,7 +77,10 @@ Your task is to fix subtitle events that have failed automated QC checks (CPL, C
 7. HINDI & MULTILINGUAL LINE BREAK RULES:
    - Break lines at natural punctuation ('।', '॥', ',', '?') or before conjunctions ('और', 'या', 'लेकिन', 'क्योंकि', 'इसलिए', 'ताकि', 'कि', 'तो', 'and', 'but').
    - NEVER break right before a Hindi postposition ('ने', 'को', 'से', 'का', 'के', 'की', 'में', 'पर', 'पे', 'तक') leaving it stranded on the next line! Keep postpositions with the preceding noun.
-   - NEVER sever honorifics/titles ('श्री', 'श्रीमती', 'डॉ.', 'Mr.', 'Mrs.').
+8. SCRIPT PURITY & TRANSLITERATION (RULE NF-CODE-MIXED-SCRIPT):
+   - If target script is Devanagari (Hindi): 100% of characters must be in Devanagari.
+   - Any English words, loan words, or English sentences MUST be phonetically transliterated as-is into Devanagari (e.g. 'I want to go' -> 'आई वांट टू गो', 'target' -> 'टारगेट', 'sorry' -> 'सॉरी', 'brother' -> 'ब्रदर').
+   - NEVER leave English words in Latin alphabet, and NEVER translate English sentences into Hindi meaning!
 
 Return the fixed subtitles in strict JSON format conforming to the provided schema.
 """
@@ -107,6 +110,7 @@ def _has_fixable_errors(qc_errors: List[Dict[str, Any]]) -> bool:
         "NF-LINE-BREAK-NUMBER",
         "NF-OVERLAP",
         "NF-DUAL-SPEAKER",
+        "NF-CODE-MIXED-SCRIPT",
     }
     for err in qc_errors:
         rule_id = err.get("rule_id", "")
@@ -224,37 +228,70 @@ def coordinate_gemini_qc_fix(
                     if w_et >= ev_st - 0.4 and w_st <= ev_et + 0.4:
                         ev_word_anchors.append(f"{w.get('word', '')} ({w_st:.2f}s-{w_et:.2f}s)")
 
+            # Phase 2 Fix 4: Build structured per-error diagnostics so Gemini knows
+            # exactly which rule failed, the measured value, the limit, and which line
+            # of text caused the violation — instead of just plain error message strings.
+            structured_errors = []
+            for e in ev.get("qc_errors", []):
+                err_entry = {
+                    "rule": e.get("rule_id", "UNKNOWN"),
+                    "severity": e.get("severity", "error"),
+                    "message": e.get("message", ""),
+                }
+                # Attach measured value and limit where available
+                if e.get("measured") is not None:
+                    err_entry["measured"] = e["measured"]
+                if e.get("limit") is not None:
+                    err_entry["limit"] = e["limit"]
+                # Attach the specific offending line if the error is line-level
+                if e.get("line") is not None:
+                    err_entry["offending_line"] = e["line"]
+                structured_errors.append(err_entry)
+
             fix_item = {
                 "batch_item_id": idx,
                 "current_start": ev.get("start_time_str") or format_timestamp(ev.get("start_time", 0.0)),
                 "current_end": ev.get("end_time_str") or format_timestamp(ev.get("end_time", 0.0)),
-                "duration": ev.get("duration", 0.0),
+                "duration_sec": round(ev_et - ev_st, 3),
+                "cps_current": round(calculate_cps(ev.get("text", ""), max(0.01, ev_et - ev_st)), 2),
+                "cpl_current": calculate_cpl(ev.get("text", "")),
                 "current_text": ev.get("text", ""),
-                "qc_errors": err_msgs,
+                "qc_violations": structured_errors,
                 "speakers": ev.get("speakers", ["Speaker 1"]),
             }
             if ev_word_anchors:
-                fix_item["spoken_word_timestamps"] = " ".join(ev_word_anchors[:25])
+                fix_item["spoken_word_timestamps"] = " | ".join(ev_word_anchors[:30])
 
             items_to_fix.append(fix_item)
 
-        fix_prompt = f"""Fix the following {len(items_to_fix)} subtitle event(s) to strictly satisfy all Netflix rules:
+
+        fix_prompt = f"""Fix the following {len(items_to_fix)} subtitle event(s) that have failed Netflix QC rules.
 
 Target Settings:
-- Max CPL: {cpl_limit}
-- Max CPS: {max_cps}
-- Max Lines: {max_lines}
+- Max CPL (characters per line): {cpl_limit}
+- Max CPS (characters per second): {max_cps}
+- Max Lines per event: {max_lines}
 
 Items to Fix:
 {json.dumps(items_to_fix, indent=2)}
 
-Instructions:
-- For each item, keep 100% verbatim spoken words.
-- Re-break lines with '\\n' so every line has <= {cpl_limit} characters.
-- If text is too long for its duration (CPS > {max_cps}), split it into TWO separate sequential subtitle events with appropriate timestamps!
-- Use the spoken_word_timestamps to ensure any split falls precisely at a natural pause between words.
-- Use the item's `batch_item_id` in the `id` field (or sub-ids if split, e.g. 101, 102).
+Fix Instructions — read each item's `qc_violations` list carefully:
+- Each violation has a `rule`, `severity`, `message`, and optionally `measured`, `limit`, `offending_line`.
+- NF-CPL: The `offending_line` exceeded {cpl_limit} chars. Re-break with '\\n' at a natural linguistic pause (conjunction, punctuation). NEVER break mid-name or before a Hindi postposition.
+- NF-CPS-ADULT / NF-CPS-CHILD: CPS is too high (measured > limit). SPLIT the event into TWO sequential events using `spoken_word_timestamps` to find the natural mid-point pause between words.
+- NF-MAX-LINES: 3 or more lines detected. Merge or re-break into exactly 1 or 2 lines.
+- NF-LINE-BREAK / NF-LINE-BREAK-POSTPOSITION / NF-LINE-BREAK-TITLE: Bad break point. Move the line break to a better syntactic boundary.
+- NF-DURATION-SHORT: Duration too short. Slightly adjust end_time forward if possible.
+- NF-DURATION-LONG: Duration too long. Split the event into two.
+- NF-OVERLAP: Timestamps overlap with adjacent event. Trim end_time of this event.
+- NF-DUAL-SPEAKER: Two speakers in one event. Split into separate events per speaker.
+
+For every item:
+1. NEVER rephrase, remove, or alter any spoken word. 100% verbatim accuracy required.
+2. Use `batch_item_id` in the returned `id` field. If split into 2 events, use sub-ids (e.g. 7 → 7, then a new event).
+3. Use `spoken_word_timestamps` (word | start-end format) to place any split precisely at a natural spoken pause.
 """
+
 
         response = None
         for cand_model in candidate_models:

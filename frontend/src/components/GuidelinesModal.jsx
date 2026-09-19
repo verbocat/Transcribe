@@ -1,14 +1,49 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { X, BookOpen } from 'lucide-react';
 
 export default function GuidelinesModal({ isOpen, onClose }) {
+  const [isClosing, setIsClosing] = useState(false);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setIsClosing(false);
+      return;
+    }
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        handleDismiss();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen]);
+
   if (!isOpen) return null;
 
+  const handleDismiss = () => {
+    if (isClosing) return;
+    setIsClosing(true);
+    setTimeout(() => {
+      setIsClosing(false);
+      onClose();
+    }, 220);
+  };
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
-      <div className="bg-[#14151a] border border-[#262734] rounded-2xl max-w-3xl w-full p-6 shadow-xl relative max-h-[85vh] overflow-y-auto text-slate-200 custom-scrollbar">
+    <div
+      className={`fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md transition-opacity duration-200 ${
+        isClosing ? 'animate-mac-backdrop-exit pointer-events-none' : 'animate-in fade-in duration-200'
+      }`}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) handleDismiss();
+      }}
+    >
+      <div className={`bg-[#14151a] border border-[#262734] rounded-2xl max-w-3xl w-full p-6 shadow-xl relative max-h-[85vh] overflow-y-auto text-slate-200 custom-scrollbar ${
+        isClosing ? 'animate-mac-squish-exit' : 'animate-mac-squish'
+      }`}>
         <button
-          onClick={onClose}
+          onClick={handleDismiss}
           className="absolute top-5 right-5 p-1.5 text-slate-400 hover:text-white rounded-lg bg-[#181920] hover:bg-[#22232c] border border-[#262734] transition-colors cursor-pointer"
         >
           <X className="w-4 h-4" />
@@ -89,7 +124,7 @@ export default function GuidelinesModal({ isOpen, onClose }) {
 
         <div className="mt-6 pt-4 border-t border-[#262734] flex justify-end">
           <button
-            onClick={onClose}
+            onClick={handleDismiss}
             className="px-5 py-2 bg-[#00e5be] hover:bg-[#00c9a7] text-black rounded-xl text-xs font-bold shadow-[0_0_12px_rgba(0,229,190,0.25)] cursor-pointer"
           >
             Got It

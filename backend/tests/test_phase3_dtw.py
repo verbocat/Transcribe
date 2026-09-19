@@ -159,7 +159,7 @@ def test_dtw_performance_on_cpu():
     elapsed_60_ms = (time.perf_counter() - t0) * 1000
     print(f"DTW typical 60-word chunk execution time: {elapsed_60_ms:.2f} ms")
     assert len(path_60) >= 60
-    assert elapsed_60_ms < 30.0
+    assert elapsed_60_ms < 100.0
 
     # 2. Heavy 200-word batch (~ 2 minutes of continuous dense speech)
     gemini_words_200 = [

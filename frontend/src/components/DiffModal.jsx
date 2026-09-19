@@ -1,7 +1,33 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import { X, GitCompare, Check } from 'lucide-react';
 
 export default function DiffModal({ isOpen, onClose, originalSegments, currentSegments }) {
+  const [isClosing, setIsClosing] = useState(false);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setIsClosing(false);
+      return;
+    }
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        handleDismiss();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen]);
+
+  const handleDismiss = () => {
+    if (isClosing) return;
+    setIsClosing(true);
+    setTimeout(() => {
+      setIsClosing(false);
+      onClose();
+    }, 220);
+  };
+
   const diffs = useMemo(() => {
     if (!originalSegments || !currentSegments) return [];
 
@@ -44,8 +70,17 @@ export default function DiffModal({ isOpen, onClose, originalSegments, currentSe
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
-      <div className="bg-[#14151a] border border-[#262734] rounded-2xl w-full max-w-3xl p-6 shadow-2xl flex flex-col max-h-[90vh] text-slate-200 custom-scrollbar">
+    <div
+      className={`fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md transition-opacity duration-200 ${
+        isClosing ? 'animate-mac-backdrop-exit pointer-events-none' : 'animate-in fade-in'
+      }`}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) handleDismiss();
+      }}
+    >
+      <div className={`bg-[#14151a] border border-[#262734] rounded-2xl w-full max-w-3xl p-6 shadow-2xl flex flex-col max-h-[90vh] text-slate-200 custom-scrollbar ${
+        isClosing ? 'animate-mac-squish-exit' : 'animate-mac-squish'
+      }`}>
         {/* Header */}
         <div className="flex items-center justify-between pb-4 border-b border-[#262734]">
           <div className="flex items-center gap-3">
@@ -65,7 +100,7 @@ export default function DiffModal({ isOpen, onClose, originalSegments, currentSe
             </div>
           </div>
           <button
-            onClick={onClose}
+            onClick={handleDismiss}
             className="p-2 text-slate-400 hover:text-white rounded-xl bg-[#181920] hover:bg-[#22232c] border border-[#262734] transition-colors cursor-pointer"
           >
             <X className="w-4 h-4" />
@@ -121,7 +156,7 @@ export default function DiffModal({ isOpen, onClose, originalSegments, currentSe
         {/* Footer */}
         <div className="mt-4 pt-3 border-t border-[#262734] flex justify-end">
           <button
-            onClick={onClose}
+            onClick={handleDismiss}
             className="px-4 py-2 bg-[#00e5be] hover:bg-[#00c9a7] text-black font-bold rounded-xl text-xs transition-all shadow-[0_0_12px_rgba(0,229,190,0.25)] cursor-pointer"
           >
             Close Diff View

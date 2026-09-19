@@ -3,6 +3,7 @@ import {
   BookOpen, Sparkles, ShieldCheck, Database, BarChart2,
   Users, Undo2, Redo2, UploadCloud, GitCompare, StickyNote
 } from 'lucide-react';
+import AccountMenuDropdown from './AccountMenuDropdown';
 
 export default function Navbar({
   hasApiKey,
@@ -21,7 +22,9 @@ export default function Navbar({
   segmentCount,
   complianceScore,
   totalErrors,
-  totalWarnings
+  totalWarnings,
+  user,
+  onOpenLogoutModal
 }) {
   const isPassing = complianceScore !== null && complianceScore !== undefined && complianceScore >= 98.0;
   const subtitleInputRef = useRef(null);
@@ -196,8 +199,16 @@ export default function Navbar({
                 hasApiKey ? 'bg-[#00e5be] shadow-[0_0_6px_#00e5be]' : 'bg-amber-400'
               }`}
             />
-            <span className="font-semibold text-[10px]">{hasApiKey ? 'Gemini 2.5' : 'API Key Setup'}</span>
+            <span className="font-semibold text-[10px]">{hasApiKey ? 'Gemini Flash' : 'API Key Setup'}</span>
           </div>
+
+          {/* User Account & Seat Status Dropdown */}
+          {user && (
+            <AccountMenuDropdown
+              user={user}
+              onOpenLogoutModal={onOpenLogoutModal}
+            />
+          )}
         </div>
       </div>
     </header>

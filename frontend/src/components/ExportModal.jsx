@@ -12,8 +12,33 @@ export default function ExportModal({
   const [selectedFormats, setSelectedFormats] = useState(['csv', 'docx', 'xlsx', 'srt']);
   const [filenameTemplate, setFilenameTemplate] = useState('default');
   const [customFilename, setCustomFilename] = useState('');
+  const [isClosing, setIsClosing] = useState(false);
+
+  React.useEffect(() => {
+    if (!isOpen) {
+      setIsClosing(false);
+      return;
+    }
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        handleDismiss();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen]);
 
   if (!isOpen || !transcriptionResult) return null;
+
+  const handleDismiss = () => {
+    if (isClosing) return;
+    setIsClosing(true);
+    setTimeout(() => {
+      setIsClosing(false);
+      onClose();
+    }, 220);
+  };
 
   const formats = [
     {
@@ -178,11 +203,20 @@ export default function ExportModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
-      <div className="bg-[#14151a] border border-[#262734] rounded-2xl max-w-2xl w-full p-6 shadow-2xl relative max-h-[90vh] overflow-y-auto text-slate-200 custom-scrollbar">
+    <div
+      className={`fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md transition-opacity duration-200 ${
+        isClosing ? 'animate-mac-backdrop-exit pointer-events-none' : 'animate-in fade-in duration-200'
+      }`}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) handleDismiss();
+      }}
+    >
+      <div className={`bg-[#14151a] border border-[#262734] rounded-2xl max-w-2xl w-full p-6 shadow-2xl relative max-h-[90vh] overflow-y-auto text-slate-200 custom-scrollbar ${
+        isClosing ? 'animate-mac-squish-exit' : 'animate-mac-squish'
+      }`}>
         {/* Close Button */}
         <button
-          onClick={onClose}
+          onClick={handleDismiss}
           className="absolute top-5 right-5 p-2 text-slate-400 hover:text-white rounded-xl bg-[#181920] hover:bg-[#22232c] border border-[#262734] transition-colors cursor-pointer"
         >
           <X className="w-4 h-4" />
@@ -332,7 +366,7 @@ export default function ExportModal({
         {/* Footer with Big Multi-Download Button */}
         <div className="flex flex-wrap items-center justify-between gap-3 pt-4 border-t border-[#262734]">
           <button
-            onClick={onClose}
+            onClick={handleDismiss}
             className="px-4 py-2.5 bg-[#181920] hover:bg-[#22232c] text-slate-300 rounded-xl text-xs font-semibold border border-[#262734] cursor-pointer"
           >
             Cancel

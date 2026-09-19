@@ -1,7 +1,7 @@
 """
 Whisper-based timestamp alignment for Subtitle Studio.
 
-Runs OpenAI Whisper (base model, CPU) to extract word-level timestamps,
+Runs OpenAI Whisper (medium model, CPU) to extract word-level timestamps,
 then aligns Gemini-generated subtitle events to precise acoustic boundaries.
 Gemini owns the text; Whisper only provides start/end timing.
 """
@@ -41,6 +41,12 @@ except Exception:
 logger = logging.getLogger(__name__)
 
 DEBUG_ALIGNER = os.getenv("DEBUG_WHISPER_ALIGNER", "false").lower() in ["1", "true", "yes"]
+
+# Phase 3 Fix 5: Feature flag — pre-filter Whisper word list to speech-only regions before DTW.
+# When True, words that fall in silence gaps between acoustic anchors are removed before alignment.
+# This prevents the DTW from anchoring Gemini events to hallucinated words during silence.
+# Default: false (safe off). Enable with ACOUSTIC_DTW_PREFILTER=true in .env
+ACOUSTIC_DTW_PREFILTER = os.getenv("ACOUSTIC_DTW_PREFILTER", "false").lower() in ["1", "true", "yes"]
 
 # Module-level model cache
 _whisper_model = None
@@ -83,15 +89,57 @@ def log_terminal(msg: str):
     print(f"[{now_str}] [Whisper Aligner] {msg}", flush=True)
 
 
+def _filter_hallucinated_words(words: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Filter out hallucinated or invalid word entries produced by Whisper.
+
+    Whisper (especially medium+ on CPU with greedy decode) can produce:
+      - Words with impossibly short duration (<30ms) — attention artifacts
+      - Words with zero/negative duration (end <= start)
+      - Words whose timestamps didn't advance beyond the previous word
+        (stuck-hallucination: model re-generates the same region repeatedly)
+      - Completely empty words after stripping whitespace
+
+    Removing these before alignment prevents the DTW and span-matcher from
+    trying to anchor Gemini events to timestamps that don't represent real speech.
+    """
+    filtered = []
+    prev_end = -1.0
+    for w in words:
+        word_text = w.get("word", "").strip()
+        if not word_text:
+            continue
+        w_start = float(w.get("start", 0.0))
+        w_end = float(w.get("end", 0.0))
+        duration = w_end - w_start
+        # Reject zero or negative duration
+        if duration <= 0.0:
+            continue
+        # Reject impossibly short words (<30ms) — almost always hallucination artifacts
+        if duration < 0.030:
+            continue
+        # Reject if end timestamp didn't advance past previous word's end
+        # (means Whisper is re-generating over the same audio region)
+        if w_end <= prev_end + 0.01:
+            continue
+        filtered.append(w)
+        prev_end = w_end
+    return filtered
+
+
 def load_whisper_model(model_name: Optional[str] = None):
     """
     Lazy-load Whisper model and cache it globally.
-    Defaults to 'tiny' on cloud (Render 512MB RAM) and 'base' on local desktop.
+    Defaults to 'medium'.
     """
     global _whisper_model, _whisper_model_name
 
     is_cloud = bool(os.getenv("RENDER") or os.getenv("PORT"))
     if not model_name:
+        # Tiny on cloud (Render 512MB RAM), base on local desktop.
+        # Medium is NOT recommended here: Whisper is used only for acoustic timing,
+        # not full transcription. Base gives tighter word timestamps, lower hallucination
+        # rate under greedy decode, and processes all 30s chunks without memory pressure.
         model_name = os.getenv("WHISPER_MODEL", "tiny" if is_cloud else "base")
 
     if _whisper_model is not None and _whisper_model_name == model_name:
@@ -131,7 +179,7 @@ def get_whisper_word_timestamps(
     Args:
         audio_path: Path to the WAV audio file.
         language: Optional language code (e.g. 'hi', 'en', 'ta') for better accuracy.
-        model_name: Whisper model size ('tiny', 'base', 'small').
+        model_name: Whisper model size (defaults to 'medium').
 
     Returns:
         Flat list of word dicts: [{"word": "hello", "start": 0.52, "end": 0.88}, ...]
@@ -177,12 +225,22 @@ def get_whisper_word_timestamps(
         if len(data.shape) > 1:
             data = data.mean(axis=1)  # downmix stereo to mono
         if sr != 16000:
-            new_samples = int(len(data) * 16000 / sr)
-            data = np.interp(
-                np.linspace(0, len(data), new_samples, endpoint=False),
-                np.arange(len(data)),
-                data
-            ).astype(np.float32)
+            # scipy.resample_poly is a polyphase filter — far better quality than
+            # np.interp (linear). This matters because medium model is more sensitive
+            # to resampling artifacts than base/tiny.
+            try:
+                from scipy.signal import resample_poly
+                from math import gcd
+                g = gcd(int(sr), 16000)
+                data = resample_poly(data, 16000 // g, int(sr) // g).astype(np.float32)
+            except Exception:
+                # Fallback to linear interpolation if scipy is unavailable
+                new_samples = int(len(data) * 16000 / sr)
+                data = np.interp(
+                    np.linspace(0, len(data), new_samples, endpoint=False),
+                    np.arange(len(data)),
+                    data
+                ).astype(np.float32)
         audio_input = data
     except Exception as read_err:
         log_terminal(f"soundfile direct read fallback: {read_err}")
@@ -205,6 +263,13 @@ def get_whisper_word_timestamps(
             })
 
     log_terminal(f"Whisper extracted {len(words)} words with timestamps.")
+
+    # Filter hallucinated/invalid word timestamps before passing to aligner.
+    # Without this, medium model hallucinations cause the DTW/span matcher to
+    # anchor Gemini events to timestamps that don't correspond to real speech.
+    words = _filter_hallucinated_words(words)
+    log_terminal(f"After hallucination filter: {len(words)} valid words remaining.")
+
     return words
 
 
@@ -424,6 +489,51 @@ def extract_acoustic_timeline_anchors(
     return anchors
 
 
+def _prefilter_words_to_speech_regions(
+    words: List[Dict[str, Any]],
+    anchors: List[Dict[str, Any]],
+    collar_sec: float = 0.10
+) -> List[Dict[str, Any]]:
+    """
+    Phase 3 Fix 5: Remove Whisper words that fall in silence gaps between acoustic anchors.
+
+    Words in silence regions are almost always Whisper hallucinations — the model invents
+    words for breath sounds, ambient noise, or decoder artifacts between real speech bursts.
+    Removing them before DTW alignment prevents false matches in silent segments.
+
+    A word is KEPT if it overlaps with any acoustic anchor interval (with collar_sec margin).
+    A word is REMOVED if it falls entirely in a silence gap between anchors.
+
+    Args:
+        words: Full Whisper word list.
+        anchors: Output of extract_acoustic_timeline_anchors() — speech interval list.
+        collar_sec: Extra margin around each anchor (default 0.10s) to avoid
+                    clipping words at the edge of speech bursts.
+
+    Returns:
+        Filtered word list containing only words overlapping real speech regions.
+    """
+    if not anchors:
+        return words  # No anchors = can't filter = return full list unchanged
+
+    filtered = []
+    for w in words:
+        w_start = float(w.get("start", 0.0))
+        w_end = float(w.get("end", w_start + 0.1))
+        # Check if word overlaps any acoustic speech interval (with collar)
+        in_speech = any(
+            w_start < (a["end"] + collar_sec) and w_end > (a["start"] - collar_sec)
+            for a in anchors
+        )
+        if in_speech:
+            filtered.append(w)
+
+    removed = len(words) - len(filtered)
+    if removed > 0:
+        log_terminal(f"Acoustic pre-filter: removed {removed} silence-region words from {len(words)} total (kept {len(filtered)}).")
+    return filtered
+
+
 DISTINCT_OCCURRENCE_GAP_SEC = 0.6  # Tightened from 1.5s for rapid dialogue and filler exchanges
 
 
@@ -451,9 +561,12 @@ def _find_best_span(
     best_e_idx = None
     best_score = 0.0
     best_time_diff = float('inf')
+    best_total_sim = 0.0
     second_best_score = 0.0
 
-    max_scan = min(total_w, search_start + target_len + 35)
+    # Widened from +35 to +55: gives the scanner more room to find matches
+    # when there's a pause or dense dialogue causing cursor lag.
+    max_scan = min(total_w, search_start + target_len + 55)
     candidates = []
 
     for s_i in range(search_start, max_scan):
@@ -484,23 +597,25 @@ def _find_best_span(
             score = total_sim - proximity_penalty
             candidates.append((score, s_i, e_i, cand_st, time_diff, total_sim))
 
-    if candidates:
-        # Sort descending by score
-        candidates.sort(key=lambda c: c[0], reverse=True)
-        best_cand = candidates[0]
-        best_score = best_cand[0]
-        best_s_idx = best_cand[1]
-        best_e_idx = best_cand[2]
-        best_st = best_cand[3]
-        best_time_diff = best_cand[4]
-        best_total_sim = best_cand[5]
+    if not candidates:
+        return None, None, 0.0, 0.0, False
 
-        # Find highest-scoring candidate representing a distinct occurrence (Fix 2)
-        for c in candidates[1:]:
-            cand_st = c[3]
-            if abs(cand_st - best_st) > DISTINCT_OCCURRENCE_GAP_SEC:
-                second_best_score = c[0]
-                break
+    # Sort descending by score
+    candidates.sort(key=lambda c: c[0], reverse=True)
+    best_cand = candidates[0]
+    best_score = best_cand[0]
+    best_s_idx = best_cand[1]
+    best_e_idx = best_cand[2]
+    best_st = best_cand[3]
+    best_time_diff = best_cand[4]
+    best_total_sim = best_cand[5]
+
+    # Find highest-scoring candidate representing a distinct occurrence (Fix 2)
+    for c in candidates[1:]:
+        cand_st = c[3]
+        if abs(cand_st - best_st) > DISTINCT_OCCURRENCE_GAP_SEC:
+            second_best_score = c[0]
+            break
 
     # Dynamic margin:
     # If Gemini's timestamp and Whisper's match are within 600ms and similarity is high (>=0.88),
@@ -514,9 +629,12 @@ def _find_best_span(
     # If this is an unambiguous unique occurrence (no competing duplicate phrase),
     # trust the acoustic match if text similarity is healthy (>= 0.60).
     if second_best_score == 0.0:
-        is_confident = (best_score >= 0.45) or (best_total_sim >= 0.60)
+        # Lowered threshold from 0.45/0.60 → 0.38/0.52:
+        # The original values caused batch-skipping on short Indic words
+        # and single-syllable dialogue where similarity scores are inherently lower.
+        is_confident = (best_score >= 0.38) or (best_total_sim >= 0.52)
     else:
-        is_confident = (best_score >= 0.48) and has_clear_margin
+        is_confident = (best_score >= 0.45) and has_clear_margin
 
     return best_s_idx, best_e_idx, best_score, second_best_score, is_confident
 
@@ -546,6 +664,9 @@ def align_subtitle_timestamps(
 
     total_events = len(gemini_events)
     total_w = len(whisper_words)
+    if not gemini_events or total_w == 0:
+        return gemini_events
+
     w_cursor = 0
     audio_cursor = prev_batch_end
     aligned_count = 0
@@ -553,9 +674,36 @@ def align_subtitle_timestamps(
     fallback_ambiguous = 0
     min_gap = round(2.0 / frame_rate, 3)
 
+    # Phase 2 Circuit Breaker: Compare Gemini word count with Whisper word count.
+    # When speech is rapid or slurred on CPU, Whisper base/tiny often drops words (>50% mismatch)
+    # or falls into greedy repetition loops (>300% inflation).
+    # If Whisper exhibits severe discrepancy, attempting DTW forces Gemini's text
+    # into distorted/hallucinated timestamps. In that case, preserve Gemini's direct audio timestamps cleanly!
+    gemini_word_count = sum(len(e.get("text", "").split()) for e in gemini_events)
+    if gemini_word_count > 10 and (total_w < gemini_word_count * 0.50 or total_w > gemini_word_count * 3.0):
+        log_terminal(
+            f"Acoustic Alignment Circuit Breaker: Whisper detected {total_w} words vs {gemini_word_count} in Gemini. "
+            f"Bypassing DTW alignment to preserve Gemini's native acoustic timestamps."
+        )
+        return gemini_events
+
+    # Phase 3 Fix 5: Optionally pre-filter Whisper words to speech-only regions.
+    # Controlled by ACOUSTIC_DTW_PREFILTER env flag (default: false).
+    # When enabled, builds acoustic anchors from the word list and removes words
+    # that fall in silence gaps — preventing false DTW matches in quiet sections.
+    dtw_words = whisper_words
+    if ACOUSTIC_DTW_PREFILTER:
+        try:
+            speech_anchors = extract_acoustic_timeline_anchors(whisper_words)
+            dtw_words = _prefilter_words_to_speech_regions(whisper_words, speech_anchors)
+            log_terminal(f"Acoustic DTW pre-filter active: {len(dtw_words)}/{len(whisper_words)} words used for alignment.")
+        except Exception as prefilter_err:
+            log_terminal(f"Acoustic pre-filter warning (using full word list): {prefilter_err}")
+            dtw_words = whisper_words
+
     # Pre-compute Global Monotonic DTW Alignment
     try:
-        dtw_results = align_events_dtw(gemini_events, whisper_words)
+        dtw_results = align_events_dtw(gemini_events, dtw_words)
     except Exception as dtw_err:
         log_terminal(f"DTW alignment error, using fallback matcher: {dtw_err}")
         dtw_results = []
@@ -569,7 +717,9 @@ def align_subtitle_timestamps(
         orig_dur = max(min_duration, round(orig_et - orig_st, 3))
 
         if not clean_words:
-            st = round(max(audio_cursor + min_gap, orig_st), 3)
+            st = orig_st
+            if ev_idx > 0 and st < audio_cursor + min_gap:
+                st = round(audio_cursor + min_gap, 3)
             et = round(st + orig_dur, 3)
             event["start_time"] = st
             event["end_time"] = et
@@ -585,23 +735,29 @@ def align_subtitle_timestamps(
         target_norm = " ".join(clean_words)
         target_len = len(clean_words)
 
-        # Primary Alignment: Global Monotonic DTW
+        # Primary Alignment: Global Monotonic DTW with audio proximity verification
         dtw_res = dtw_results[ev_idx] if dtw_results and ev_idx < len(dtw_results) else None
+        dtw_accepted = False
         if dtw_res and dtw_res.get("is_confident") and dtw_res.get("matched_start") is not None:
-            matched_start = float(dtw_res["matched_start"])
-            matched_end = float(dtw_res["matched_end"])
-            is_confident = True
-            aligned_count += 1
-            best_score = float(dtw_res.get("confidence", 1.0))
-            second_best_score = 0.0
-            # Advance w_cursor past matched_end
-            while w_cursor < total_w and whisper_words[w_cursor]["end"] <= matched_end:
-                w_cursor += 1
-        else:
+            cand_st = float(dtw_res["matched_start"])
+            cand_et = float(dtw_res["matched_end"])
+            # Acoustic sanity check: DTW timestamp must not drift > 2.0s away from Gemini's audio ear
+            if abs(cand_st - orig_st) <= 2.0 and cand_st >= audio_cursor - 0.5 and cand_et > cand_st:
+                matched_start = cand_st
+                matched_end = cand_et
+                is_confident = True
+                aligned_count += 1
+                best_score = float(dtw_res.get("confidence", 1.0))
+                second_best_score = 0.0
+                dtw_accepted = True
+                while w_cursor < total_w and whisper_words[w_cursor]["end"] <= matched_end:
+                    w_cursor += 1
+
+        if not dtw_accepted:
             # Secondary Alignment Fallback: Local Window Span Matcher (_find_best_span)
-            search_start = max(0, w_cursor - 4)
-            while search_start > 0 and whisper_words[search_start]["end"] > audio_cursor:
-                search_start -= 1
+            search_start = max(0, w_cursor - 2)
+            while search_start < total_w - 1 and whisper_words[search_start]["end"] < audio_cursor - 0.6:
+                search_start += 1
 
             best_s_idx, best_e_idx, best_score, second_best_score, is_confident = _find_best_span(
                 clean_words=clean_words,
@@ -614,7 +770,7 @@ def align_subtitle_timestamps(
                 total_w=total_w
             )
 
-            if is_confident and best_s_idx is not None:
+            if is_confident and best_s_idx is not None and abs(whisper_words[best_s_idx]["start"] - orig_st) <= 2.5:
                 matched_start = whisper_words[best_s_idx]["start"]
                 matched_end = whisper_words[best_e_idx]["end"]
                 w_cursor = best_e_idx + 1
@@ -625,7 +781,7 @@ def align_subtitle_timestamps(
                 else:
                     fallback_ambiguous += 1
                 # Ambiguous repetition or weak match: fall back cleanly to Gemini's timestamp guess
-                matched_start = max(audio_cursor + min_gap, orig_st)
+                matched_start = orig_st
                 matched_end = max(matched_start + min_duration, orig_et)
                 # Advance w_cursor to the first word near matched_start to keep cursor progressing
                 while w_cursor < total_w and whisper_words[w_cursor]["start"] < matched_start - 0.2:
@@ -639,8 +795,8 @@ def align_subtitle_timestamps(
         if audio_path and os.path.exists(audio_path):
             try:
                 # If confident, tight collar (0.08s) eliminates residual word-boundary jitter
-                # If not confident, wider collar (0.20s) locates the actual vocal island
-                collar = 0.08 if is_confident else 0.20
+                # If not confident, wider collar (0.80s) enables VAD to bridge Gemini's coarse guess to true vocal energy
+                collar = 0.08 if is_confident else 0.80
                 snapped_st, snapped_et = snap_to_acoustic_boundaries(
                     audio_path, matched_start, matched_end, collar_sec=collar
                 )
@@ -656,13 +812,20 @@ def align_subtitle_timestamps(
         et = round(min(st + max_duration, st + raw_dur), 3)
 
         trimmed_prev = False
-        # Acoustic anchor principle: current speech onset (st) must not be pushed into the future
+        # Acoustic anchor principle: current speech onset (st) is locked to acoustic voice onset
+        # Trim preceding event's end_time unless prev was confident and current is an unconfident fallback
         if st < audio_cursor + min_gap:
             if ev_idx > 0:
                 prev_ev = gemini_events[ev_idx - 1]
                 prev_st = float(prev_ev.get("start_time", 0.0))
+                prev_was_confident = prev_ev.get("_aligned_confident", False)
                 target_prev_end = round(st - min_gap, 3)
-                if target_prev_end > prev_st + 0.05:
+
+                if prev_was_confident and not is_confident:
+                    # Protect confident acoustic line: don't let an unconfident fallback guess truncate it!
+                    st = round(audio_cursor + min_gap, 3)
+                    et = round(st + raw_dur, 3)
+                elif target_prev_end > prev_st + 0.20:
                     prev_ev["end_time"] = target_prev_end
                     prev_ev["end"] = target_prev_end
                     prev_ev["duration"] = round(target_prev_end - prev_st, 3)
@@ -670,12 +833,14 @@ def align_subtitle_timestamps(
                     audio_cursor = target_prev_end
                     trimmed_prev = True
                 else:
-                    # In degenerate cases where words completely coincided, sequence safely
+                    # Only in true degenerate cases where speech completely collided, sequence safely
                     st = round(audio_cursor + min_gap, 3)
                     et = round(st + raw_dur, 3)
             else:
-                st = round(audio_cursor + min_gap, 3)
-                et = round(st + raw_dur, 3)
+                # Event 0: only sequence if within collar collision distance of prev_batch_end
+                if audio_cursor > 0 and (audio_cursor - 1.0 <= st <= audio_cursor + min_gap):
+                    st = round(audio_cursor + min_gap, 3)
+                    et = round(st + raw_dur, 3)
 
         dur = max(0.01, round(et - st, 3))
 
@@ -702,6 +867,10 @@ def align_subtitle_timestamps(
     # Fix 1: Strip internal confidence tag before returning events to frontend/caller
     for ev in gemini_events:
         ev.pop("_aligned_confident", None)
+
+    # Phase 1: Zero-Overlap Invariant Guarantee
+    from app.netflix_linter import auto_chain_gaps
+    gemini_events = auto_chain_gaps(gemini_events, frame_rate=frame_rate, min_duration=min_duration, max_cps=20.0)
 
     log_terminal(
         f"Acoustic alignment complete: {aligned_count}/{total_events} events aligned. "
