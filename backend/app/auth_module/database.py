@@ -8,16 +8,12 @@ logger = logging.getLogger(__name__)
 
 AuthBase = declarative_base()
 
-# Target server path specified by Administrator
-DEFAULT_SERVER_DB_PATH = r"C:\Users\Administrator.VERBOLABS.000\data\transcribe_app.db"
-
 def get_database_path() -> Path:
     """
     Determines the SQLite database file path.
     Prioritizes:
     1. Explicit SERVER_DB_PATH env var if provided.
-    2. C:\\Users\\Administrator.VERBOLABS.000\\data\\transcribe_app.db (target server path).
-    3. Fallback to local backend/data/transcribe_app.db if server path cannot be accessed.
+    2. Project local backend/data/transcribe_app.db (preferred for self-contained server deployment).
     """
     env_path = os.getenv("SERVER_DB_PATH")
     if env_path:
@@ -25,19 +21,10 @@ def get_database_path() -> Path:
         p.parent.mkdir(parents=True, exist_ok=True)
         return p
 
-    target_path = Path(DEFAULT_SERVER_DB_PATH)
-    try:
-        # Check if the server path parent exists or can be created
-        target_path.parent.mkdir(parents=True, exist_ok=True)
-        return target_path
-    except Exception as e:
-        # Fallback for development machine where Administrator.VERBOLABS.000 doesn't exist
-        backend_dir = Path(__file__).resolve().parent.parent.parent
-        local_db_dir = backend_dir / "data"
-        local_db_dir.mkdir(parents=True, exist_ok=True)
-        fallback_path = local_db_dir / "transcribe_app.db"
-        logger.info(f"Server DB path '{DEFAULT_SERVER_DB_PATH}' not accessible ({e}). Using local fallback: {fallback_path}")
-        return fallback_path
+    backend_dir = Path(__file__).resolve().parent.parent.parent
+    local_db_dir = backend_dir / "data"
+    local_db_dir.mkdir(parents=True, exist_ok=True)
+    return local_db_dir / "transcribe_app.db"
 
 db_file_path = get_database_path()
 SQLITE_URL = f"sqlite:///{db_file_path.as_posix()}"

@@ -1,11 +1,14 @@
 import os
 import math
+import logging
 from pathlib import Path
 from typing import List, Tuple, Dict, Any, Optional
 import numpy as np
 import soundfile as sf
 from pydub import AudioSegment
 import imageio_ffmpeg
+
+logger = logging.getLogger(__name__)
 
 from app.config import (
     MAX_SEGMENT_DURATION,
@@ -456,18 +459,34 @@ def snap_to_acoustic_boundaries(
 
 def find_dialogue_split_points(
     audio_path: str,
-    target_chunk_sec: float = 180.0,   # ~3 minute chunks for rich conversational context
-    min_chunk_sec: float = 120.0,      # at least 2m
-    max_chunk_sec: float = 240.0,      # at most 4m
+    target_chunk_sec: float = 90.0,    # ~90s batches for fast, high-quality delivery
+    min_chunk_sec: float = 65.0,       # at least 65s
+    max_chunk_sec: float = 115.0,      # up to 115s (+/- n seconds)
     start_offset_sec: float = 0.0
 ) -> List[Tuple[float, float]]:
     """
-    Partitions a long audio file into natural conversational chunks.
-    Seeks directly to candidate search windows using < 3MB RAM (1000x faster than reading full file).
-    CRITICAL: Splits ONLY at genuine dialogue silences / sentence completion pauses
-    so that words or sentences are NEVER cut in the middle.
-    Returns list of (start_sec, end_sec) chunks covering the requested range without gaps.
+    Partitions audio into ~90s batches (+/- n seconds) ending at clean dialogue pauses (>= 1-2s).
+    Prefers Silero neural VAD to distinguish human speech from background music/score.
+    Falls back to vectorized acoustic energy pause detection if VAD is unavailable.
     """
+    # 1. Try Silero VAD for neural voice activity detection (resilient to background music)
+    try:
+        from app.vad_processor import is_vad_available, find_vad_dialogue_cut_points
+        if is_vad_available():
+            vad_chunks = find_vad_dialogue_cut_points(
+                audio_path,
+                target_chunk_sec=target_chunk_sec,
+                min_chunk_sec=min_chunk_sec,
+                max_chunk_sec=max_chunk_sec,
+                min_pause_sec=1.2,
+                start_offset_sec=start_offset_sec
+            )
+            if vad_chunks:
+                return vad_chunks
+    except Exception as e:
+        logger.warning(f"VAD dialogue cut points failed, falling back to energy pause detection: {e}")
+
+    # 2. Energy-based fallback
     try:
         info = sf.info(audio_path)
         total_sec = float(info.duration)
@@ -509,22 +528,21 @@ def find_dialogue_split_points(
             hop_len = int(samplerate * 0.01)    # 10ms
             num_hops = max(1, (len(window_data) - frame_len) // hop_len)
 
-            # Vectorized energy calculation (instant execution in milliseconds)
             strided = np.lib.stride_tricks.sliding_window_view(window_data[:num_hops * hop_len + frame_len], frame_len)[::hop_len]
             energies = np.sqrt(np.mean(strided**2, axis=1))
             candidate_times = win_s + (np.arange(len(energies)) * 0.01)
 
-            # Dynamic local noise floor and speech energy threshold
             floor = float(np.percentile(energies, 1))
             p90 = float(np.percentile(energies, 85))
             dyn_range = max(1e-5, p90 - floor)
             silence_threshold = floor + 0.16 * dyn_range
 
-            # Find consecutive silent frames (runs >= 350ms)
             silent_mask = energies <= silence_threshold
             best_score = float('inf')
             run_start = None
 
+            # Look for sustained dialogue pauses (preferring >= 1.0s - 1.5s)
+            found_runs = []
             for idx, is_sil in enumerate(silent_mask):
                 if is_sil:
                     if run_start is None:
@@ -535,29 +553,32 @@ def find_dialogue_split_points(
                         run_dur = run_len * 0.01
                         if run_dur >= 0.35:
                             run_mid_time = candidate_times[(run_start + idx) // 2]
-                            dist_penalty = abs(run_mid_time - (cur_start + target_chunk_sec)) * 0.3
-                            sil_bonus = min(run_dur, 3.0) * 45.0
-                            score = dist_penalty - sil_bonus
-                            if score < best_score:
-                                best_score = score
-                                best_split_point = run_mid_time
+                            found_runs.append((run_mid_time, run_dur))
                         run_start = None
 
-            # Check trailing run if loop ended while in silence
             if run_start is not None:
                 run_len = len(silent_mask) - run_start
                 run_dur = run_len * 0.01
                 if run_dur >= 0.35:
                     run_mid_time = candidate_times[(run_start + len(silent_mask)) // 2]
-                    dist_penalty = abs(run_mid_time - (cur_start + target_chunk_sec)) * 0.3
-                    sil_bonus = min(run_dur, 3.0) * 45.0
-                    score = dist_penalty - sil_bonus
-                    if score < best_score:
-                        best_score = score
-                        best_split_point = run_mid_time
+                    found_runs.append((run_mid_time, run_dur))
 
-            # If no sustained pause was found below threshold, find the deepest acoustic valley
-            if best_score == float('inf'):
+            # Tier 1: Look for runs >= 1.2s pause
+            tier1 = [r for r in found_runs if r[1] >= 1.2]
+            if tier1:
+                best_run = min(tier1, key=lambda r: abs(r[0] - (cur_start + target_chunk_sec)))
+                best_split_point = best_run[0]
+            elif found_runs:
+                # Tier 2: Best available pause >= 0.5s closest to target
+                tier2 = [r for r in found_runs if r[1] >= 0.5]
+                if tier2:
+                    best_run = min(tier2, key=lambda r: abs(r[0] - (cur_start + target_chunk_sec)))
+                    best_split_point = best_run[0]
+                else:
+                    best_run = min(found_runs, key=lambda r: abs(r[0] - (cur_start + target_chunk_sec)))
+                    best_split_point = best_run[0]
+            else:
+                # If no pause found, find the deepest acoustic valley
                 roll_window = 50
                 if len(energies) > roll_window:
                     kernel = np.ones(roll_window) / roll_window
@@ -576,6 +597,7 @@ def find_dialogue_split_points(
         cur_start = best_split_point
 
     return chunks
+
 
 
 def extract_audio_slice(audio_path: str, start_sec: float, end_sec: float, output_path: str) -> str:
@@ -598,6 +620,46 @@ def extract_audio_slice(audio_path: str, start_sec: float, end_sec: float, outpu
         except Exception as e:
             print(f"Error extracting audio slice: {e}")
             return audio_path
+
+
+def apply_dynamic_audio_normalization(input_wav: str, output_wav: str) -> str:
+    """
+    Applies FFmpeg dynamic audio normalizer (dynaudnorm) to boost quiet in-game/Discord
+    voice chat so all speakers have balanced volume before feeding to Gemini and Whisper.
+    
+    Parameters:
+    - p=0.95: Target peak amplitude (95% headroom to prevent digital clipping)
+    - m=10.0: Max gain factor (+20dB boost for quiet speech, preventing runaway noise floor)
+    - s=12.0: Smoothing filter window to prevent volume pumping
+    - g=15: Gaussian filter size for natural transitions
+    
+    Falls back gracefully to input_wav if FFmpeg fails.
+    """
+    import subprocess
+    try:
+        ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+        if not ffmpeg_exe or not Path(ffmpeg_exe).exists():
+            return input_wav
+        
+        cmd = [
+            ffmpeg_exe,
+            "-i", str(input_wav),
+            "-af", "dynaudnorm=p=0.95:m=10:s=12:g=15",
+            "-acodec", "pcm_s16le",
+            "-ar", "16000",
+            "-ac", "1",
+            "-y",
+            str(output_wav)
+        ]
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        if res.returncode == 0 and Path(output_wav).exists() and Path(output_wav).stat().st_size > 1000:
+            return output_wav
+        else:
+            logger.warning(f"dynaudnorm failed (rc={res.returncode}): {res.stderr[:200]}, using original audio.")
+            return input_wav
+    except Exception as e:
+        logger.warning(f"Error applying dynamic audio normalization: {e}, using original audio.")
+        return input_wav
 
 
 def detect_dual_channel_layout(audio_path: str) -> Dict[str, Any]:

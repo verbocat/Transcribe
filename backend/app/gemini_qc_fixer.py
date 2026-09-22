@@ -68,11 +68,11 @@ Your task is to fix subtitle events that have failed automated QC checks (CPL, C
 5. COMPLETE SENTENCES:
    - Maintain natural sentence formation. Do NOT leave awkward single-word or half-clause fragments.
 
-6. STRICT SINGLE-SPEAKER RULE (EXACTLY ONE SPEAKER PER EVENT):
-   - Each and every subtitle event MUST contain speech from EXACTLY ONE speaker!
-   - NEVER combine speech from two different speakers into a single subtitle event.
-   - NEVER use hyphen prefixes ('- Speaker 1\n- Speaker 2') within the same subtitle event.
-   - Set 'speakers' array to contain exactly one speaker identity (e.g. ['Speaker 1']).
+6. MULTI-SPEAKER & DUAL-SPEAKER FORMATTING:
+   - When two speakers speak simultaneously, interrupt, or talk over one another, dual-speaker formatting with hyphens ('- Speaker 1\n- Speaker 2') is strictly permitted and preferred.
+   - For single-speaker events, ensure exactly one speaker identity in the 'speakers' array.
+   - For dual-speaker events, set 'speakers': ['Speaker 1', 'Speaker 2'] and exactly 2 lines, each starting with a hyphen ('- ').
+   - NEVER drop or omit either speaker's dialogue when both talk at the same time!
 
 7. HINDI & MULTILINGUAL LINE BREAK RULES:
    - Break lines at natural punctuation ('।', '॥', ',', '?') or before conjunctions ('और', 'या', 'लेकिन', 'क्योंकि', 'इसलिए', 'ताकि', 'कि', 'तो', 'and', 'but').

@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
-import { Settings, X, RotateCcw, Sparkles, Sliders, ShieldCheck, Check, Globe } from 'lucide-react';
-import { setCustomApiBase } from '../../config';
+import React, { useState, useEffect, useRef } from 'react';
+import { Settings, X, RotateCcw, Sparkles, Sliders, ShieldCheck, Check, Globe, FileUp, Upload } from 'lucide-react';
+import { setCustomApiBase, cleanUrl } from '../../config';
 
 export default function SubtitleSettingsModal({
   isOpen,
@@ -28,11 +28,88 @@ export default function SubtitleSettingsModal({
   setSdhMode,
   geminiAutoFix = true,
   setGeminiAutoFix,
+  glossaryTerms = [],
+  setGlossaryTerms = () => {},
   onApply = () => {}
 }) {
+  const [newGlossaryWord, setNewGlossaryWord] = useState('');
+  const fileInputRef = useRef(null);
+  const [isImportingFile, setIsImportingFile] = useState(false);
+  const [fileImportMsg, setFileImportMsg] = useState('');
+
+  const handleAddGlossaryWord = () => {
+    const raw = newGlossaryWord.trim();
+    if (!raw) return;
+    const words = raw.split(/[,;\n]+/).map(w => w.trim()).filter(Boolean);
+    const updated = Array.from(new Set([...glossaryTerms, ...words]));
+    setGlossaryTerms(updated);
+    setNewGlossaryWord('');
+  };
+
+  const handleRemoveGlossaryWord = (idx) => {
+    const updated = glossaryTerms.filter((_, i) => i !== idx);
+    setGlossaryTerms(updated);
+  };
+
+  const handleFileImport = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setIsImportingFile(true);
+    setFileImportMsg('Extracting vocabulary...');
+
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const apiEndpoint = (apiUrl || '').replace(/\/$/, '') + '/api/subtitle/extract_glossary_file';
+      const res = await fetch(apiEndpoint, {
+        method: 'POST',
+        body: formData
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data.terms && data.terms.length > 0) {
+          const updated = Array.from(new Set([...glossaryTerms, ...data.terms]));
+          setGlossaryTerms(updated);
+          setFileImportMsg(`✓ Imported ${data.terms.length} terms from ${file.name}`);
+          setTimeout(() => setFileImportMsg(''), 4500);
+          return;
+        } else {
+          setFileImportMsg(`No terms found in ${file.name}`);
+          setTimeout(() => setFileImportMsg(''), 3000);
+        }
+      } else {
+        throw new Error(`Server returned ${res.status}`);
+      }
+    } catch (err) {
+      console.warn("Backend file extraction failed, falling back to local text reader:", err);
+      try {
+        const text = await file.text();
+        const parts = text.split(/[\r\n,;\t|]+/).map(w => w.trim().replace(/^["'`]|["'`]$/g, '')).filter(w => w.length >= 2 && w.length <= 80);
+        if (parts.length > 0) {
+          const updated = Array.from(new Set([...glossaryTerms, ...parts]));
+          setGlossaryTerms(updated);
+          setFileImportMsg(`✓ Imported ${parts.length} terms from ${file.name}`);
+          setTimeout(() => setFileImportMsg(''), 4500);
+        } else {
+          setFileImportMsg(`Could not extract terms from ${file.name}`);
+          setTimeout(() => setFileImportMsg(''), 3000);
+        }
+      } catch (clientErr) {
+        setFileImportMsg(`Failed to read file: ${clientErr.message}`);
+        setTimeout(() => setFileImportMsg(''), 3000);
+      }
+    } finally {
+      setIsImportingFile(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
   const [apiUrl, setApiUrl] = useState(() => {
     try {
-      return localStorage.getItem('karya_api_url') || import.meta.env.VITE_API_URL || '';
+      const envUrl = cleanUrl(import.meta.env.VITE_API_URL);
+      const saved = cleanUrl(localStorage.getItem('karya_api_url'));
+      return saved || envUrl || '';
     } catch {
       return '';
     }
@@ -139,6 +216,8 @@ export default function SubtitleSettingsModal({
     setSdhMode(false);
     setGeminiAutoFix(true);
     if (setFrameRate) setFrameRate(24.0);
+    setApiUrl(cleanUrl(import.meta.env.VITE_API_URL) || '');
+    setCustomApiBase('');
   };
 
   return (
@@ -481,6 +560,117 @@ export default function SubtitleSettingsModal({
               </div>
             </div>
 
+            {/* Project Glossary / Custom Vocabulary Injection */}
+            <div className="p-3.5 rounded-xl border border-[#262734] bg-[#181920] space-y-2.5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-[#00e5be]" />
+                  <div>
+                    <span className="font-bold text-xs block">Project Glossary & Custom Vocabulary</span>
+                    <span className="text-[10px] text-slate-400">
+                      Forcefully inject character names, gamertags, places & slang into Gemini's proper noun pipeline.
+                    </span>
+                  </div>
+                </div>
+                <span className="text-[10px] font-mono text-[#00e5be] bg-[#00e5be]/10 px-2 py-0.5 rounded border border-[#00e5be]/30">
+                  {glossaryTerms.length} terms
+                </span>
+              </div>
+
+              {/* Tag Input Field & File Import */}
+              <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
+                <input
+                  type="text"
+                  placeholder="Type term (e.g. Jonathan, Pochinki, GodL, AWM) and press Enter..."
+                  value={newGlossaryWord}
+                  onChange={(e) => setNewGlossaryWord(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ',') {
+                      e.preventDefault();
+                      handleAddGlossaryWord();
+                    }
+                  }}
+                  className="flex-1 px-3 py-1.5 rounded-lg text-xs bg-[#0e0f12] border border-[#262734] text-white placeholder-slate-500 focus:outline-none focus:border-[#00e5be]"
+                />
+                <button
+                  type="button"
+                  onClick={handleAddGlossaryWord}
+                  className="px-3 py-1.5 rounded-lg text-xs font-bold bg-[#00e5be] hover:bg-[#00c9a7] text-black transition-colors cursor-pointer shadow-xs shrink-0"
+                >
+                  Add
+                </button>
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={isImportingFile}
+                  className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#0e0f12] hover:bg-[#262734] text-slate-200 border border-[#262734] transition-colors cursor-pointer flex items-center gap-1.5 shrink-0"
+                  title="Import from Word (.docx), Excel (.xlsx/.xls), CSV, or TXT"
+                >
+                  <FileUp size={13} className="text-[#00e5be]" />
+                  <span>{isImportingFile ? 'Importing...' : 'Import File (Word / Excel / CSV)'}</span>
+                </button>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".docx,.xlsx,.xls,.csv,.txt,.tsv,.json"
+                  onChange={handleFileImport}
+                  className="hidden"
+                />
+              </div>
+
+              {/* File Import Feedback Message */}
+              {fileImportMsg && (
+                <div className="text-[11px] font-mono font-medium text-[#00e5be] bg-[#00e5be]/10 px-2 py-1 rounded border border-[#00e5be]/30 flex items-center gap-1.5 animate-in fade-in">
+                  <Check size={12} />
+                  <span>{fileImportMsg}</span>
+                </div>
+              )}
+
+              {/* Chips List */}
+              {glossaryTerms.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 max-h-32 overflow-y-auto custom-scrollbar p-1">
+                  {glossaryTerms.map((term, idx) => (
+                    <span
+                      key={idx}
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-mono font-semibold bg-[#0e0f12] text-[#00e5be] border border-[#262734] group hover:border-[#00e5be]/50 transition-colors"
+                    >
+                      <span>{term}</span>
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveGlossaryWord(idx)}
+                        className="text-slate-500 hover:text-rose-400 cursor-pointer ml-0.5 text-xs font-bold"
+                        title="Remove term"
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              {/* Quick Add Suggestions */}
+              <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+                <span className="text-[10px] text-slate-500">Suggested:</span>
+                {['Jonathan', 'Pochinki', 'GodL', 'AWM', 'Camper', 'Flank', 'BGMI', 'Scrims'].map((sug) => {
+                  const alreadyAdded = glossaryTerms.includes(sug);
+                  if (alreadyAdded) return null;
+                  return (
+                    <button
+                      key={sug}
+                      type="button"
+                      onClick={() => {
+                        const next = [...glossaryTerms, sug];
+                        setGlossaryTerms(next);
+                      }}
+                      className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[#0e0f12] hover:bg-[#262734] text-slate-400 hover:text-[#00e5be] border border-[#262734] transition-colors cursor-pointer"
+                    >
+                      + {sug}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
             {/* Backend API URL for Live Website Deployments */}
             <div className="p-3.5 rounded-xl border border-[#262734] bg-[#181920] space-y-2.5">
               <div className="flex items-center justify-between">
@@ -502,7 +692,7 @@ export default function SubtitleSettingsModal({
               <div className="flex gap-2">
                 <input
                   type="text"
-                  placeholder="https://transcribe-qqwn.onrender.com"
+                  placeholder={import.meta.env.VITE_API_URL || "https://screening-geographic-math-medal.trycloudflare.com"}
                   value={apiUrl}
                   onChange={e => {
                     setApiUrl(e.target.value);
@@ -565,8 +755,9 @@ export default function SubtitleSettingsModal({
             </button>
             <button
               onClick={() => {
-                const oldUrl = (localStorage.getItem('karya_api_url') || import.meta.env.VITE_API_URL || '').trim().replace(/\/+$/, '');
-                const newUrl = (apiUrl || '').trim().replace(/\/+$/, '');
+                const envUrl = cleanUrl(import.meta.env.VITE_API_URL);
+                const oldUrl = cleanUrl(localStorage.getItem('karya_api_url')) || envUrl;
+                const newUrl = cleanUrl(apiUrl);
                 setCustomApiBase(newUrl);
                 onApply();
                 onClose();

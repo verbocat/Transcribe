@@ -92,11 +92,11 @@ const TimelineSubtitleBlock = React.memo(function TimelineSubtitleBlock({
       {/* Body Drag Area (Move Entire Subtitle) */}
       <div
         onMouseDown={(e) => handleMouseDown(e, id, 'move')}
-        className="flex-1 px-3 py-1 flex flex-col justify-between cursor-grab active:cursor-grabbing overflow-hidden"
+        className="flex-1 px-2 py-0.5 flex flex-col justify-between cursor-grab active:cursor-grabbing overflow-hidden min-h-0"
         title="Click & drag to move subtitle block"
       >
         {/* Top Meta Bar */}
-        <div className="flex items-center justify-between text-[9.5px] font-mono border-b border-[#262734] pb-0.5 shrink-0">
+        <div className="flex items-center justify-between text-[9px] font-mono border-b border-[#262734] pb-0.5 shrink-0">
           <span className="font-bold px-1.5 py-0.2 rounded bg-[#00e5be] text-black font-mono shadow-2xs">
             #{id}
           </span>
@@ -117,12 +117,12 @@ const TimelineSubtitleBlock = React.memo(function TimelineSubtitleBlock({
         </div>
 
         {/* Dialogue Line Text in center */}
-        <div className="text-[11.5px] leading-snug line-clamp-3 font-sans font-bold whitespace-pre-wrap my-auto px-0.5 text-white drop-shadow-[0_1px_3px_rgba(0,0,0,0.95)]">
+        <div className="text-[11px] leading-tight line-clamp-2 font-sans font-bold whitespace-pre-wrap my-auto px-0.5 text-white drop-shadow-[0_1px_3px_rgba(0,0,0,0.95)] overflow-hidden">
           {event.text}
         </div>
 
         {/* Bottom Timecode Readout */}
-        <div className="text-[9px] font-mono flex justify-between shrink-0 font-bold text-slate-300">
+        <div className="text-[8.5px] font-mono flex justify-between shrink-0 font-bold text-slate-300">
           <span>{formatTime(start)}</span>
           <span>{formatTime(end)}</span>
         </div>
@@ -345,17 +345,21 @@ export default function AudioWaveformTimeline({
 
     const viewportWidth = Math.max(scrollElem.clientWidth || 900, 400);
     const scrollLeft = scrollElem.scrollLeft || 0;
-    const height = canvas.height || 160;
+    const clientH = scrollElem.clientHeight || 140;
+    const height = Math.max(clientH, 50);
 
     if (canvas.width !== viewportWidth) {
       canvas.width = viewportWidth;
+    }
+    if (canvas.height !== height) {
+      canvas.height = height;
     }
 
     const ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, viewportWidth, height);
 
-    const centerY = height / 2 + 8;
-    const maxAmplitude = height * 0.38;
+    const centerY = Math.floor(height / 2) + 4;
+    const maxAmplitude = Math.max(10, (height - 28) * 0.38);
 
     // Center baseline
     ctx.strokeStyle = 'rgba(70, 85, 115, 0.35)';
@@ -420,7 +424,7 @@ export default function AudioWaveformTimeline({
     drawWaveform();
   }, [drawWaveform]);
 
-  // Redraw on horizontal scroll or window resize (60FPS via requestAnimationFrame)
+  // Redraw on horizontal scroll or window/container resize (60FPS via requestAnimationFrame)
   useEffect(() => {
     const scrollElem = scrollRef.current;
     if (!scrollElem) return;
@@ -444,7 +448,13 @@ export default function AudioWaveformTimeline({
     scrollElem.addEventListener('scroll', handleScrollOrResize, { passive: true });
     window.addEventListener('resize', handleScrollOrResize);
 
+    const resizeObserver = new ResizeObserver(() => {
+      handleScrollOrResize();
+    });
+    resizeObserver.observe(scrollElem);
+
     return () => {
+      resizeObserver.disconnect();
       scrollElem.removeEventListener('scroll', handleScrollOrResize);
       window.removeEventListener('resize', handleScrollOrResize);
       if (rafId) cancelAnimationFrame(rafId);
@@ -624,9 +634,67 @@ export default function AudioWaveformTimeline({
     }
   }, [dragState, handleMouseMove, handleMouseUp]);
 
+  // ── Shift + Click & Drag on Waveform to Create New Subtitle ──
+  const [selectionState, setSelectionState] = useState(null);
+  const isShiftSelectingRef = useRef(false);
+
+  const handleTrackMouseDown = (e) => {
+    if (e.shiftKey) {
+      e.preventDefault();
+      e.stopPropagation();
+      const rect = scrollRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const clickX = e.clientX - rect.left + scrollRef.current.scrollLeft;
+      const t = Math.max(0, Math.min(effectiveDuration, clickX / zoomLevel));
+      isShiftSelectingRef.current = true;
+      setSelectionState({
+        startX: clickX,
+        currentX: clickX,
+        startTime: t,
+        currentTime: t
+      });
+    }
+  };
+
+  useEffect(() => {
+    if (!selectionState) return;
+
+    const handleSelectMouseMove = (e) => {
+      const rect = scrollRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const curX = e.clientX - rect.left + scrollRef.current.scrollLeft;
+      const curTime = Math.max(0, Math.min(effectiveDuration, curX / zoomLevel));
+      setSelectionState(prev => prev ? { ...prev, currentX: curX, currentTime: curTime } : null);
+    };
+
+    const handleSelectMouseUp = () => {
+      if (selectionState) {
+        const startT = Math.min(selectionState.startTime, selectionState.currentTime);
+        const endT = Math.max(selectionState.startTime, selectionState.currentTime);
+        const dur = endT - startT;
+        if (dur >= 0.2) {
+          if (onAddSubtitleAtTime) {
+            onAddSubtitleAtTime(Math.round(startT * 1000) / 1000, Math.round(endT * 1000) / 1000);
+          }
+        }
+        setSelectionState(null);
+        setTimeout(() => {
+          isShiftSelectingRef.current = false;
+        }, 50);
+      }
+    };
+
+    window.addEventListener('mousemove', handleSelectMouseMove);
+    window.addEventListener('mouseup', handleSelectMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleSelectMouseMove);
+      window.removeEventListener('mouseup', handleSelectMouseUp);
+    };
+  }, [selectionState, effectiveDuration, zoomLevel, onAddSubtitleAtTime]);
+
   // Click on Timeline Track to Pause and Seek
   const handleTrackClick = (e) => {
-    if (dragState) return;
+    if (dragState || isShiftSelectingRef.current || e.shiftKey) return;
     isInternalSeekRef.current = true;
     const rect = scrollRef.current.getBoundingClientRect();
     const clickX = e.clientX - rect.left + scrollRef.current.scrollLeft;
@@ -718,7 +786,7 @@ export default function AudioWaveformTimeline({
                 title="Add Subtitle at current playhead"
               >
                 <Plus size={12} />
-                <span>+ Sub at Playhead</span>
+                <span>Sub at Playhead</span>
               </button>
             )}
 
@@ -732,6 +800,10 @@ export default function AudioWaveformTimeline({
                 <span>Continue from {formatTime(currentTime).slice(0, 5)}</span>
               </button>
             )}
+
+            <span className="text-[10px] text-slate-400 font-mono hidden xl:inline-block px-2 py-0.5 rounded border border-[#262734] bg-[#181920]/60">
+              Shift + Drag on waveform to create sub
+            </span>
           </div>
         </div>
 
@@ -746,8 +818,9 @@ export default function AudioWaveformTimeline({
       {/* ── Continuous Waveform & Precise Subtitle Boxes ── */}
       <div
         ref={scrollRef}
-        className="relative flex-1 overflow-x-auto overflow-y-hidden cursor-crosshair custom-scrollbar min-h-[140px] bg-[#0e0f12]"
+        className="relative flex-1 overflow-x-auto overflow-y-hidden cursor-crosshair custom-scrollbar min-h-0 bg-[#0e0f12]"
         onClick={handleTrackClick}
+        onMouseDown={handleTrackMouseDown}
       >
         <div
           className="relative h-full timeline-track"
@@ -771,10 +844,26 @@ export default function AudioWaveformTimeline({
           {/* Viewport-Sized Sticky Audio Waveform Canvas (Never crashes on 40+ min media) */}
           <canvas
             ref={canvasRef}
-            height={160}
             className="sticky left-0 top-0 pointer-events-none z-0 block"
-            style={{ height: '160px' }}
           />
+
+          {/* Shift + Drag Subtitle Creation Selection Overlay */}
+          {selectionState && (
+            <div
+              className="absolute top-6 bottom-0 z-30 pointer-events-none border-2 border-[#00e5be] bg-[#00e5be]/20 rounded-[4px] shadow-[0_0_15px_rgba(0,229,190,0.4)] flex flex-col justify-between p-1.5 backdrop-blur-[1px]"
+              style={{
+                left: `${Math.min(selectionState.startX, selectionState.currentX)}px`,
+                width: `${Math.max(Math.abs(selectionState.currentX - selectionState.startX), 4)}px`
+              }}
+            >
+              <div className="text-[10px] font-mono font-black bg-[#00e5be] text-black px-1.5 py-0.5 rounded w-fit shadow-xs">
+                + New Subtitle
+              </div>
+              <div className="text-[10px] font-mono font-bold text-white bg-black/80 px-1.5 py-0.5 rounded w-fit self-end border border-[#00e5be]/40">
+                {formatTime(Math.min(selectionState.startTime, selectionState.currentTime))} → {formatTime(Math.max(selectionState.startTime, selectionState.currentTime))} ({(Math.abs(selectionState.currentTime - selectionState.startTime)).toFixed(2)}s)
+              </div>
+            </div>
+          )}
 
           {/* Audio Waveform Extraction Loading HUD */}
           {(!waveformPeaks || waveformPeaks.length === 0) && isAudioLoading && (

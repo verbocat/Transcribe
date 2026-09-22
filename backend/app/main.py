@@ -1567,6 +1567,7 @@ async def generate_subtitles_stream_endpoint(payload: dict):
     start_time = float(raw_start_time) if raw_start_time is not None else None
     batch_mode = payload.get("batch_mode", "all")
     user_feedback = payload.get("user_feedback")
+    project_glossary = payload.get("project_glossary") or payload.get("glossary", [])
     
     if not video_id:
         raise HTTPException(status_code=400, detail="video_id is required")
@@ -1596,6 +1597,7 @@ async def generate_subtitles_stream_endpoint(payload: dict):
             batch_mode=batch_mode,
             user_feedback=user_feedback,
             custom_frame_rate=custom_frame_rate,
+            project_glossary=project_glossary,
         ),
         media_type="text/event-stream; charset=utf-8",
         headers={
@@ -1605,6 +1607,72 @@ async def generate_subtitles_stream_endpoint(payload: dict):
             "X-Accel-Buffering": "no"
         }
     )
+
+
+@app.post("/api/subtitle/extract_glossary_file")
+async def extract_glossary_file_endpoint(file: UploadFile = File(...)):
+    """Extract vocabulary terms / proper nouns from uploaded Word (.docx), Excel (.xlsx/.xls), CSV, TXT, or JSON files."""
+    filename = file.filename or ""
+    ext = os.path.splitext(filename)[1].lower()
+    raw_terms = []
+
+    try:
+        if ext == ".docx":
+            import docx
+            doc = docx.Document(file.file)
+            for p in doc.paragraphs:
+                if p.text.strip():
+                    raw_terms.append(p.text.strip())
+            for table in doc.tables:
+                for row in table.rows:
+                    for cell in row.cells:
+                        if cell.text.strip():
+                            raw_terms.append(cell.text.strip())
+
+        elif ext in [".xlsx", ".xls"]:
+            import openpyxl
+            wb = openpyxl.load_workbook(file.file, data_only=True)
+            for sheet in wb.worksheets:
+                for row in sheet.iter_rows(values_only=True):
+                    for cell_val in row:
+                        if cell_val is not None and str(cell_val).strip():
+                            raw_terms.append(str(cell_val).strip())
+
+        elif ext in [".txt", ".csv", ".tsv"]:
+            content = await file.read()
+            text_content = content.decode("utf-8", errors="replace")
+            raw_terms = text_content.splitlines()
+
+        elif ext == ".json":
+            content = await file.read()
+            data = json.loads(content.decode("utf-8", errors="replace"))
+            if isinstance(data, list):
+                raw_terms = [str(x) for x in data if x is not None]
+            elif isinstance(data, dict):
+                raw_terms = [str(v) for v in data.values() if v is not None]
+
+        else:
+            content = await file.read()
+            text_content = content.decode("utf-8", errors="replace")
+            raw_terms = text_content.splitlines()
+
+        # Parse terms: split by comma, tab, semicolon or pipe
+        extracted = []
+        seen = set()
+        for item in raw_terms:
+            parts = re.split(r'[,;\t|]+', item)
+            for p in parts:
+                clean = p.strip().strip('"\'`')
+                if clean and len(clean) >= 2 and len(clean) <= 80 and clean.lower() not in seen:
+                    seen.add(clean.lower())
+                    extracted.append(clean)
+
+        return {"success": True, "terms": extracted, "count": len(extracted), "filename": filename}
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to extract glossary from file: {str(e)}")
 
 
 @app.post("/api/subtitle/lint")

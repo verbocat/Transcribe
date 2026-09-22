@@ -5,7 +5,9 @@ import {
   SlidersHorizontal, Search, Split, Merge, Scissors, Trash2, Plus,
   ChevronDown, X, Play, Clock, Activity, FileText, Check, Settings,
   Menu, Download, Eye, AlertTriangle, Layers, Type, Sun, Moon, Loader2, Globe, Volume2,
-  MessageSquare, ChevronRight
+  MessageSquare, ChevronRight,
+  Bold, Italic, Underline, Strikethrough, AlignLeft, AlignCenter, AlignRight,
+  Highlighter, Palette, RotateCcw
 } from 'lucide-react';
 import { API_BASE } from '../../config';
 import VideoPlayer from './VideoPlayer';
@@ -484,11 +486,54 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
   const isResizingLeftRef = useRef(false);
   const isResizingBottomRef = useRef(false);
 
-  // File Inputs
+  // File Inputs & Header Refs
   const fileInputRef = useRef(null);
   const srtImportRef = useRef(null);
   const headerMenuRef = useRef(null);
+  const topHeaderRef = useRef(null);
+  const formatMenuRef = useRef(null);
   const uploadPromiseRef = useRef(null);
+
+  // ── Word-Style Formatting State ──
+  const [showFormatToolbar, setShowFormatToolbar] = useState(false);
+  const [subtitleStyle, setSubtitleStyle] = useState(() => {
+    try {
+      const saved = localStorage.getItem('karya_subtitle_style');
+      return saved ? JSON.parse(saved) : {
+        fontFamily: 'Netflix Sans, Roboto, Helvetica, Arial, sans-serif',
+        fontSize: 22,
+        isBold: false,
+        isItalic: false,
+        isUnderline: false,
+        isStrikethrough: false,
+        textColor: '#ffffff',
+        bgColor: 'rgba(0,0,0,0.6)',
+        textAlign: 'center',
+        textShadow: 'outline'
+      };
+    } catch (_) {
+      return {
+        fontFamily: 'Netflix Sans, Roboto, Helvetica, Arial, sans-serif',
+        fontSize: 22,
+        isBold: false,
+        isItalic: false,
+        isUnderline: false,
+        isStrikethrough: false,
+        textColor: '#ffffff',
+        bgColor: 'rgba(0,0,0,0.6)',
+        textAlign: 'center',
+        textShadow: 'outline'
+      };
+    }
+  });
+
+  const updateSubtitleStyle = useCallback((keyOrObj, val) => {
+    setSubtitleStyle(prev => {
+      const next = typeof keyOrObj === 'object' ? { ...prev, ...keyOrObj } : { ...prev, [keyOrObj]: val };
+      try { localStorage.setItem('karya_subtitle_style', JSON.stringify(next)); } catch (_) {}
+      return next;
+    });
+  }, []);
 
   // ── Dynamic Subtitle & QC Threshold Settings ──
   const [cplLimit, setCplLimit] = useState(() => {
@@ -508,6 +553,22 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
       return 20.0;
     }
   });
+
+  const [glossaryTerms, setGlossaryTerms] = useState(() => {
+    try {
+      const saved = localStorage.getItem('karya_subtitle_glossary');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  const handleUpdateGlossary = useCallback((terms) => {
+    setGlossaryTerms(terms);
+    try {
+      localStorage.setItem('karya_subtitle_glossary', JSON.stringify(terms));
+    } catch (_) {}
+  }, []);
 
   const [maxLines, setMaxLines] = useState(() => {
     try {
@@ -643,8 +704,14 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
   // Click outside to close menus
   useEffect(() => {
     const handleClickOutside = (e) => {
-      if (headerMenuRef.current && !headerMenuRef.current.contains(e.target)) {
+      if (topHeaderRef.current && !topHeaderRef.current.contains(e.target)) {
         setShowFileDropdown(false);
+        setShowSettingsDropdown(false);
+      }
+      if (formatMenuRef.current && !formatMenuRef.current.contains(e.target)) {
+        setShowFormatToolbar(false);
+      }
+      if (headerMenuRef.current && !headerMenuRef.current.contains(e.target)) {
         setShowSettingsDropdown(false);
       }
     };
@@ -697,7 +764,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
         setLeftPanelWidth(newWidth);
       } else if (isResizingBottomRef.current) {
         const windowHeight = window.innerHeight;
-        const newHeight = Math.max(140, Math.min(420, windowHeight - e.clientY - 12));
+        const newHeight = Math.max(90, Math.min(450, windowHeight - e.clientY - 12));
         setBottomTimelineHeight(newHeight);
       }
     };
@@ -784,6 +851,70 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
       historyDebounceRef.current = null;
     }, 800);
   }, [pushToHistory]);
+
+  // ── Word-Style Active Subtitle Formatting Helpers ──
+  const applyFormatTagToActive = useCallback((tag) => {
+    if (!activeEventId) return;
+    setEvents(prev => {
+      const idx = prev.findIndex(e => e.id === activeEventId || e.event_id === activeEventId);
+      if (idx === -1) return prev;
+      const ev = prev[idx];
+      let curText = ev.text || '';
+      const openTag = `<${tag}>`;
+      const closeTag = `</${tag}>`;
+      let newText = '';
+
+      if (curText.includes(openTag) && curText.includes(closeTag)) {
+        newText = curText.replaceAll(openTag, '').replaceAll(closeTag, '');
+      } else {
+        newText = `${openTag}${curText}${closeTag}`;
+      }
+
+      editedEventIdsRef.current.add(ev.id);
+      const updated = [...prev];
+      updated[idx] = { ...ev, text: newText };
+      debouncedPushHistory(updated);
+      debouncedLint(updated);
+      return updated;
+    });
+  }, [activeEventId, debouncedPushHistory, debouncedLint]);
+
+  const applyColorToActive = useCallback((colorHex) => {
+    if (!activeEventId) return;
+    setEvents(prev => {
+      const idx = prev.findIndex(e => e.id === activeEventId || e.event_id === activeEventId);
+      if (idx === -1) return prev;
+      const ev = prev[idx];
+      let curText = ev.text || '';
+      let clean = curText.replace(/<\/?font[^>]*>/gi, '');
+      const newText = `<font color="${colorHex}">${clean}</font>`;
+
+      editedEventIdsRef.current.add(ev.id);
+      const updated = [...prev];
+      updated[idx] = { ...ev, text: newText };
+      debouncedPushHistory(updated);
+      debouncedLint(updated);
+      return updated;
+    });
+  }, [activeEventId, debouncedPushHistory, debouncedLint]);
+
+  const clearFormatFromActive = useCallback(() => {
+    if (!activeEventId) return;
+    setEvents(prev => {
+      const idx = prev.findIndex(e => e.id === activeEventId || e.event_id === activeEventId);
+      if (idx === -1) return prev;
+      const ev = prev[idx];
+      let curText = ev.text || '';
+      const newText = curText.replace(/<\/?(?:b|i|u|s|strike|font)(?:\s+[^>]*)?>/gi, '');
+
+      editedEventIdsRef.current.add(ev.id);
+      const updated = [...prev];
+      updated[idx] = { ...ev, text: newText };
+      debouncedPushHistory(updated);
+      debouncedLint(updated);
+      return updated;
+    });
+  }, [activeEventId, debouncedPushHistory, debouncedLint]);
 
   const handleUndo = () => {
     if (historyIndex > 0) {
@@ -1250,9 +1381,9 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
   }, [cplLimit, handleUpdateEvent]);
 
   // Add Manual Subtitle
-  const handleAddSubtitle = (atTime = null) => {
+  const handleAddSubtitle = (atTime = null, customEndTime = null) => {
     const startTime = atTime !== null ? Math.max(0, atTime) : (events.length > 0 ? events[events.length - 1].end_time + 0.1 : 0);
-    const endTime = startTime + 2.4;
+    const endTime = customEndTime !== null ? Math.max(startTime + 0.2, customEndTime) : startTime + 2.4;
     const newId = events.length > 0 ? Math.max(...events.map(e => e.id || 0)) + 1 : 1;
 
     const newEvent = {
@@ -1261,6 +1392,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
       end_time: Math.round(endTime * 1000) / 1000,
       start: Math.round(startTime * 1000) / 1000,
       end: Math.round(endTime * 1000) / 1000,
+      duration: Math.round((endTime - startTime) * 1000) / 1000,
       text: "New dialogue subtitle line",
       lines: ["New dialogue subtitle line"],
       speaker_count: 1,
@@ -1270,12 +1402,50 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
       is_valid: true
     };
 
-    const updated = [...events, newEvent].sort((a, b) => a.start_time - b.start_time);
+    const updated = [...events, newEvent].sort((a, b) => (a.start_time ?? a.start) - (b.start_time ?? b.start));
     setEvents(updated);
     setActiveEventId(newId);
     pushToHistory(updated);
     handleLint(updated);
   };
+
+  // ── Global Find & Replace across all subtitles ──
+  const handleGlobalReplace = useCallback((findText, replaceText, { matchCase = false, wholeWord = false, replaceAll = true, targetId = null } = {}) => {
+    if (!findText) return { count: 0 };
+    let flags = matchCase ? 'g' : 'gi';
+    let pattern = findText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (wholeWord) {
+      pattern = `\\b${pattern}\\b`;
+    }
+    let regex;
+    try {
+      regex = new RegExp(pattern, flags);
+    } catch {
+      return { count: 0 };
+    }
+    let totalReplaced = 0;
+
+    setEvents(prev => {
+      const next = prev.map(e => {
+        if (targetId && e.id !== targetId && e.event_id !== targetId) return e;
+        if (!e.text || !regex.test(e.text)) return e;
+        regex.lastIndex = 0;
+        const newText = replaceAll ? e.text.replaceAll(regex, replaceText) : e.text.replace(regex, replaceText);
+        if (newText !== e.text) {
+          totalReplaced++;
+          editedEventIdsRef.current.add(e.id);
+          return { ...e, text: newText, lines: newText.split('\n') };
+        }
+        return e;
+      });
+      if (totalReplaced > 0) {
+        pushToHistory(next);
+        handleLint(next);
+      }
+      return next;
+    });
+    return { count: totalReplaced };
+  }, [pushToHistory, handleLint]);
 
   // ── Non-Blocking Progressive Batch-Wise Auto-Generate (Streaming SSE) ──
   const handleGenerate = async () => {
@@ -1384,7 +1554,8 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
           frame_rate: frameRate,
           gemini_auto_fix: geminiAutoFix,
           batch_mode: 'all',
-          user_feedback: userFeedbackText.trim() || null
+          user_feedback: userFeedbackText.trim() || null,
+          project_glossary: glossaryTerms
         })
       });
 
@@ -1425,7 +1596,8 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
             frame_rate: frameRate,
             gemini_auto_fix: geminiAutoFix,
             batch_mode: 'all',
-            user_feedback: userFeedbackText.trim() || null
+            user_feedback: userFeedbackText.trim() || null,
+            project_glossary: glossaryTerms
           })
         });
       }
@@ -1709,7 +1881,8 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
           prev_batch_end: prevBatchEnd,
           prev_context: prevContext,
           batch_mode: targetMode,
-          user_feedback: activeFeedback
+          user_feedback: activeFeedback,
+          project_glossary: glossaryTerms
         })
       });
 
@@ -1744,7 +1917,8 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
             prev_batch_end: prevBatchEnd,
             prev_context: prevContext,
             batch_mode: targetMode,
-            user_feedback: activeFeedback
+            user_feedback: activeFeedback,
+            project_glossary: glossaryTerms
           })
         });
       }
@@ -1988,7 +2162,8 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
           start_time: t,
           prev_events_count: prevEventsCount,
           prev_batch_end: prevBatchEnd,
-          prev_context: prevContext
+          prev_context: prevContext,
+          project_glossary: glossaryTerms
         })
       });
 
@@ -2020,7 +2195,8 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
             start_time: t,
             prev_events_count: prevEventsCount,
             prev_batch_end: prevBatchEnd,
-            prev_context: prevContext
+            prev_context: prevContext,
+            project_glossary: glossaryTerms
           })
         });
       }
@@ -2357,10 +2533,10 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
         className="hidden"
       />
 
-      {/* ── Top Header Row 1: Hub, Subtitle Studio Brand, Media Info & Account Section ── */}
-      <header className="border-b border-[#20222c] bg-[#101116] px-3.5 py-1.5 flex items-center justify-between shadow-xs shrink-0 z-40">
-        {/* Left: Hub, Tool Identity, Media Badge, Auto-Save Status */}
-        <div className="flex items-center gap-2.5 min-w-0">
+      {/* ── Top Header Row 1: Hub, Subtitle Studio Brand, File Menu, Settings, Media Info & Account Section ── */}
+      <header ref={topHeaderRef} className="border-b border-[#20222c] bg-[#101116] px-3.5 py-1.5 flex items-center justify-between shadow-xs shrink-0 z-40 gap-2">
+        {/* Left: Hub, Tool Identity, File Menu, Settings, Media Badge, Auto-Save Status */}
+        <div className="flex items-center gap-2.5 min-w-0 flex-wrap sm:flex-nowrap">
           <button
             onClick={onBackToHome}
             className="p-1 px-2.5 rounded-md transition-colors cursor-pointer flex items-center gap-1.5 text-xs font-semibold border border-[#262734] bg-[#14151a] hover:bg-[#1c1e26] text-slate-300 hover:text-white shrink-0"
@@ -2387,38 +2563,9 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
             </div>
           </div>
 
-          {selectedFile && (
-            <span className="text-[10px] font-mono px-2 py-0.5 rounded border border-[#262734] truncate max-w-[260px] text-slate-300 bg-[#181920] flex items-center gap-1.5 shrink-0" title={selectedFile.name}>
-              <span className={`px-1 py-0.2 rounded text-[9px] font-bold ${isAudioFile ? 'bg-cyan-500/20 text-[#00e5ff] border border-cyan-500/40' : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'}`}>
-                {isAudioFile ? '🎵 AUDIO' : '🎬 VIDEO'}
-              </span>
-              <span className="truncate">{selectedFile.name}</span>
-            </span>
-          )}
+          <div className="h-4 w-px bg-[#262734] shrink-0" />
 
-          {autoSaveStatus && (
-            <span className="text-[10px] text-[#00e5be] font-mono font-bold animate-pulse shrink-0">
-              {autoSaveStatus}
-            </span>
-          )}
-        </div>
-
-        {/* Right: Username Account Section */}
-        <div className="flex items-center gap-2 shrink-0">
-          {user && (
-            <AccountMenuDropdown
-              user={user}
-              onOpenLogoutModal={onOpenLogoutModal || onLogout}
-            />
-          )}
-        </div>
-      </header>
-
-      {/* ── Toolbar Row 2: File Actions, Settings, Language, Script & Studio Controls ── */}
-      <nav ref={headerMenuRef} className="border-b border-[#262734] bg-[#14151a] px-3.5 py-1.5 flex items-center justify-between gap-2 shadow-xs shrink-0 z-30 transition-colors">
-        {/* Left: File Menu & Settings */}
-        <div className="flex items-center gap-2 shrink-0">
-          {/* File Dropdown */}
+          {/* File Dropdown (Moved to Top Header near Subtitle Studio) */}
           <div className="relative shrink-0">
             <button
               onClick={() => { setShowFileDropdown(!showFileDropdown); setShowSettingsDropdown(false); }}
@@ -2469,7 +2616,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
             )}
           </div>
 
-          {/* Settings Modal Trigger Button */}
+          {/* Settings Modal Trigger Button (Moved to Top Header near Subtitle Studio) */}
           <button
             onClick={() => setShowSettingsModal(true)}
             className="px-2.5 py-1 rounded-md text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer border border-[#262734] bg-[#181920] hover:bg-[#22232c] text-slate-300 hover:text-white shrink-0"
@@ -2477,10 +2624,393 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
           >
             <Settings size={13} className="text-[#00e5be]" />
             <span>Settings</span>
-            <span className="text-[10px] font-mono text-slate-400 bg-[#0e0f12] px-1.5 py-0.5 rounded border border-[#262734] font-medium">
+            <span className="text-[10px] font-mono text-slate-400 bg-[#0e0f12] px-1.5 py-0.5 rounded border border-[#262734] font-medium hidden md:inline-block">
               {cplLimit} CPL · {cpsLimit} CPS · {frameRate} FPS
             </span>
           </button>
+
+          {/* Complete Media Filename Display (Full name shown without '...' truncation) */}
+          {selectedFile && (
+            <span className="text-[10px] font-mono px-2.5 py-0.5 rounded border border-[#262734] text-slate-200 bg-[#181920] flex items-center gap-1.5 shrink-0 max-w-none" title={selectedFile.name}>
+              <span className={`px-1 py-0.2 rounded text-[9px] font-bold shrink-0 ${isAudioFile ? 'bg-cyan-500/20 text-[#00e5ff] border border-cyan-500/40' : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'}`}>
+                {isAudioFile ? '🎵 AUDIO' : '🎬 VIDEO'}
+              </span>
+              <span className="font-medium whitespace-nowrap">{selectedFile.name}</span>
+            </span>
+          )}
+
+          {autoSaveStatus && (
+            <span className="text-[10px] text-[#00e5be] font-mono font-bold animate-pulse shrink-0">
+              {autoSaveStatus}
+            </span>
+          )}
+        </div>
+
+        {/* Right: Username Account Section */}
+        <div className="flex items-center gap-2 shrink-0">
+          {user && (
+            <AccountMenuDropdown
+              user={user}
+              onOpenLogoutModal={onOpenLogoutModal || onLogout}
+            />
+          )}
+        </div>
+      </header>
+
+      {/* ── Toolbar Row 2: Format (MS Word Style), Language, Script & Studio Controls ── */}
+      <nav ref={headerMenuRef} className="border-b border-[#262734] bg-[#14151a] px-3.5 py-1.5 flex items-center justify-between gap-2 shadow-xs shrink-0 z-30 transition-colors">
+        {/* Left: MS Word-Style Formatting Ribbon Trigger & Dropdown */}
+        <div ref={formatMenuRef} className="relative shrink-0 flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setShowFormatToolbar(!showFormatToolbar)}
+            className={`px-2.5 py-1 rounded-md text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer border ${
+              showFormatToolbar
+                ? 'bg-[#00e5be]/15 border-[#00e5be] text-[#00e5be] shadow-[0_0_10px_rgba(0,229,190,0.2)]'
+                : 'border-[#262734] bg-[#181920] hover:bg-[#22232c] text-slate-300 hover:text-white'
+            }`}
+            title="Click to reveal MS Word-style typography, font, styles and color controls"
+          >
+            <Type size={13} className={showFormatToolbar ? 'text-[#00e5be]' : 'text-slate-400'} />
+            <span>Format</span>
+            <ChevronDown size={11} className={`transition-transform duration-200 ${showFormatToolbar ? 'rotate-180 text-[#00e5be]' : 'text-slate-400'}`} />
+          </button>
+
+          {/* Quick Active Style Indicator Pill */}
+          <div className="hidden lg:flex items-center gap-1.5 text-[10px] font-mono text-slate-400 px-2 py-0.5 rounded border border-[#262734] bg-[#0e0f12]">
+            <span className="truncate max-w-[100px]">{subtitleStyle.fontFamily.split(',')[0]}</span>
+            <span>·</span>
+            <span className="text-[#00e5be] font-bold">{subtitleStyle.fontSize}px</span>
+            {subtitleStyle.isBold && <span className="font-bold text-white">B</span>}
+            {subtitleStyle.isItalic && <span className="italic text-white">I</span>}
+            {subtitleStyle.isUnderline && <span className="underline text-white">U</span>}
+            <span
+              className="w-2.5 h-2.5 rounded-full border border-white/20 shrink-0 inline-block"
+              style={{ backgroundColor: subtitleStyle.textColor }}
+              title={`Text color: ${subtitleStyle.textColor}`}
+            />
+          </div>
+
+          {/* MS Word Formatting Ribbon Popover (Revealed when Format is clicked) */}
+          {showFormatToolbar && (
+            <div className="absolute top-full left-0 mt-1.5 w-[560px] max-w-[95vw] rounded-xl shadow-2xl border border-[#2e3142] p-3 z-50 animate-in fade-in zoom-in-95 duration-150 bg-[#181920]/95 backdrop-blur-md text-slate-200">
+              {/* Ribbon Header */}
+              <div className="flex items-center justify-between pb-2 mb-2 border-b border-[#262734]">
+                <div className="flex items-center gap-2">
+                  <Type size={14} className="text-[#00e5be]" />
+                  <span className="text-xs font-bold text-white uppercase tracking-wider">Subtitle Font & Typography</span>
+                  <span className="text-[9px] font-mono bg-[#00e5be]/15 text-[#00e5be] px-1.5 py-0.2 rounded border border-[#00e5be]/30">
+                    WORD STYLE
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowFormatToolbar(false)}
+                  className="p-1 rounded text-slate-400 hover:text-white hover:bg-[#262734] transition-colors"
+                >
+                  <X size={12} />
+                </button>
+              </div>
+
+              {/* Row 1: Font Family, Font Size, B, I, U, S, Alignment */}
+              <div className="flex items-center gap-2 flex-wrap pb-2 mb-2 border-b border-[#262734]">
+                {/* Font Family Dropdown */}
+                <div className="flex flex-col gap-0.5 flex-1 min-w-[140px]">
+                  <span className="text-[9px] text-slate-400 font-medium">Font Family</span>
+                  <select
+                    value={subtitleStyle.fontFamily}
+                    onChange={(e) => updateSubtitleStyle('fontFamily', e.target.value)}
+                    className="w-full bg-[#0e0f12] border border-[#262734] rounded-md px-2 py-1 text-xs text-white focus:border-[#00e5be] focus:outline-none cursor-pointer"
+                  >
+                    <option value="Netflix Sans, Roboto, Helvetica, Arial, sans-serif">Netflix Sans (Default)</option>
+                    <option value="Arial, sans-serif">Arial</option>
+                    <option value="Inter, sans-serif">Inter</option>
+                    <option value="Roboto, sans-serif">Roboto</option>
+                    <option value="Montserrat, sans-serif">Montserrat</option>
+                    <option value="'Courier New', Courier, monospace">Courier New (Monospace)</option>
+                    <option value="Georgia, serif">Georgia (Serif)</option>
+                    <option value="Impact, fantasy">Impact (Bold Title)</option>
+                    <option value="'Trebuchet MS', sans-serif">Trebuchet MS</option>
+                    <option value="'Comic Sans MS', cursive">Comic Sans MS</option>
+                  </select>
+                </div>
+
+                {/* Font Size (+ / -) */}
+                <div className="flex flex-col gap-0.5 shrink-0">
+                  <span className="text-[9px] text-slate-400 font-medium">Size</span>
+                  <div className="flex items-center bg-[#0e0f12] border border-[#262734] rounded-md px-1 py-0.5">
+                    <button
+                      type="button"
+                      onClick={() => updateSubtitleStyle('fontSize', Math.max(12, subtitleStyle.fontSize - 2))}
+                      className="p-0.5 text-slate-400 hover:text-white font-bold cursor-pointer text-xs"
+                      title="Decrease font size"
+                    >
+                      -
+                    </button>
+                    <span className="font-mono text-xs font-bold text-[#00e5be] px-1.5 min-w-[32px] text-center">
+                      {subtitleStyle.fontSize}px
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => updateSubtitleStyle('fontSize', Math.min(60, subtitleStyle.fontSize + 2))}
+                      className="p-0.5 text-slate-400 hover:text-white font-bold cursor-pointer text-xs"
+                      title="Increase font size"
+                    >
+                      +
+                    </button>
+                  </div>
+                </div>
+
+                {/* Bold, Italic, Underline, Strikethrough Button Group */}
+                <div className="flex flex-col gap-0.5 shrink-0">
+                  <span className="text-[9px] text-slate-400 font-medium">Style</span>
+                  <div className="flex items-center bg-[#0e0f12] border border-[#262734] rounded-md p-0.5 gap-0.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const nextVal = !subtitleStyle.isBold;
+                        updateSubtitleStyle('isBold', nextVal);
+                        if (activeEventId) applyFormatTagToActive('b');
+                      }}
+                      className={`p-1 rounded text-xs font-bold transition-colors cursor-pointer ${
+                        subtitleStyle.isBold ? 'bg-[#00e5be] text-black shadow-xs' : 'text-slate-300 hover:bg-[#262734]'
+                      }`}
+                      title="Bold (Ctrl+B)"
+                    >
+                      <Bold size={13} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const nextVal = !subtitleStyle.isItalic;
+                        updateSubtitleStyle('isItalic', nextVal);
+                        if (activeEventId) applyFormatTagToActive('i');
+                      }}
+                      className={`p-1 rounded text-xs font-bold transition-colors cursor-pointer ${
+                        subtitleStyle.isItalic ? 'bg-[#00e5be] text-black shadow-xs' : 'text-slate-300 hover:bg-[#262734]'
+                      }`}
+                      title="Italic (Ctrl+I)"
+                    >
+                      <Italic size={13} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const nextVal = !subtitleStyle.isUnderline;
+                        updateSubtitleStyle('isUnderline', nextVal);
+                        if (activeEventId) applyFormatTagToActive('u');
+                      }}
+                      className={`p-1 rounded text-xs font-bold transition-colors cursor-pointer ${
+                        subtitleStyle.isUnderline ? 'bg-[#00e5be] text-black shadow-xs' : 'text-slate-300 hover:bg-[#262734]'
+                      }`}
+                      title="Underline (Ctrl+U)"
+                    >
+                      <Underline size={13} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const nextVal = !subtitleStyle.isStrikethrough;
+                        updateSubtitleStyle('isStrikethrough', nextVal);
+                        if (activeEventId) applyFormatTagToActive('s');
+                      }}
+                      className={`p-1 rounded text-xs font-bold transition-colors cursor-pointer ${
+                        subtitleStyle.isStrikethrough ? 'bg-[#00e5be] text-black shadow-xs' : 'text-slate-300 hover:bg-[#262734]'
+                      }`}
+                      title="Strikethrough"
+                    >
+                      <Strikethrough size={13} />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Alignment */}
+                <div className="flex flex-col gap-0.5 shrink-0">
+                  <span className="text-[9px] text-slate-400 font-medium">Alignment</span>
+                  <div className="flex items-center bg-[#0e0f12] border border-[#262734] rounded-md p-0.5 gap-0.5">
+                    <button
+                      type="button"
+                      onClick={() => updateSubtitleStyle('textAlign', 'left')}
+                      className={`p-1 rounded text-xs transition-colors cursor-pointer ${
+                        subtitleStyle.textAlign === 'left' ? 'bg-[#00e5be] text-black' : 'text-slate-400 hover:bg-[#262734]'
+                      }`}
+                      title="Align Left"
+                    >
+                      <AlignLeft size={13} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => updateSubtitleStyle('textAlign', 'center')}
+                      className={`p-1 rounded text-xs transition-colors cursor-pointer ${
+                        subtitleStyle.textAlign === 'center' ? 'bg-[#00e5be] text-black' : 'text-slate-400 hover:bg-[#262734]'
+                      }`}
+                      title="Align Center (Standard)"
+                    >
+                      <AlignCenter size={13} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => updateSubtitleStyle('textAlign', 'right')}
+                      className={`p-1 rounded text-xs transition-colors cursor-pointer ${
+                        subtitleStyle.textAlign === 'right' ? 'bg-[#00e5be] text-black' : 'text-slate-400 hover:bg-[#262734]'
+                      }`}
+                      title="Align Right"
+                    >
+                      <AlignRight size={13} />
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Row 2: Text Color, Background Highlight, Outline & Reset */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pb-2 mb-2 border-b border-[#262734]">
+                {/* Text Color Picker & Presets */}
+                <div className="flex flex-col gap-1.5 p-2 rounded-lg bg-[#0e0f12] border border-[#262734]">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-semibold text-slate-300 flex items-center gap-1">
+                      <Palette size={11} className="text-[#00e5be]" />
+                      <span>Text Color</span>
+                    </span>
+                    <label className="flex items-center gap-1 cursor-pointer" title="Custom color picker">
+                      <input
+                        type="color"
+                        value={subtitleStyle.textColor}
+                        onChange={(e) => {
+                          updateSubtitleStyle('textColor', e.target.value);
+                          if (activeEventId) applyColorToActive(e.target.value);
+                        }}
+                        className="w-4 h-4 rounded cursor-pointer border-0 bg-transparent p-0"
+                      />
+                      <span className="text-[10px] font-mono text-slate-400 uppercase">{subtitleStyle.textColor}</span>
+                    </label>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    {[
+                      { name: 'White', color: '#ffffff' },
+                      { name: 'Yellow', color: '#ffe600' },
+                      { name: 'Cyan', color: '#00e5ff' },
+                      { name: 'Neon Green', color: '#00e5be' },
+                      { name: 'Red', color: '#ff4d4f' },
+                      { name: 'Amber', color: '#f59e0b' },
+                      { name: 'Black', color: '#111111' }
+                    ].map((swatch) => (
+                      <button
+                        key={swatch.color}
+                        type="button"
+                        onClick={() => {
+                          updateSubtitleStyle('textColor', swatch.color);
+                          if (activeEventId) applyColorToActive(swatch.color);
+                        }}
+                        className={`w-5 h-5 rounded-full border transition-transform cursor-pointer hover:scale-110 ${
+                          subtitleStyle.textColor.toLowerCase() === swatch.color.toLowerCase()
+                            ? 'border-[#00e5be] scale-110 ring-2 ring-[#00e5be]/40'
+                            : 'border-white/20'
+                        }`}
+                        style={{ backgroundColor: swatch.color }}
+                        title={swatch.name}
+                      />
+                    ))}
+                  </div>
+                </div>
+
+                {/* Background Box / Highlight Color */}
+                <div className="flex flex-col gap-1.5 p-2 rounded-lg bg-[#0e0f12] border border-[#262734]">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-semibold text-slate-300 flex items-center gap-1">
+                      <Highlighter size={11} className="text-amber-400" />
+                      <span>Box / Highlight</span>
+                    </span>
+                    <span className="text-[9px] font-mono text-slate-400">
+                      {subtitleStyle.bgColor === 'transparent' ? 'None' : 'Active'}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    {[
+                      { name: 'Netflix 60% Black', color: 'rgba(0,0,0,0.6)' },
+                      { name: 'Solid Black', color: '#000000' },
+                      { name: 'None / Transparent', color: 'transparent' },
+                      { name: 'Cyan Glow', color: 'rgba(0,229,255,0.25)' },
+                      { name: 'Yellow Tint', color: 'rgba(255,230,0,0.25)' }
+                    ].map((swatch) => (
+                      <button
+                        key={swatch.name}
+                        type="button"
+                        onClick={() => updateSubtitleStyle('bgColor', swatch.color)}
+                        className={`px-2 py-0.5 rounded text-[9px] font-mono border transition-all cursor-pointer ${
+                          subtitleStyle.bgColor === swatch.color
+                            ? 'bg-[#00e5be]/20 border-[#00e5be] text-[#00e5be] font-bold'
+                            : 'bg-[#181920] border-[#262734] text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        {swatch.name.split(' ')[0]}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Bottom Row: Live Preview & Action Buttons */}
+              <div className="flex items-center justify-between pt-1 gap-2 flex-wrap">
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] text-slate-400">Preview:</span>
+                  <div
+                    className="px-2 py-0.5 rounded text-xs border border-[#262734]"
+                    style={{
+                      fontFamily: subtitleStyle.fontFamily,
+                      color: subtitleStyle.textColor,
+                      backgroundColor: subtitleStyle.bgColor,
+                      fontWeight: subtitleStyle.isBold ? 'bold' : 'normal',
+                      fontStyle: subtitleStyle.isItalic ? 'italic' : 'normal',
+                      textDecoration: [
+                        subtitleStyle.isUnderline ? 'underline' : '',
+                        subtitleStyle.isStrikethrough ? 'line-through' : ''
+                      ].filter(Boolean).join(' ') || 'none'
+                    }}
+                  >
+                    Sample Subtitle Text
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const defaultStyle = {
+                        fontFamily: 'Netflix Sans, Roboto, Helvetica, Arial, sans-serif',
+                        fontSize: 22,
+                        isBold: false,
+                        isItalic: false,
+                        isUnderline: false,
+                        isStrikethrough: false,
+                        textColor: '#ffffff',
+                        bgColor: 'rgba(0,0,0,0.6)',
+                        textAlign: 'center',
+                        textShadow: 'outline'
+                      };
+                      setSubtitleStyle(defaultStyle);
+                      try { localStorage.setItem('karya_subtitle_style', JSON.stringify(defaultStyle)); } catch (_) {}
+                    }}
+                    className="px-2 py-1 rounded text-[10px] font-medium text-slate-400 hover:text-white bg-[#0e0f12] border border-[#262734] flex items-center gap-1 cursor-pointer transition-colors"
+                    title="Reset formatting to default Netflix standard"
+                  >
+                    <RotateCcw size={10} />
+                    <span>Reset</span>
+                  </button>
+
+                  {activeEventId && (
+                    <button
+                      type="button"
+                      onClick={() => clearFormatFromActive()}
+                      className="px-2 py-1 rounded text-[10px] font-medium text-amber-300 hover:bg-amber-950/40 bg-[#0e0f12] border border-amber-500/30 flex items-center gap-1 cursor-pointer transition-colors"
+                      title="Clear HTML formatting tags from currently active subtitle"
+                    >
+                      <span>Clear Tags (#{activeEventId})</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Right: Remaining Tools, Selectors & Actions */}
@@ -2759,6 +3289,11 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
               activeEventId={activeEventId}
               setActiveEventId={setActiveEventId}
               onPlayEvent={handlePlayEvent}
+              onSeek={(t) => {
+                setCurrentTime(t);
+                setPlayTarget({ time: t, pause: true });
+              }}
+              onGlobalReplace={handleGlobalReplace}
               onUpdateEvent={handleUpdateEvent}
               onDeleteEvent={handleDeleteEvent}
               onBulkDelete={handleBulkDelete}
@@ -2795,6 +3330,8 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
               frameRate={frameRate}
               theme={theme}
               isAudio={isAudioFile}
+              subtitleStyle={subtitleStyle}
+              onUpdateSubtitleStyle={updateSubtitleStyle}
             />
           </div>
         </div>
@@ -2928,6 +3465,8 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
         setSdhMode={setSdhMode}
         geminiAutoFix={geminiAutoFix}
         setGeminiAutoFix={setGeminiAutoFix}
+        glossaryTerms={glossaryTerms}
+        setGlossaryTerms={handleUpdateGlossary}
         onApply={() => {
           if (events && events.length > 0) {
             handleLint(events);

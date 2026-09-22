@@ -1398,6 +1398,17 @@ def split_multi_speaker_subtitles(
             result.append(clean_ev)
             continue
 
+        # Netflix Dual-Speaker Rule: If exactly 2 lines and both start with a hyphen,
+        # retain as a standard dual-speaker subtitle event on the same timeline
+        if is_dual_hyphen and len(lines) == 2:
+            clean_ev = dict(ev)
+            clean_ev["speakers"] = speakers if len(speakers) >= 2 else ["Speaker 1", "Speaker 2"]
+            clean_ev["speaker_count"] = 2
+            clean_ev["lines"] = lines
+            clean_ev["text"] = "\n".join(lines)
+            result.append(clean_ev)
+            continue
+
         # Multiple speakers detected in this single event! Split into distinct single-speaker events.
         st = float(ev.get("start_time", ev.get("start", 0.0)))
         et = float(ev.get("end_time", ev.get("end", st + 2.0)))

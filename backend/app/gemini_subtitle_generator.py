@@ -19,7 +19,7 @@ from app.video_processor import (
 )
 from app.audio_processor import (
     inspect_audio, detect_dual_channel_layout, find_dialogue_split_points,
-    extract_audio_slice, snap_to_acoustic_boundaries,
+    extract_audio_slice, apply_dynamic_audio_normalization, snap_to_acoustic_boundaries,
     extract_physical_speech_intervals, parse_timestamp
 )
 from app.netflix_linter import (
@@ -39,9 +39,9 @@ class SubtitleItemSchema(BaseModel):
     id: int = Field(description="Sequential subtitle ID starting at 1")
     start_time: str = Field(description="Subtitle onset timestamp HH:MM:SS.mmm")
     end_time: str = Field(description="Subtitle offset timestamp HH:MM:SS.mmm")
-    text: str = Field(description="Exact verbatim spoken words line 1\\nExact line 2 if two lines")
-    speaker: str = Field(default="Speaker 1", description="Single speaker identity vocalizing this event. Every speaker change MUST be a separate subtitle event!")
-    speakers: List[str] = Field(default_factory=lambda: ["Speaker 1"], description="List with exactly one speaker name")
+    text: str = Field(description="Exact verbatim spoken words. Use dual-speaker hyphen format (- Speaker 1: ...\\n- Speaker 2: ...) if two speakers talk simultaneously.")
+    speaker: str = Field(default="Speaker 1", description="Primary speaker identity vocalizing this event.")
+    speakers: List[str] = Field(default_factory=lambda: ["Speaker 1"], description="List of speaker names for this event (1 speaker normally, or 2 speakers if speaking simultaneously).")
     is_italic: bool = Field(default=False, description="True for off-screen, voiceover, phone, lyrics")
     is_forced_narrative: bool = Field(default=False, description="True for translated foreign signs or forced dialogue")
 
@@ -414,18 +414,19 @@ Your task is to generate millimeter-precise, timed subtitles following strict Ne
      * Postpositions must ALWAYS remain on the same line as the preceding noun (e.g. 'राहुल ने' together, 'घर में' together).
    - NEVER break across: title + name ('श्री' / 'श्रीमती' / 'डॉ.' + name, 'Mr.' / 'Mrs.' + name), article + noun, pronoun + verb, or split compound verb phrases.
 
-7. STRICT SINGLE-SPEAKER RULE (EXACTLY ONE SPEAKER PER EVENT):
+7. MULTI-SPEAKER & OVERLAPPING SPEECH (DUAL-SPEAKER HYPHENS):
    - Identify speaker changes accurately from voice acoustics, timbre, pitch, gender, and conversational turns.
-   - Every single subtitle event MUST belong to EXACTLY ONE speaker!
-   - NEVER combine dialogue from two or more speakers into a single subtitle event.
-   - NEVER use dual-speaker hyphen format ('- Speaker 1\\n- Speaker 2') in a single subtitle event.
-   - Whenever the speaker changes, you MUST output a NEW SEPARATE subtitle event with its own start_time and end_time.
-   - The 'speakers' array for each event MUST contain exactly ONE speaker identity (e.g. ['Speaker 1'] or ['Speaker 2']).
+   - When two speakers speak simultaneously, interrupt, or talk over one another:
+     * Format BOTH speakers in ONE subtitle event using hyphens:
+       - [Speaker 1]: <dialogue 1>
+       - [Speaker 2]: <dialogue 2>
+     * Set the 'speakers' array to contain both identities (e.g. ['Speaker 1', 'Speaker 2']).
+   - When speakers speak sequentially (one finishes, then the next starts), output separate sequential subtitle events.
+   - NEVER drop, skip, or omit either speaker's dialogue when multiple people speak at the same time!
 
-8. SEQUENTIAL TIMELINE & ZERO OVERLAPS:
-   - All subtitle events MUST be strictly sequential on the timeline.
-   - Subtitles must NEVER overlap on the timeline (start of next subtitle must always be >= end of previous subtitle + 2 frames).
-   - Even when speakers speak quickly or back-to-back, sequence the subtitle events non-overlappingly with clear start and end times.
+8. SEQUENTIAL TIMELINE & ZERO OVERLAPS BETWEEN EVENTS:
+   - All subtitle events MUST be strictly sequential on the timeline (start of next subtitle >= end of previous subtitle + 2 frames).
+   - Never overlap two separate subtitle events in time; use dual-speaker hyphen format within a single event when dialogue coincides in time.
    - Transcribe 100% of spoken words verbatim from all speakers without dropping or altering anything.
 
 9. ITALICS (<i>...</i>):
@@ -438,6 +439,17 @@ Your task is to generate millimeter-precise, timed subtitles following strict Ne
    - Use Unicode ellipsis `…` (U+2026), NOT three periods `...`.
    - Use double hyphen `--` for sudden speech interruptions or trailing off.
    - Numbers 1-10 spelled out in words, 11+ written as numerals.
+
+12. DIALOGUE OVER BACKGROUND MUSIC & SOUNDTRACK:
+   - When background music, soundtrack, or long instrumental tones play with only occasional or sparse dialogue spoken, YOU MUST DETECT AND TRANSCRIBE EVERY SPOKEN WORD with exact timestamps!
+   - Never skip or omit quiet, soft, or sparse dialogue just because music is playing.
+   - Do NOT transcribe instrumental music as subtitles, but ALWAYS transcribe human speech spoken within or over musical sections.
+
+13. GAMING, ACTION SFX & IN-GAME VOICE CHAT:
+   - In gameplay and action content, players speak over loud gunshots, explosions, vehicle engines, and footsteps.
+   - YOU MUST TRANSCRIBE ALL SPOKEN WORDS even when partially masked by game SFX. Never omit words because gunshots or loud sound effects are present!
+   - Teammates on Discord or in-game mic may have compressed or lower-fidelity audio. Treat teammate callouts with EQUAL PRIORITY to the main streamer.
+   - Never leave an interval empty if human speech can be deciphered under sound effects.
 
 ### OUTPUT FORMAT:
 Return a structured JSON object strictly matching this schema:
@@ -1423,7 +1435,8 @@ def generate_subtitles(
     min_duration: float = 0.833,
     max_duration: float = 7.0,
     gemini_auto_fix: bool = True,
-    custom_frame_rate: Optional[float] = None
+    custom_frame_rate: Optional[float] = None,
+    project_glossary: Optional[List[str]] = None
 ) -> dict:
     """Synchronous / Threaded end-to-end pipeline for Netflix subtitle generation with dynamic settings."""
     resolved_language, resolved_script = normalize_language_and_script(language, script)
@@ -1463,29 +1476,19 @@ def generate_subtitles(
     dual_ch_info = detect_dual_channel_layout(audio_path_out)
     is_dual_channel = dual_ch_info.get("is_dual_channel", False)
     
-    # 6. Run Whisper on audio for word-level timestamps
+    # 6. Whisper acoustic alignment settings (executed per-batch to cap CPU/memory usage)
     is_cloud = bool(os.getenv("RENDER") or os.getenv("PORT"))
     enable_whisper = os.getenv("ENABLE_WHISPER", "true").lower() == "true"
-    # Phase 1 Fix 1: Use tiny on cloud (RAM-constrained), base on local.
-    # Whisper is used ONLY for acoustic word timestamps, not transcription.
-    # Base gives tighter word-level timestamps with far lower hallucination than medium on CPU.
     whisper_model = os.getenv("WHISPER_MODEL", "tiny" if is_cloud else "base")
     whisper_words = []
-    if enable_whisper:
-        if progress_callback:
-            progress_callback("Whisper Alignment", 20, f"Extracting word-level timestamps with Whisper ({whisper_model})...")
-        log_terminal(f"Running Whisper ({whisper_model}) for precise timestamp extraction...")
-        try:
-            whisper_words = get_whisper_word_timestamps(audio_path_out, language=resolved_language, model_name=whisper_model)
-            log_terminal(f"Whisper produced {len(whisper_words)} word timestamps for alignment.")
-        except Exception as e:
-            log_terminal(f"WARNING: Whisper failed ({e}), will use Gemini timestamps as fallback.")
-    elif not enable_whisper:
+    if not enable_whisper:
         log_terminal("Cloud instance / Fast mode: using Gemini native millisecond audio timestamps.")
+    else:
+        log_terminal(f"Whisper acoustic alignment active ({whisper_model}).")
     
-    # 7. Chunk long audio: 180s target chunks (3 minutes) preserves full conversational context
-    if total_duration > 75.0:
-        chunks = find_dialogue_split_points(audio_path_out, target_chunk_sec=180.0, min_chunk_sec=120.0, max_chunk_sec=240.0)
+    # 7. Chunk audio: ~90s batches (+/- n seconds) ending at 1-2s dialogue pauses
+    if total_duration > 65.0:
+        chunks = find_dialogue_split_points(audio_path_out, target_chunk_sec=90.0, min_chunk_sec=65.0, max_chunk_sec=115.0)
     else:
         chunks = [(0.0, total_duration)]
         
@@ -1517,21 +1520,29 @@ def generate_subtitles(
     for chunk_idx, (chunk_s, chunk_e) in enumerate(chunks, 1):
         log_terminal(f"Processing Chunk {chunk_idx}/{len(chunks)} [{chunk_s:.2f}s -> {chunk_e:.2f}s] with Gemini AI...")
         
-        collar_sec = 2.0
+        # 250ms acoustic decay cushion (ensures zero cross-batch dialogue overlap during 1-2s pauses)
+        collar_sec = 0.25
         collar_left = collar_sec if chunk_s >= collar_sec else 0.0
         collar_right = collar_sec if (chunk_e + collar_sec) <= total_duration else 0.0
         slice_s = max(0.0, round(chunk_s - collar_left, 3))
         slice_e = min(total_duration, round(chunk_e + collar_right, 3))
 
+        norm_target_path = None
         if len(chunks) > 1:
             slice_filename = f"temp_chunk_{video_id}_{chunk_idx}.wav"
             slice_path = UPLOAD_DIR / slice_filename
             extract_audio_slice(audio_path_out, slice_s, slice_e, str(slice_path))
-            target_path = str(slice_path)
+            norm_slice_path = UPLOAD_DIR / f"temp_norm_chunk_{video_id}_{chunk_idx}.wav"
+            target_path = apply_dynamic_audio_normalization(str(slice_path), str(norm_slice_path))
+            if target_path == str(norm_slice_path):
+                norm_target_path = str(norm_slice_path)
         else:
-            target_path = audio_path_out
             slice_s = 0.0
             slice_e = total_duration
+            norm_single_path = UPLOAD_DIR / f"temp_norm_single_{video_id}.wav"
+            target_path = apply_dynamic_audio_normalization(audio_path_out, str(norm_single_path))
+            if target_path == str(norm_single_path):
+                norm_target_path = str(norm_single_path)
             
         try:
             # Read chunk audio bytes directly (under 3MB, well within 20MB inline limit)
@@ -1552,9 +1563,38 @@ def generate_subtitles(
             if speaker_lock_clause:
                 context_clause = speaker_lock_clause + context_clause
 
+            music_dialogue_clause = (
+                "CRITICAL DIALOGUE OVER BACKGROUND MUSIC & SOUNDTRACK:\n"
+                "- When background music, soundtrack, or long instrumental tones play with only occasional or sparse dialogue spoken, YOU MUST DETECT AND TRANSCRIBE EVERY SINGLE SPOKEN WORD with exact timestamps!\n"
+                "- Never skip or omit quiet, soft, or sparse dialogue just because music is playing.\n"
+                "- Do NOT transcribe instrumental music as subtitles, but ALWAYS transcribe human speech spoken within or over musical sections.\n\n"
+            )
+
+            gaming_sfx_clause = (
+                "CRITICAL GAMING, GUNFIRE & IN-GAME VOICE CHAT RULE:\n"
+                "- Players speak over loud gunshots, explosions, vehicles, and footsteps. YOU MUST TRANSCRIBE ALL SPOKEN WORDS even when partially masked by game SFX!\n"
+                "- Treat in-game / Discord teammate voice chat with EQUAL PRIORITY to the main streamer's microphone.\n"
+                "- When multiple speakers talk at the same time or call out simultaneously, use dual-speaker hyphen format (- Speaker 1: ...\\n- Speaker 2: ...). NEVER omit either speaker!\n\n"
+            )
+
             script_clause = f"Target Script: {resolved_script}\n" if resolved_script != "Auto-Detect" else ""
+            glossary_clause = ""
+            if project_glossary and len(project_glossary) > 0:
+                clean_terms = [t.strip() for t in project_glossary if isinstance(t, str) and t.strip()]
+                if clean_terms:
+                    terms_str = ", ".join([repr(t) for t in clean_terms])
+                    glossary_clause = (
+                        f"PROJECT GLOSSARY & CUSTOM VOCABULARY (MANDATORY PROPER NOUNS):\n"
+                        f"The following domain-specific terms, character names, gamertags, locations, and slang are present in this audio:\n"
+                        f"[{terms_str}]\n"
+                        f"Whenever acoustic signals resemble any of these terms, ALWAYS spell and transcribe them using these exact names! Do NOT substitute, invent alternative spellings, or mishear them.\n\n"
+                    )
+
             prompt = (
                 f"{context_clause}"
+                f"{glossary_clause}"
+                f"{music_dialogue_clause}"
+                f"{gaming_sfx_clause}"
                 f"Target Spoken Language: {resolved_language}\n"
                 f"{script_clause}"
                 f"SDH Mode: {sdh_mode}\n"
@@ -1573,7 +1613,7 @@ def generate_subtitles(
                 f"5. READING SPEED (CPS): Target comfortable reading speed (~{max_cps} CPS). In fast dialogue, prioritize 100% verbatim capture and output tighter, shorter sequential subtitle events rather than dropping words!\n"
                 f"6. MAXIMUM LINES: Exactly <= {max_lines} lines per subtitle event.\n"
                 f"7. COMPLETE CLAUSES & SYNTACTIC BOUNDARIES: Subtitle events MUST break at natural clause boundaries.\n"
-                f"8. SPEAKER SEPARATION & DUAL SPEAKER FORMATTING: Separate different speakers cleanly.\n"
+                f"8. MULTI-SPEAKER & DUAL SPEAKER FORMATTING: When two speakers speak simultaneously, use dual-speaker hyphen format (- Speaker 1: ...\\n- Speaker 2: ...). NEVER drop either speaker!\n"
                 f"9. TIMESTAMPS: Provide acoustic start_time and end_time for each subtitle event relative to this audio slice."
             )
             
@@ -1692,8 +1732,8 @@ def generate_subtitles(
                 )
                 log_terminal(f"Chunk {chunk_idx}: Speaker registry locked: {list(speaker_registry.keys())}")
                     
-            # For long audio (> 180s), extract Whisper words on this slice with resolved language (if enabled)
-            if enable_whisper and total_duration > 180.0 and len(chunks) > 1:
+            # Extract Whisper words on this batch slice with resolved language (if enabled)
+            if enable_whisper:
                 try:
                     cw = get_whisper_word_timestamps(target_path, language=resolved_language, model_name=whisper_model)
                     for w in cw:
@@ -1701,12 +1741,22 @@ def generate_subtitles(
                         w["end"] = round(w["end"] + slice_s, 3)
                     whisper_words.extend(cw)
                 except Exception as e:
-                    log_terminal(f"Chunk {chunk_idx} Whisper fallback warning: {e}")
+                    log_terminal(f"Chunk {chunk_idx} Whisper alignment warning: {e}")
 
         finally:
             if len(chunks) > 1 and os.path.exists(target_path):
                 try:
                     os.unlink(target_path)
+                except Exception:
+                    pass
+            if norm_target_path and os.path.exists(norm_target_path):
+                try:
+                    os.unlink(norm_target_path)
+                except Exception:
+                    pass
+            if len(chunks) > 1 and 'slice_path' in locals() and os.path.exists(str(slice_path)):
+                try:
+                    os.unlink(str(slice_path))
                 except Exception:
                     pass
                 
@@ -1834,7 +1884,8 @@ async def generate_subtitles_stream(
     start_time: Optional[float] = None,
     batch_mode: str = "all",
     user_feedback: Optional[str] = None,
-    custom_frame_rate: Optional[float] = None
+    custom_frame_rate: Optional[float] = None,
+    project_glossary: Optional[List[str]] = None
 ) -> AsyncGenerator[str, None]:
     """Progressive Batch-wise SSE Stream generator with resume capability, single-batch review pause, and user feedback injection."""
     resolved_language, resolved_script = normalize_language_and_script(language, script)
@@ -1845,8 +1896,20 @@ async def generate_subtitles_stream(
     start_time_sec = float(start_time) if start_time is not None and float(start_time) > 0.0 else None
     rolling_context = list(prev_context) if prev_context else []
 
+    glossary_clause = ""
+    if project_glossary and len(project_glossary) > 0:
+        clean_terms = [t.strip() for t in project_glossary if isinstance(t, str) and t.strip()]
+        if clean_terms:
+            terms_str = ", ".join([repr(t) for t in clean_terms])
+            glossary_clause = (
+                f"PROJECT GLOSSARY & CUSTOM VOCABULARY (MANDATORY PROPER NOUNS):\n"
+                f"The following domain-specific terms, character names, gamertags, locations, and slang are present in this audio:\n"
+                f"[{terms_str}]\n"
+                f"Whenever acoustic signals resemble any of these terms, ALWAYS spell and transcribe them using these exact names! Do NOT substitute, invent alternative spellings, or mishear them.\n\n"
+            )
+
     log_terminal(f"Starting Progressive Batch Stream for: {Path(video_path).name} (Starting at Batch {start_chunk}{f', From Time {start_time_sec:.2f}s' if start_time_sec else ''})")
-    log_terminal(f"Settings: Language={resolved_language}, Script={resolved_script}, Content={content_type}, SDH={sdh_mode}, CPL<={cpl_limit}, CPS<={max_cps}, BatchMode={batch_mode}, UserFeedback={'Yes' if user_feedback else 'None'}")
+    log_terminal(f"Settings: Language={resolved_language}, Script={resolved_script}, Content={content_type}, SDH={sdh_mode}, CPL<={cpl_limit}, CPS<={max_cps}, BatchMode={batch_mode}, UserFeedback={'Yes' if user_feedback else 'None'}, GlossaryTerms={len(project_glossary) if project_glossary else 0}")
     
     all_raw_subtitles = []
     all_aligned_subtitles = []
@@ -1969,58 +2032,32 @@ async def generate_subtitles_stream(
             
             yield f"data: {json.dumps({'type': 'progress', 'chunk_index': chunk_idx, 'total_chunks': total_chunks, 'stage': f'Processing Batch {chunk_idx} of {total_chunks}'})}\n\n"
             
-            collar_sec = 2.0
+            # 250ms acoustic decay cushion (ensures zero cross-batch dialogue overlap during 1-2s pauses)
+            collar_sec = 0.25
             collar_left = collar_sec if chunk_s >= collar_sec else 0.0
             collar_right = collar_sec if (chunk_e + collar_sec) <= total_duration else 0.0
             slice_s = max(0.0, round(chunk_s - collar_left, 3))
             slice_e = min(total_duration, round(chunk_e + collar_right, 3))
 
+            norm_target_path = None
             if total_chunks > 1:
                 slice_filename = f"temp_chunk_{video_id}_{chunk_idx}.wav"
                 slice_path = UPLOAD_DIR / slice_filename
                 extract_audio_slice(audio_path_out, slice_s, slice_e, str(slice_path))
-                target_path = str(slice_path)
+                norm_slice_path = UPLOAD_DIR / f"temp_norm_chunk_{video_id}_{chunk_idx}.wav"
+                target_path = apply_dynamic_audio_normalization(str(slice_path), str(norm_slice_path))
+                if target_path == str(norm_slice_path):
+                    norm_target_path = str(norm_slice_path)
             else:
-                target_path = audio_path_out
                 slice_s = 0.0
                 slice_e = total_duration
+                norm_single_path = UPLOAD_DIR / f"temp_norm_single_{video_id}.wav"
+                target_path = apply_dynamic_audio_normalization(audio_path_out, str(norm_single_path))
+                if target_path == str(norm_single_path):
+                    norm_target_path = str(norm_single_path)
 
             try:
-                # Stage 0: Acoustic Pre-scan with Whisper to extract exact word timestamps & timeline anchors
-                chunk_whisper_words = []
-                acoustic_anchors = []
-                raw_cw = []
-                if enable_whisper:
-                    try:
-                        async for item in execute_task_with_heartbeats(
-                            get_whisper_word_timestamps,
-                            target_path,
-                            whisper_lang_target,
-                            whisper_model,
-                            chunk_idx=chunk_idx,
-                            total_chunks=total_chunks,
-                            stage=f"Whisper ({whisper_model}) acoustic scan for Part {chunk_idx}"
-                        ):
-                            if isinstance(item, tuple) and item[0] == "__RESULT__":
-                                raw_cw = item[1]
-                            else:
-                                yield item
-                        from app.whisper_aligner import extract_acoustic_timeline_anchors
-                        acoustic_anchors = extract_acoustic_timeline_anchors(raw_cw)
-                        for w in raw_cw:
-                            w_item = {
-                                "word": w["word"],
-                                "start": round(w["start"] + slice_s, 3),
-                                "end": round(w["end"] + slice_s, 3),
-                                "probability": w.get("probability", 1.0)
-                            }
-                            chunk_whisper_words.append(w_item)
-                            whisper_words.append(w_item)
-                        log_terminal(f"Batch {chunk_idx}: Whisper extracted {len(raw_cw)} words across {len(acoustic_anchors)} acoustic intervals.")
-                    except Exception as e:
-                        log_terminal(f"Batch {chunk_idx} Whisper pre-scan warning: {e}")
-
-                # Read chunk audio bytes directly (well within 20MB inline limit)
+                # Step 1: Read chunk audio bytes directly (well within 20MB inline limit)
                 with open(target_path, "rb") as f:
                     chunk_bytes = f.read()
                 audio_part = types.Part.from_bytes(data=chunk_bytes, mime_type="audio/wav")
@@ -2039,24 +2076,20 @@ async def generate_subtitles_stream(
                 if speaker_lock_clause:
                     context_clause = speaker_lock_clause + context_clause
 
-                anchors_clause = ""
-                if acoustic_anchors or raw_cw:
-                    phrase_lines = [f"  [{a['start']:.3f}s–{a['end']:.3f}s]: \"{a['text']}\"" for a in acoustic_anchors[:18]]
-                    word_lines = []
-                    for w in raw_cw[:60]:  # cap at 60 words to stay within token budget
-                        word_lines.append(f"  {w['word']} ({w['start']:.3f}s–{w['end']:.3f}s)")
-                    anchors_clause = (
-                        "ACOUSTIC REFERENCE — WHISPER DETECTED SPEECH TIMESTAMPS:\n"
-                        "(These are detected speech intervals from the audio waveform.)\n"
-                        "(Use these as timing anchors when speech is clearly present in these intervals.)\n"
-                        "(IMPORTANT: Whisper on CPU may under-detect or miss faint speech during background music, effects, or low volume. If you hear genuine human dialogue in the audio, YOU MUST transcribe it and timestamp it accurately based on what you hear in the audio. NEVER omit speech just because Whisper missed it.)\n\n"
-                    )
-                    if phrase_lines:
-                        anchors_clause += "Spoken Phrase Intervals (silence-separated speech bursts):\n"
-                        anchors_clause += "\n".join(phrase_lines) + "\n\n"
-                    if word_lines:
-                        anchors_clause += "Per-Word Acoustic Timestamps (exact word-level onset/offset):\n"
-                        anchors_clause += "\n".join(word_lines) + "\n\n"
+                music_dialogue_clause = (
+                    "CRITICAL DIALOGUE OVER BACKGROUND MUSIC & SOUNDTRACK:\n"
+                    "- When background music, soundtrack, or long instrumental tones play with only occasional or sparse dialogue spoken, YOU MUST DETECT AND TRANSCRIBE EVERY SINGLE SPOKEN WORD with exact timestamps!\n"
+                    "- Never skip or omit quiet, soft, or sparse dialogue just because music is playing.\n"
+                    "- Do NOT transcribe instrumental music as subtitles, but ALWAYS transcribe human speech spoken within or over musical sections.\n\n"
+                )
+
+                gaming_sfx_clause = (
+                    "CRITICAL GAMING, GUNFIRE & IN-GAME VOICE CHAT RULE:\n"
+                    "- In gameplay and action scenes, players speak over loud gunshots, explosions, vehicle engines, and footsteps.\n"
+                    "- YOU MUST TRANSCRIBE ALL SPOKEN WORDS even when partially masked by game SFX, gunfire, or loud audio! Never leave an interval empty because gunshots are present.\n"
+                    "- Teammates speaking via Discord or in-game voice chat may be quieter or more compressed than the main streamer. Treat in-game / Discord teammate voice chat with EQUAL PRIORITY to the main microphone!\n"
+                    "- When multiple players talk at the same time or call out simultaneously, use dual-speaker hyphen format (- Speaker 1: ...\\n- Speaker 2: ...). NEVER omit either speaker's dialogue!\n\n"
+                )
 
                 script_clause = f"Target Script: {resolved_script}\n" if resolved_script != "Auto-Detect" else ""
                 lang_directive = ""
@@ -2096,15 +2129,18 @@ async def generate_subtitles_stream(
                     )
 
                 silence_clause = (
-                    "CRITICAL SILENCE & NON-VOCAL RULE:\n"
-                    "- NEVER generate subtitles for instrumental music, background score, ambient noise, sound effects, applause, laughter, or silence.\n"
-                    "- ONLY transcribe when genuine human vocal speech is clearly audible and intelligible. If there is a section with only music or silence, leave that interval completely empty!\n\n"
+                    "CRITICAL SILENCE & SOUND EFFECTS RULE:\n"
+                    "- NEVER generate subtitles for pure instrumental music, background score, ambient noise, sound effects, or silence alone.\n"
+                    "- ALWAYS transcribe human vocal speech even when spoken within or over gunfire, explosions, vehicle engines, background music, or chatter!\n"
+                    "- In gaming and action scenes, transcribe all team callouts, tactical commands, and shouts verbatim.\n\n"
                 )
 
                 prompt = (
                     f"{feedback_clause}"
+                    f"{glossary_clause}"
                     f"{context_clause}"
-                    f"{anchors_clause}"
+                    f"{music_dialogue_clause}"
+                    f"{gaming_sfx_clause}"
                     f"{silence_clause}"
                     f"Target Spoken Language: {resolved_language}\n"
                     f"{script_clause}"
@@ -2130,16 +2166,20 @@ async def generate_subtitles_stream(
                     f"7. COMPLETE CLAUSES & SYNTACTIC BOUNDARIES:\n"
                     f"   - Subtitle events MUST break at natural clause boundaries.\n"
                     f"   - If a sentence fits within 2 lines of {cpl_limit} characters (<= 84 characters total), KEEP IT TOGETHER in ONE subtitle event.\n"
-                    f"8. STRICT SINGLE-SPEAKER RULE (EXACTLY ONE SPEAKER PER EVENT):\n"
-                    f"   - Detect speaker changes with high fidelity! Identify changes from voice acoustics, timbre, pitch, gender, and conversational turns.\n"
-                    f"   - NEVER combine dialogue from two speakers into a single subtitle event. NEVER put 2 speakers in 1 subtitle.\n"
-                    f"   - NEVER format multiple speakers with hyphens ('- Speaker 1\\n- Speaker 2').\n"
-                    f"   - Each subtitle event must contain speech from EXACTLY ONE speaker.\n"
-                    f"   - Set the 'speakers' array to contain exactly ONE speaker identity (e.g. ['Speaker 1']).\n"
-                    f"9. STRICTLY SEQUENTIAL TIMELINE (ZERO OVERLAPS):\n"
-                    f"   - Subtitle events must NOT overlap on the timeline. Ensure every subtitle ends before the next subtitle starts.\n"
-                    f"   - If two speakers speak simultaneously or rapidly, transcribe both speakers completely, but sequence them sequentially on the timeline!\n"
-                    f"10. TIMESTAMPS: Provide acoustic start_time and end_time for each subtitle event relative to this audio slice."
+                    f"8. MULTI-SPEAKER & DUAL-SPEAKER HYPHEN FORMATTING:\n"
+                    f"   - When two speakers speak simultaneously, interrupt, or talk over one another, output BOTH speakers in ONE subtitle event using hyphens:\n"
+                    f"     - [Speaker 1]: <dialogue 1>\n"
+                    f"     - [Speaker 2]: <dialogue 2>\n"
+                    f"   - Set 'speakers': ['Speaker 1', 'Speaker 2'] and 'speaker_count': 2.\n"
+                    f"   - NEVER drop, skip, or omit either speaker's dialogue when both talk at the same time!\n"
+                    f"   - If speakers speak sequentially, output separate sequential subtitle events.\n"
+                    f"9. STRICTLY SEQUENTIAL TIMELINE (ZERO OVERLAPS BETWEEN EVENTS):\n"
+                    f"   - Subtitle events must NOT overlap on the timeline (start of next event >= end of previous event).\n"
+                    f"   - Use dual-speaker hyphen format within a single event for simultaneous speech.\n"
+                    f"10. GAMING, GUNFIRE & IN-GAME VOICE CHAT:\n"
+                    f"    - Transcribe ALL spoken words even when partially masked by game SFX, gunfire, or vehicles.\n"
+                    f"    - Treat in-game / Discord teammate voice-chat with EQUAL PRIORITY to the main microphone.\n"
+                    f"11. TIMESTAMPS: Provide acoustic start_time and end_time for each subtitle event relative to this audio slice."
                 )
                 
                 response = None
@@ -2213,35 +2253,21 @@ async def generate_subtitles_stream(
                     log_terminal(f"Gemini API unavailable for Batch {chunk_idx}. Falling back to local Whisper transcription...")
                     yield f"data: {json.dumps({'type': 'progress', 'chunk_index': chunk_idx, 'total_chunks': total_chunks, 'stage': f'Batch {chunk_idx}: Transcribing via local Whisper fallback...'})}\n\n"
                     
-                    if raw_cw:
-                        subs = group_whisper_words_into_subtitles(raw_cw, chunk_offset=0.0, cpl_limit=cpl_limit, target_language=resolved_language)
-                        is_whisper_fallback = True
+                    subs = await asyncio.to_thread(
+                        transcribe_chunk_with_whisper,
+                        target_path,
+                        chunk_s,
+                        resolved_language,
+                        cpl_limit,
+                        whisper_model
+                    )
+                    if subs:
                         parsed = {"subtitles": subs}
+                        is_whisper_fallback = True
                     else:
-                        subs = await asyncio.to_thread(
-                            transcribe_chunk_with_whisper,
-                            target_path,
-                            chunk_s,
-                            resolved_language,
-                            cpl_limit,
-                            whisper_model
-                        )
-                        if subs:
-                            parsed = {"subtitles": subs}
-                            is_whisper_fallback = True
-                        else:
-                            active_words = chunk_whisper_words if chunk_whisper_words else [w for w in whisper_words if w["start"] >= chunk_s - 0.2 and w["end"] <= chunk_e + 0.2]
-                            if active_words:
-                                subs = group_whisper_words_into_subtitles(active_words, chunk_s, cpl_limit=cpl_limit, target_language=resolved_language)
-                                parsed = {"subtitles": subs}
-                                is_whisper_fallback = True
-                            else:
-                                yield f"data: {json.dumps({'type': 'batch_error', 'chunk_index': chunk_idx, 'total_chunks': total_chunks, 'error': str(last_error)})}\n\n"
-                                # Phase 1 Fix 6: Advance cursor to chunk_e even on complete batch failure.
-                                # Without this, prev_batch_end stays stale and the next batch can produce
-                                # subtitle timestamps that jump backward in time.
-                                prev_batch_end = max(prev_batch_end, chunk_e)
-                                continue
+                        yield f"data: {json.dumps({'type': 'batch_error', 'chunk_index': chunk_idx, 'total_chunks': total_chunks, 'error': str(last_error)})}\n\n"
+                        prev_batch_end = max(prev_batch_end, chunk_e)
+                        continue
                 else:
                     parsed = extract_and_repair_subtitle_json(response.text)
                     is_whisper_fallback = False
@@ -2268,7 +2294,7 @@ async def generate_subtitles_stream(
                     min_duration=min_duration
                 )
 
-                # Cross-chunk acoustic seam stitching & deduplication across 1.0s overlap collar
+                # Cross-chunk acoustic seam stitching & deduplication across overlap collar
                 if all_aligned_subtitles and batch_raw:
                     all_aligned_subtitles, batch_raw = stitch_cross_chunk_seam(
                         all_aligned_subtitles,
@@ -2285,19 +2311,51 @@ async def generate_subtitles_stream(
                 # Stage 1A: Heal any cross-event dangling phrases
                 batch_raw = heal_cross_event_dangling_phrases(batch_raw, cpl_limit=cpl_limit, max_lines=max_lines)
 
-                # Stage 1B: Pre-split any oversized events that exceed 2 lines or cpl_limit using acoustic word boundaries
-                active_words = chunk_whisper_words if chunk_whisper_words else [w for w in whisper_words if w["start"] >= chunk_s - 0.5 and w["end"] <= chunk_e + 0.5]
+                # Stage 2: Whisper Acoustic Word Extraction & Synchronization (strictly on this batch)
+                chunk_whisper_words = []
+                if enable_whisper and batch_raw:
+                    log_terminal(f"Batch {chunk_idx}: Running Whisper ({whisper_model}) acoustic alignment...")
+                    yield f"data: {json.dumps({'type': 'progress', 'chunk_index': chunk_idx, 'total_chunks': total_chunks, 'stage': f'Batch {chunk_idx}: Whisper ({whisper_model}) acoustic sync...'})}\n\n"
+                    try:
+                        raw_cw = []
+                        async for item in execute_task_with_heartbeats(
+                            get_whisper_word_timestamps,
+                            target_path,
+                            whisper_lang_target,
+                            whisper_model,
+                            chunk_idx=chunk_idx,
+                            total_chunks=total_chunks,
+                            stage=f"Whisper ({whisper_model}) acoustic sync for Part {chunk_idx}"
+                        ):
+                            if isinstance(item, tuple) and item[0] == "__RESULT__":
+                                raw_cw = item[1]
+                            else:
+                                yield item
+                        for w in raw_cw:
+                            w_item = {
+                                "word": w["word"],
+                                "start": round(w["start"] + slice_s, 3),
+                                "end": round(w["end"] + slice_s, 3),
+                                "probability": w.get("probability", 1.0)
+                            }
+                            chunk_whisper_words.append(w_item)
+                            whisper_words.append(w_item)
+                        log_terminal(f"Batch {chunk_idx}: Whisper extracted {len(raw_cw)} words on audio slice.")
+                    except Exception as e:
+                        log_terminal(f"Batch {chunk_idx} Whisper alignment warning: {e}")
+
+                # Stage 2B: Pre-split any oversized events that exceed 2 lines or cpl_limit using acoustic word boundaries
                 split_batch = []
                 for s in batch_raw:
-                    split_batch.extend(split_and_balance_event(s, cpl_limit=cpl_limit, max_lines=max_lines, audio_path=audio_path_out, whisper_words=active_words, min_duration=min_duration, frame_rate=frame_rate))
+                    split_batch.extend(split_and_balance_event(s, cpl_limit=cpl_limit, max_lines=max_lines, audio_path=audio_path_out, whisper_words=chunk_whisper_words, min_duration=min_duration, frame_rate=frame_rate))
 
-                # Stage 2: Closed-Loop Acoustic Synchronization (Locks subtitles to exact spoken words & audio energy)
-                if active_words and split_batch:
+                # Stage 2C: Closed-Loop Acoustic Synchronization (Locks subtitles to exact spoken words & audio energy)
+                if chunk_whisper_words and split_batch:
                     log_terminal(f"Batch {chunk_idx}: Synchronizing {len(split_batch)} events acoustically with Whisper ({whisper_model})...")
                     try:
                         split_batch = align_subtitle_timestamps(
                             split_batch,
-                            active_words,
+                            chunk_whisper_words,
                             search_radius=8.0,
                             prev_batch_end=prev_batch_end,
                             audio_path=audio_path_out,
@@ -2429,6 +2487,16 @@ async def generate_subtitles_stream(
                 if total_chunks > 1 and os.path.exists(target_path):
                     try:
                         os.unlink(target_path)
+                    except Exception:
+                        pass
+                if norm_target_path and os.path.exists(norm_target_path):
+                    try:
+                        os.unlink(norm_target_path)
+                    except Exception:
+                        pass
+                if total_chunks > 1 and 'slice_path' in locals() and os.path.exists(str(slice_path)):
+                    try:
+                        os.unlink(str(slice_path))
                     except Exception:
                         pass
                         

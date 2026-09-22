@@ -33,6 +33,7 @@ function SubtitleEventCard({
   cpsLimit = 20,
   frameRate = 24.0,
   showMerge = true,
+  onSeek = null,
   theme = 'dark'
 }) {
   const isDark = theme === 'dark';
@@ -200,6 +201,19 @@ function SubtitleEventCard({
     <div
       ref={cardRef}
       onClick={() => onActivate(event.id)}
+      onDoubleClick={(e) => {
+        const tag = e.target?.tagName?.toLowerCase();
+        if (tag === 'textarea' || tag === 'input' || tag === 'button') return;
+        e.stopPropagation();
+        onActivate(event.id);
+        const st = event.start_time !== undefined ? event.start_time : (event.start !== undefined ? event.start : 0);
+        if (onSeek) {
+          onSeek(st);
+        } else {
+          onPlay(event.id);
+        }
+      }}
+      title="Double click to seek playhead to this subtitle"
       className={`group relative rounded-xl border transition-all duration-150 p-2.5 flex flex-col gap-2 cursor-pointer ${
         isActive 
           ? 'bg-[#181920] border-[#00e5be] shadow-[0_0_15px_rgba(0,229,190,0.15)] ring-1 ring-[#00e5be]/50' 

@@ -14,6 +14,8 @@ export default function VideoPlayer({
   frameRate = 24,
   theme = 'dark', // 'dark' | 'light'
   isAudio = false,
+  subtitleStyle = null,
+  onUpdateSubtitleStyle = null,
 }) {
   const videoRef = useRef(null);
   const containerRef = useRef(null);
@@ -123,6 +125,21 @@ export default function VideoPlayer({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [handleKeyDown]);
 
+  // ── Synchronize currentSubtitle immediately when events or currentTime change (even when paused) ──
+  useEffect(() => {
+    const t = videoRef.current ? videoRef.current.currentTime : currentTime;
+    if (!events || events.length === 0) {
+      setCurrentSubtitle(null);
+      return;
+    }
+    const active = events.find(e => {
+      const st = e.start_time !== undefined ? e.start_time : (e.start !== undefined ? e.start : 0);
+      const en = e.end_time !== undefined ? e.end_time : (e.end !== undefined ? e.end : 0);
+      return t >= st && t <= en;
+    });
+    setCurrentSubtitle(active || null);
+  }, [events, currentTime]);
+
   // 60FPS Continuous Time Update & Meter Loop for Buttery Smooth Motion
   useEffect(() => {
     let animId;
@@ -157,6 +174,8 @@ export default function VideoPlayer({
                 setActiveEventId(aId);
               }
             }
+          } else {
+            setCurrentSubtitle(null);
           }
         }
         animId = requestAnimationFrame(loop);
@@ -190,6 +209,8 @@ export default function VideoPlayer({
           setActiveEventId(aId);
         }
       }
+    } else {
+      setCurrentSubtitle(null);
     }
   }, [events, onTimeUpdate, setActiveEventId]);
 
@@ -206,11 +227,13 @@ export default function VideoPlayer({
         video.pause();
         if (playTarget.time !== undefined) {
           video.currentTime = playTarget.time;
+          setCurrentTime(playTarget.time);
         }
         loopRef.current = null;
       } else {
         if (playTarget.time !== undefined) {
           video.currentTime = playTarget.time;
+          setCurrentTime(playTarget.time);
         }
         if (playTarget.endTime !== undefined) {
           loopRef.current = { start: playTarget.time || 0, end: playTarget.endTime };
@@ -267,46 +290,118 @@ export default function VideoPlayer({
     setHoverTime(percentage * duration);
   };
 
-  // Render Netflix Subtitle Typography
+  // Render Netflix Subtitle Typography with MS Word Formatting Support
   const renderSubtitleText = (text, isHighlighted) => {
     if (!text) return null;
     const lines = text.split('\n');
+
+    const fontFamily = subtitleStyle?.fontFamily || 'Netflix Sans, Roboto, Helvetica, Arial, sans-serif';
+    const fontSize = subtitleStyle?.fontSize || subtitleFontSize;
+    const textColor = subtitleStyle?.textColor || '#ffffff';
+    const bgColor = subtitleStyle?.bgColor || 'rgba(0,0,0,0.6)';
+    const textAlign = subtitleStyle?.textAlign || 'center';
+    const isBold = subtitleStyle?.isBold || false;
+    const isItalicGlobal = subtitleStyle?.isItalic || false;
+    const isUnderlineGlobal = subtitleStyle?.isUnderline || false;
+    const isStrikethroughGlobal = subtitleStyle?.isStrikethrough || false;
+
+    let textShadow = '0 2px 4px rgba(0,0,0,0.95), -1.5px -1.5px 0 #000, 1.5px -1.5px 0 #000, -1.5px 1.5px 0 #000, 1.5px 1.5px 0 #000';
+    if (subtitleStyle?.textShadow === 'none') {
+      textShadow = 'none';
+    } else if (subtitleStyle?.textShadow === 'shadow') {
+      textShadow = '0 3px 6px rgba(0,0,0,0.9)';
+    }
+
     return (
       <div 
-        className={`text-center transition-all duration-150 select-none ${
-          isHighlighted ? 'drop-shadow-[0_0_12px_rgba(52,211,153,0.9)]' : ''
-        }`}
+        className={`transition-all duration-150 select-none ${
+          textAlign === 'left' ? 'text-left' : textAlign === 'right' ? 'text-right' : 'text-center'
+        } ${isHighlighted ? 'drop-shadow-[0_0_12px_rgba(52,211,153,0.9)]' : ''}`}
         style={{ 
-          textShadow: '0 2px 4px rgba(0,0,0,0.95), -1.5px -1.5px 0 #000, 1.5px -1.5px 0 #000, -1.5px 1.5px 0 #000, 1.5px 1.5px 0 #000',
-          fontFamily: 'Netflix Sans, Roboto, Helvetica, Arial, sans-serif',
+          textShadow,
+          fontFamily,
           lineHeight: '1.25',
-          fontSize: `${subtitleFontSize}px`
+          fontSize: `${fontSize}px`,
+          color: textColor,
+          fontWeight: isBold ? 'bold' : 'normal',
+          fontStyle: isItalicGlobal ? 'italic' : 'normal',
+          textDecoration: [
+            isUnderlineGlobal ? 'underline' : '',
+            isStrikethroughGlobal ? 'line-through' : ''
+          ].filter(Boolean).join(' ') || 'none'
         }}
       >
         {lines.map((line, i) => {
           const isDual = line.trim().startsWith('-');
-          const parts = line.split(/(<\/?i>)/i);
-          let isItalic = false;
-          const renderedParts = parts.map((part, idx) => {
-            if (part.toLowerCase() === '<i>') { isItalic = true; return null; }
-            if (part.toLowerCase() === '</i>') { isItalic = false; return null; }
-            if (!part) return null;
-            let textPart = part.replace(/♪/g, ' ♪ ');
-            return (
-              <span key={idx} style={isItalic ? { fontStyle: 'italic' } : {}}>
+          const tagRegex = /(<\/?(?:b|i|u|s|strike|font)(?:\s+color=["']?([^"'>]+)["']?)?>)/gi;
+          const tokens = line.split(tagRegex);
+
+          let curB = isBold;
+          let curI = isItalicGlobal;
+          let curU = isUnderlineGlobal;
+          let curS = isStrikethroughGlobal;
+          let curColor = textColor;
+
+          const renderedParts = [];
+
+          for (let idx = 0; idx < tokens.length; idx++) {
+            const token = tokens[idx];
+            if (!token) continue;
+
+            const lower = token.toLowerCase();
+            if (lower === '<b>') { curB = true; continue; }
+            if (lower === '</b>') { curB = isBold; continue; }
+            if (lower === '<i>') { curI = true; continue; }
+            if (lower === '</i>') { curI = isItalicGlobal; continue; }
+            if (lower === '<u>') { curU = true; continue; }
+            if (lower === '</u>') { curU = isUnderlineGlobal; continue; }
+            if (lower === '<s>' || lower === '<strike>') { curS = true; continue; }
+            if (lower === '</s>' || lower === '</strike>') { curS = isStrikethroughGlobal; continue; }
+            if (lower.startsWith('<font')) {
+              const colorMatch = token.match(/color=["']?([^"'>\s]+)["']?/i);
+              if (colorMatch && colorMatch[1]) {
+                curColor = colorMatch[1];
+              }
+              continue;
+            }
+            if (lower === '</font>') {
+              curColor = textColor;
+              continue;
+            }
+            if (idx > 0 && tokens[idx - 1] && tokens[idx - 1].toLowerCase().startsWith('<font')) {
+              continue;
+            }
+
+            let textPart = token.replace(/♪/g, ' ♪ ');
+            renderedParts.push(
+              <span 
+                key={idx} 
+                style={{
+                  fontWeight: curB ? 'bold' : 'normal',
+                  fontStyle: curI ? 'italic' : 'normal',
+                  textDecoration: [
+                    curU ? 'underline' : '',
+                    curS ? 'line-through' : ''
+                  ].filter(Boolean).join(' ') || 'none',
+                  color: curColor
+                }}
+              >
                 {textPart}
               </span>
             );
-          });
+          }
 
           return (
             <div 
               key={i} 
               className={`inline-block mx-auto relative ${
                 isCurrentActive 
-                  ? 'border-2 border-[#00e5ff] bg-black/60 rounded px-2.5 py-0.5 shadow-[0_0_12px_rgba(0,229,255,0.4)]' 
-                  : 'bg-black/50 px-2 py-0.5 rounded'
-              } ${isDual ? 'text-amber-100 font-medium' : 'text-white font-medium'}`}
+                  ? 'border-2 border-[#00e5ff] rounded px-2.5 py-0.5 shadow-[0_0_12px_rgba(0,229,255,0.4)]' 
+                  : 'px-2 py-0.5 rounded'
+              } ${isDual ? 'text-amber-100 font-medium' : 'font-medium'}`}
+              style={{
+                backgroundColor: bgColor === 'transparent' ? 'transparent' : (isCurrentActive ? 'rgba(0,0,0,0.75)' : bgColor)
+              }}
             >
               {isCurrentActive && (
                 <>
@@ -367,9 +462,31 @@ export default function VideoPlayer({
 
           <div className="flex items-center gap-1 border rounded px-1.5 py-0.5 bg-[#181920] border-[#262734]">
             <span className="text-[10px] opacity-60">Size:</span>
-            <button onClick={() => setSubtitleFontSize(Math.max(16, subtitleFontSize - 2))} className="opacity-70 hover:opacity-100 text-xs px-0.5 font-bold cursor-pointer">-</button>
-            <span className="text-[10px] font-mono font-bold text-[#00e5be]">{subtitleFontSize}px</span>
-            <button onClick={() => setSubtitleFontSize(Math.min(36, subtitleFontSize + 2))} className="opacity-70 hover:opacity-100 text-xs px-0.5 font-bold cursor-pointer">+</button>
+            <button
+              onClick={() => {
+                const currentSz = subtitleStyle?.fontSize || subtitleFontSize;
+                const newSz = Math.max(12, currentSz - 2);
+                setSubtitleFontSize(newSz);
+                if (onUpdateSubtitleStyle) onUpdateSubtitleStyle('fontSize', newSz);
+              }}
+              className="opacity-70 hover:opacity-100 text-xs px-0.5 font-bold cursor-pointer"
+            >
+              -
+            </button>
+            <span className="text-[10px] font-mono font-bold text-[#00e5be]">
+              {subtitleStyle?.fontSize || subtitleFontSize}px
+            </span>
+            <button
+              onClick={() => {
+                const currentSz = subtitleStyle?.fontSize || subtitleFontSize;
+                const newSz = Math.min(60, currentSz + 2);
+                setSubtitleFontSize(newSz);
+                if (onUpdateSubtitleStyle) onUpdateSubtitleStyle('fontSize', newSz);
+              }}
+              className="opacity-70 hover:opacity-100 text-xs px-0.5 font-bold cursor-pointer"
+            >
+              +
+            </button>
           </div>
         </div>
       </div>

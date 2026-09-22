@@ -1,10 +1,29 @@
 import { API_BASE } from '../config';
 
+async function fetchWithTimeout(url, options = {}, timeoutMs = 12000) {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, {
+      ...options,
+      signal: controller.signal
+    });
+    return res;
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      throw new Error(`Connection timed out after ${timeoutMs / 1000}s. Please verify the backend server is running on localhost:8000.`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(id);
+  }
+}
+
 /**
  * Authentication API Client for VerboLabs Auth
  */
 export async function signupUser({ name, email, password, confirm_password, employee_id }) {
-  const res = await fetch(`${API_BASE}/api/auth/signup`, {
+  const res = await fetchWithTimeout(`${API_BASE}/api/auth/signup`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -14,7 +33,7 @@ export async function signupUser({ name, email, password, confirm_password, empl
       confirm_password,
       employee_id: employee_id || null
     })
-  });
+  }, 15000);
 
   const data = await res.json();
   if (!res.ok) {
@@ -24,7 +43,7 @@ export async function signupUser({ name, email, password, confirm_password, empl
 }
 
 export async function loginUser({ name, email, password, operating_location, bot_challenge_token }) {
-  const res = await fetch(`${API_BASE}/api/auth/login`, {
+  const res = await fetchWithTimeout(`${API_BASE}/api/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -34,7 +53,7 @@ export async function loginUser({ name, email, password, operating_location, bot
       operating_location,
       bot_challenge_token: bot_challenge_token || null
     })
-  });
+  }, 15000);
 
   const data = await res.json();
   if (!res.ok) {
@@ -47,7 +66,7 @@ export async function loginUser({ name, email, password, operating_location, bot
 }
 
 export async function getBotChallenge() {
-  const res = await fetch(`${API_BASE}/api/auth/bot-challenge`);
+  const res = await fetchWithTimeout(`${API_BASE}/api/auth/bot-challenge`, {}, 8000);
   const data = await res.json();
   if (!res.ok) {
     throw new Error(data.detail || 'Failed to fetch verification challenge.');
@@ -56,7 +75,7 @@ export async function getBotChallenge() {
 }
 
 export async function getTakeoverStatus(takeover_id) {
-  const res = await fetch(`${API_BASE}/api/auth/takeover/status?takeover_id=${encodeURIComponent(takeover_id)}`);
+  const res = await fetchWithTimeout(`${API_BASE}/api/auth/takeover/status?takeover_id=${encodeURIComponent(takeover_id)}`, {}, 8000);
   const data = await res.json();
   if (!res.ok) {
     throw new Error(data.detail || 'Failed to check takeover status.');
@@ -69,14 +88,14 @@ export async function submitTakeoverDecision({ takeover_id, decision, token }) {
   if (token) {
     headers['Authorization'] = `Bearer ${token}`;
   }
-  const res = await fetch(`${API_BASE}/api/auth/takeover/decision`, {
+  const res = await fetchWithTimeout(`${API_BASE}/api/auth/takeover/decision`, {
     method: 'POST',
     headers,
     body: JSON.stringify({
       takeover_id,
       decision
     })
-  });
+  }, 10000);
   const data = await res.json();
   if (!res.ok) {
     throw new Error(data.detail || 'Failed to submit decision.');
@@ -85,14 +104,14 @@ export async function submitTakeoverDecision({ takeover_id, decision, token }) {
 }
 
 export async function verifyLoginOtp({ challenge_id, otp }) {
-  const res = await fetch(`${API_BASE}/api/auth/verify-otp`, {
+  const res = await fetchWithTimeout(`${API_BASE}/api/auth/verify-otp`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       challenge_id,
       otp
     })
-  });
+  }, 15000);
 
   const data = await res.json();
   if (!res.ok) {
@@ -102,11 +121,11 @@ export async function verifyLoginOtp({ challenge_id, otp }) {
 }
 
 export async function resendLoginOtp({ challenge_id }) {
-  const res = await fetch(`${API_BASE}/api/auth/resend-otp`, {
+  const res = await fetchWithTimeout(`${API_BASE}/api/auth/resend-otp`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ challenge_id })
-  });
+  }, 15000);
 
   const data = await res.json();
   if (!res.ok) {
@@ -116,7 +135,7 @@ export async function resendLoginOtp({ challenge_id }) {
 }
 
 export async function verifyEmailToken(token) {
-  const res = await fetch(`${API_BASE}/api/auth/verify-email?token=${encodeURIComponent(token)}`);
+  const res = await fetchWithTimeout(`${API_BASE}/api/auth/verify-email?token=${encodeURIComponent(token)}`, {}, 10000);
   const data = await res.json();
   if (!res.ok) {
     throw new Error(data.detail || 'Verification failed or link expired.');
@@ -125,11 +144,11 @@ export async function verifyEmailToken(token) {
 }
 
 export async function resendVerification(email) {
-  const res = await fetch(`${API_BASE}/api/auth/resend-verification`, {
+  const res = await fetchWithTimeout(`${API_BASE}/api/auth/resend-verification`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email })
-  });
+  }, 12000);
 
   const data = await res.json();
   if (!res.ok) {
@@ -139,11 +158,11 @@ export async function resendVerification(email) {
 }
 
 export async function requestPasswordReset(email) {
-  const res = await fetch(`${API_BASE}/api/auth/forgot-password`, {
+  const res = await fetchWithTimeout(`${API_BASE}/api/auth/forgot-password`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email })
-  });
+  }, 15000);
 
   const data = await res.json();
   if (!res.ok) {
@@ -153,7 +172,7 @@ export async function requestPasswordReset(email) {
 }
 
 export async function resetPassword({ token, password, confirm_password }) {
-  const res = await fetch(`${API_BASE}/api/auth/reset-password`, {
+  const res = await fetchWithTimeout(`${API_BASE}/api/auth/reset-password`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -161,7 +180,7 @@ export async function resetPassword({ token, password, confirm_password }) {
       password,
       confirm_password
     })
-  });
+  }, 15000);
 
   const data = await res.json();
   if (!res.ok) {
@@ -171,11 +190,11 @@ export async function resetPassword({ token, password, confirm_password }) {
 }
 
 export async function fetchCurrentUser(token) {
-  const res = await fetch(`${API_BASE}/api/auth/me`, {
+  const res = await fetchWithTimeout(`${API_BASE}/api/auth/me`, {
     headers: {
       'Authorization': `Bearer ${token}`
     }
-  });
+  }, 8000);
 
   const data = await res.json();
   if (!res.ok) {
@@ -186,12 +205,12 @@ export async function fetchCurrentUser(token) {
 
 export async function logoutUser(token) {
   try {
-    await fetch(`${API_BASE}/api/auth/logout`, {
+    await fetchWithTimeout(`${API_BASE}/api/auth/logout`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${token}`
       }
-    });
+    }, 5000);
   } catch (err) {
     console.warn('Logout notification error:', err);
   }

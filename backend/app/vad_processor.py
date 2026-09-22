@@ -271,7 +271,7 @@ def get_speech_timestamps_vad(
                 else:
                     all_intervals.append(inv)
 
-        curr_s = curr_e - overlap_s if curr_e < req_end else curr_end
+        curr_s = curr_e - overlap_s if curr_e < req_end else req_end
 
     return all_intervals
 
@@ -382,8 +382,145 @@ def snap_to_acoustic_boundaries_vad(
     st = snap_timestamp_to_voice_vad(audio_path, float(raw_start), is_start=True, collar_sec=collar_sec)
     et = snap_timestamp_to_voice_vad(audio_path, float(raw_end), is_start=False, collar_sec=collar_sec)
 
-    # Ensure valid forward duration
-    if et <= st + 0.1:
-        et = round(st + max(0.2, float(raw_end) - float(raw_start)), 3)
-
     return round(st, 3), round(et, 3)
+
+
+def find_vad_dialogue_cut_points(
+    audio_path: str,
+    target_chunk_sec: float = 90.0,
+    min_chunk_sec: float = 65.0,
+    max_chunk_sec: float = 115.0,
+    min_pause_sec: float = 1.2,
+    start_offset_sec: float = 0.0
+) -> List[Tuple[float, float]]:
+    """
+    Partitions audio into ~90s batches (+/- n seconds) ending at clean dialogue pauses (>= 1-2s).
+    Uses Silero VAD to identify genuine human speech vs background music/score/silence.
+    
+    3-Tier Fallback Hierarchy:
+      Tier 1: Look for pause >= 1.5s (or min_pause_sec) within [min_chunk_sec, max_chunk_sec].
+      Tier 2: If none, look for pause >= 1.0s within extended window (up to max_chunk_sec + 15s).
+      Tier 3: If continuous speech with no 1s pause, find longest speech pause (>= 0.4s) or speaker turn closest to 90s.
+      Music / Silence: If no speech in window (music only), cut cleanly at target_chunk_sec.
+    """
+    model = get_silero_model()
+    if model is None or not os.path.exists(audio_path):
+        return []
+
+    try:
+        info = sf.info(audio_path)
+        total_sec = float(info.duration)
+    except Exception:
+        return []
+
+    cur_start = max(0.0, min(float(start_offset_sec), max(0.0, total_sec - 0.5)))
+    if (total_sec - cur_start) <= max_chunk_sec:
+        return [(round(cur_start, 3), round(total_sec, 3))]
+
+    chunks: List[Tuple[float, float]] = []
+
+    while cur_start < total_sec:
+        remaining = total_sec - cur_start
+        if remaining <= max_chunk_sec:
+            chunks.append((round(cur_start, 3), round(total_sec, 3)))
+            break
+
+        # Search window
+        win_s = cur_start + min_chunk_sec
+        win_e = min(total_sec, cur_start + max_chunk_sec)
+        # Extended window for Tier 2/3 (e.g. up to +15-20s if needed)
+        win_e_ext = min(total_sec, cur_start + max_chunk_sec + 15.0)
+
+        # Get VAD speech intervals in the extended window
+        speech_intervals = get_speech_timestamps_vad(
+            audio_path,
+            threshold=0.40,  # Slightly sensitive to detect faint speech over music
+            min_speech_duration_ms=180,
+            min_silence_duration_ms=150,
+            start_sec=max(0.0, win_s - 5.0),
+            end_sec=min(total_sec, win_e_ext + 2.0)
+        )
+
+        best_split_point = None
+
+        if not speech_intervals:
+            # No speech detected in this window (e.g. instrumental music or silence)
+            # Safe to cut cleanly at target_chunk_sec
+            best_split_point = min(total_sec, cur_start + target_chunk_sec)
+        else:
+            # Build silence / non-speech gaps between speech intervals
+            gaps = []
+            # Gap before first speech interval if within window
+            first_sp = speech_intervals[0]
+            if first_sp["start_time"] > win_s:
+                gaps.append({
+                    "start": win_s,
+                    "end": first_sp["start_time"],
+                    "dur": first_sp["start_time"] - win_s
+                })
+
+            for i in range(len(speech_intervals) - 1):
+                gap_start = speech_intervals[i]["end_time"]
+                gap_end = speech_intervals[i + 1]["start_time"]
+                gap_dur = gap_end - gap_start
+                if gap_dur > 0.05:
+                    gaps.append({
+                        "start": gap_start,
+                        "end": gap_end,
+                        "dur": gap_dur
+                    })
+
+            # Gap after last speech interval if within window
+            last_sp = speech_intervals[-1]
+            if last_sp["end_time"] < win_e_ext:
+                gaps.append({
+                    "start": last_sp["end_time"],
+                    "end": win_e_ext,
+                    "dur": win_e_ext - last_sp["end_time"]
+                })
+
+            target_time = cur_start + target_chunk_sec
+
+            # Tier 1: Gaps >= min_pause_sec (>= 1.2s - 1.5s) inside primary window [win_s, win_e]
+            tier1_candidates = [
+                g for g in gaps
+                if g["dur"] >= min_pause_sec and (win_s <= g["start"] <= win_e or win_s <= g["end"] <= win_e)
+            ]
+            if tier1_candidates:
+                # Pick candidate closest to target_time
+                best_gap = min(tier1_candidates, key=lambda g: abs(((g["start"] + g["end"]) / 2.0) - target_time))
+                # Split at gap midpoint, leaving at least 0.5s pause after previous dialogue
+                best_split_point = round((best_gap["start"] + best_gap["end"]) / 2.0, 3)
+
+            # Tier 2: Gaps >= 1.0s inside extended window [win_s, win_e_ext]
+            if best_split_point is None:
+                tier2_candidates = [
+                    g for g in gaps
+                    if g["dur"] >= 1.0 and (win_s <= g["start"] <= win_e_ext or win_s <= g["end"] <= win_e_ext)
+                ]
+                if tier2_candidates:
+                    best_gap = min(tier2_candidates, key=lambda g: abs(((g["start"] + g["end"]) / 2.0) - target_time))
+                    best_split_point = round((best_gap["start"] + best_gap["end"]) / 2.0, 3)
+
+            # Tier 3: Longest natural breath/turn pause (>= 0.35s) closest to target_time
+            if best_split_point is None:
+                tier3_candidates = [
+                    g for g in gaps
+                    if g["dur"] >= 0.35 and (win_s <= g["start"] <= win_e_ext or win_s <= g["end"] <= win_e_ext)
+                ]
+                if tier3_candidates:
+                    # Score by distance from target + bonus for longer gap
+                    best_gap = min(tier3_candidates, key=lambda g: abs(((g["start"] + g["end"]) / 2.0) - target_time) - min(g["dur"], 2.0) * 10.0)
+                    best_split_point = round((best_gap["start"] + best_gap["end"]) / 2.0, 3)
+
+        if best_split_point is None:
+            # Fallback if no pause detected (e.g. continuous screaming/singing)
+            best_split_point = cur_start + target_chunk_sec
+
+        # Bound split point to avoid infinite loop or overshoot
+        best_split_point = round(min(total_sec, max(cur_start + min_chunk_sec, best_split_point)), 3)
+        chunks.append((round(cur_start, 3), best_split_point))
+        cur_start = best_split_point
+
+    return chunks
+

@@ -2,9 +2,9 @@ import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 /**
- * Ultra-responsive, GPU-accelerated 60fps Green Cursor Trail.
- * Portaled directly to document.body so it is NEVER bounded by transformed ancestor divs
- * and ALWAYS stays locked to the cursor across the ENTIRE page at all scroll positions.
+ * Ultra-responsive, zero-delay emerald green cursor trail.
+ * Portaled directly to document.body so it is never bounded by transformed ancestor divs.
+ * Scoped strictly to LandingPage and Auth screens.
  */
 export default function CursorTrail() {
   const canvasRef = useRef(null);
@@ -43,10 +43,10 @@ export default function CursorTrail() {
     updateSize();
     window.addEventListener('resize', updateSize, { passive: true });
 
-    // Directly track real-time cursor with zero lag
+    // Directly track real-time cursor with zero lag and zero delay
     const mouse = { x: -100, y: -100, prevX: -100, prevY: -100, moving: false };
     const trail = [];
-    const maxTrail = 7;
+    const maxTrail = 16; // Extended longer ribbon length (was 7)
     const particles = [];
     let idleTimer;
 
@@ -93,15 +93,15 @@ export default function CursorTrail() {
       mouse.y = y;
       mouse.moving = true;
 
-      // Add point directly at cursor head (0 lag)
+      // Add point directly at cursor head (0 lag, 0 delay)
       trail.unshift({ x, y });
       if (trail.length > maxTrail) {
         trail.pop();
       }
 
-      // Sparkles on movement - just a little bit more, nice and airy
+      // Sparkles on movement - nice and airy
       const dist = Math.hypot(vx, vy);
-      if (dist > 3.5 && particles.length < 18) {
+      if (dist > 3.5 && particles.length < 24) {
         const count = Math.min(2, Math.floor(dist / 9) + 1);
         for (let i = 0; i < count; i++) {
           particles.push(new Particle(x, y, vx, vy));
@@ -111,7 +111,7 @@ export default function CursorTrail() {
       clearTimeout(idleTimer);
       idleTimer = setTimeout(() => {
         mouse.moving = false;
-      }, 45);
+      }, 35);
     };
 
     window.addEventListener('mousemove', handleMouseMove, { passive: true });
@@ -126,9 +126,12 @@ export default function CursorTrail() {
     const render = () => {
       ctx.clearRect(0, 0, width, height);
 
-      // Fade trail swiftly when stationary
+      // Fade trail swiftly when stationary with zero lingering delay
       if (!mouse.moving && trail.length > 0) {
         trail.pop();
+        if (trail.length > 8) {
+          trail.pop();
+        }
         if (trail.length > 0) {
           trail.pop();
         }
@@ -146,7 +149,7 @@ export default function CursorTrail() {
           ctx.beginPath();
           ctx.moveTo(p1.x, p1.y);
           ctx.lineTo(p2.x, p2.y);
-          ctx.strokeStyle = `rgba(0, 229, 190, ${ratio * 0.8})`;
+          ctx.strokeStyle = `rgba(0, 229, 190, ${ratio * 0.85})`;
           ctx.lineWidth = lineWidth;
           ctx.lineCap = 'round';
           ctx.lineJoin = 'round';
@@ -157,7 +160,7 @@ export default function CursorTrail() {
         ctx.restore();
       }
 
-      // Cursor tip dot
+      // Cursor tip dot with glow
       if (mouse.x > 0 && mouse.y > 0 && mouse.moving) {
         ctx.save();
         ctx.beginPath();
