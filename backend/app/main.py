@@ -287,6 +287,7 @@ app.include_router(admin_router)
 # CORS configuration with explicit Vercel and local dev support
 DEFAULT_ALLOWED_ORIGINS = [
     "https://transcribe-eight-eta.vercel.app",
+    "https://transcribe.verbolabs.com",
     "http://localhost:5173",
     "http://localhost:3000",
     "http://127.0.0.1:5173",
@@ -301,7 +302,12 @@ for default_o in DEFAULT_ALLOWED_ORIGINS:
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
-    allow_origin_regex=r"^https?://.*",
+    # Credentialed requests are only accepted from known origins: the list above, any localhost
+    # port (dev), any *.verbolabs.com host, plus an optional ALLOWED_ORIGIN_REGEX from the environment.
+    allow_origin_regex=os.getenv(
+        "ALLOWED_ORIGIN_REGEX",
+        r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$|^https://([a-z0-9-]+\.)*verbolabs\.com$",
+    ),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
