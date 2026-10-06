@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Mail, Lock, User as UserIcon, Building2, Eye, EyeOff, AlertCircle, CheckCircle2, ArrowRight, ArrowLeft, Loader2, Sparkles, ShieldCheck, RotateCw, Clock, KeyRound, Monitor, ShieldAlert } from 'lucide-react';
+import { Mail, Lock, User as UserIcon, Building2, Eye, EyeOff, AlertCircle, CheckCircle2, ArrowRight, ArrowLeft, Loader2, Sparkles, ShieldCheck, RotateCw, Clock, Monitor, ShieldAlert } from 'lucide-react';
 import { useAuth } from './AuthContext';
 import { useTheme } from '../context/ThemeContext';
-import { loginUser, resendVerification, verifyLoginOtp, resendLoginOtp, getBotChallenge, getTakeoverStatus } from './authService';
+import { loginUser, resendVerification, verifyLoginOtp, resendLoginOtp, requestLoginOtp, getBotChallenge, getTakeoverStatus } from './authService';
 import AuthProcessModal from './AuthProcessModal';
 
 import { Server } from 'lucide-react';
@@ -17,13 +17,14 @@ export default function LoginPage({ onSwitchToSignup, onSwitchToForgotPassword, 
   const [operatingLocation, setOperatingLocation] = useState('');
   const [showPassword, setShowPassword] = useState(false);
 
-  // Step state: 'credentials' | 'mfa' | 'takeover_waiting'
+  // Step state: 'credentials' | 'otp_gate' (password OK, waiting for the user to ask for a code) | 'mfa' | 'takeover_waiting'
   const [step, setStep] = useState('credentials');
   const [challengeId, setChallengeId] = useState('');
   const [maskedEmail, setMaskedEmail] = useState('');
   const [otp, setOtp] = useState('');
   const [mfaExpiresIn, setMfaExpiresIn] = useState(300);
   const [resendCooldown, setResendCooldown] = useState(0);
+  const [isRequestingOtp, setIsRequestingOtp] = useState(false);
 
   // Brute-force lockout state
   const [lockoutSeconds, setLockoutSeconds] = useState(0);
@@ -200,7 +201,20 @@ export default function LoginPage({ onSwitchToSignup, onSwitchToForgotPassword, 
         bot_challenge_token: challengeToken
       });
 
-      // If MFA Challenge was generated (normal secure path)
+      // Password accepted. No email has been sent: the user must choose "Login with OTP" first.
+      if (data.mfa_required && data.otp_sent === false) {
+        setProcessModalOpen(false);
+        setChallengeId(data.challenge_id);
+        setMaskedEmail(data.email_masked || cleanEmail);
+        setInfoMessage('');
+        setStep('otp_gate');
+        setBotChallenge(null);
+        setBotAnswer('');
+        setPassword('');
+        return;
+      }
+
+      // If MFA Challenge was generated and a code was already sent (older servers)
       if (data.mfa_required) {
         setProcessModalOpen(false);
         setChallengeId(data.challenge_id);
@@ -350,6 +364,33 @@ export default function LoginPage({ onSwitchToSignup, onSwitchToForgotPassword, 
     }
   };
 
+  // "Login with OTP": only now is a code generated and emailed
+  const handleRequestOtp = async () => {
+    if (isRequestingOtp) return;
+    setIsRequestingOtp(true);
+    setError('');
+    setInfoMessage('');
+    try {
+      const data = await requestLoginOtp({ challenge_id: challengeId });
+      if (data.email_masked) setMaskedEmail(data.email_masked);
+      setMfaExpiresIn(data.expires_in_seconds || 300);
+      setResendCooldown(data.resend_cooldown_seconds || 60);
+      setInfoMessage(data.message || 'A 6-digit code has been sent to your email.');
+      setOtp('');
+      setStep('mfa');
+    } catch (err) {
+      const msg = err.message || 'Could not send the code. Please try again.';
+      setError(msg);
+      // The sign-in attempt timed out or was invalidated: start over from the password
+      if (err.status === 404 || err.status === 400) {
+        setStep('credentials');
+        setChallengeId('');
+      }
+    } finally {
+      setIsRequestingOtp(false);
+    }
+  };
+
   const handleBackToCredentials = () => {
     setStep('credentials');
     setChallengeId('');
@@ -384,7 +425,7 @@ export default function LoginPage({ onSwitchToSignup, onSwitchToForgotPassword, 
         }`}>
           {step === 'takeover_waiting' ? (
             <Monitor size={22} className="text-amber-500" />
-          ) : step === 'mfa' ? (
+          ) : step === 'mfa' || step === 'otp_gate' ? (
             <ShieldCheck size={22} className={isDark ? 'text-[var(--kt-accent)]' : 'text-blue-600'} />
           ) : (
             <Building2 size={20} className={isDark ? 'text-[var(--kt-accent)]' : 'text-blue-600'} />
@@ -393,6 +434,8 @@ export default function LoginPage({ onSwitchToSignup, onSwitchToForgotPassword, 
         <h1 className={`text-lg sm:text-xl font-extrabold tracking-tight ${isDark ? 'text-white' : 'text-slate-900'}`}>
           {step === 'takeover_waiting' ? (
             <>Active <span className="text-amber-400 drop-shadow-[0_0_10px_rgba(245,158,11,0.35)]">Workstation</span></>
+          ) : step === 'otp_gate' ? (
+            <>Password <span className={`${isDark ? 'text-[var(--kt-accent)]' : 'text-blue-600'} drop-shadow-[0_0_10px_rgba(var(--kt-accent-rgb),0.35)]`}>Verified</span></>
           ) : step === 'mfa' ? (
             <>Two-Step <span className={`${isDark ? 'text-[var(--kt-accent)]' : 'text-blue-600'} drop-shadow-[0_0_10px_rgba(var(--kt-accent-rgb),0.35)]`}>Verification</span></>
           ) : (
@@ -402,6 +445,8 @@ export default function LoginPage({ onSwitchToSignup, onSwitchToForgotPassword, 
         <p className={`text-xs mt-0.5 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
           {step === 'takeover_waiting' ? (
             'Resolving single active session with currently logged in device'
+          ) : step === 'otp_gate' ? (
+            'One more step: sign in with a one-time code'
           ) : step === 'mfa' ? (
             'Enter the temporary 6-digit code sent to your email'
           ) : (
@@ -673,70 +718,63 @@ export default function LoginPage({ onSwitchToSignup, onSwitchToForgotPassword, 
             {isSubmitting ? (
               <>
                 <Loader2 size={16} className="animate-spin" />
-                <span>Validating Credentials...</span>
+                <span>Checking password...</span>
               </>
             ) : lockoutSeconds > 0 ? (
               <span>Locked ({formatTimer(lockoutSeconds)})</span>
             ) : (
               <>
-                <span>Continue with Security Verification</span>
+                <span>Continue</span>
                 <ArrowRight size={15} />
               </>
             )}
           </button>
+        </form>
+      )}
 
-          {/* Social / Workstation SSO Options */}
-          <div className={`pt-2.5 border-t text-center ${isDark ? 'border-[var(--kt-s4)]/80' : 'border-slate-200'}`}>
-            <div className={`text-[11px] font-medium mb-2 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>Or continue with</div>
-            <div className="flex items-center justify-center gap-3">
-              <button
-                type="button"
-                onClick={() => {
-                  setError('Direct Google SSO is enabled for corporate accounts. Please enter your work email above to sign in.');
-                }}
-                className={`flex items-center justify-center w-12 h-8.5 rounded-xl border transition-all cursor-pointer shadow-xs ${
-                  isDark ? 'border-[var(--kt-s5)] bg-[var(--kt-s2)] hover:bg-[var(--kt-s4)] hover:border-slate-500' : 'border-slate-200 bg-slate-50 hover:bg-slate-100 hover:border-slate-300'
-                }`}
-                title="Sign in with Google"
-              >
-                <svg className="w-4 h-4" viewBox="0 0 24 24">
-                  <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
-                  <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
-                  <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
-                  <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
-                </svg>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setError('Apple ID SSO is available for macOS workstations. Please enter your work email above to authenticate.');
-                }}
-                className={`flex items-center justify-center w-12 h-8.5 rounded-xl border transition-all cursor-pointer shadow-xs ${
-                  isDark ? 'border-[var(--kt-s5)] bg-[var(--kt-s2)] hover:bg-[var(--kt-s4)] hover:border-slate-500 text-white' : 'border-slate-200 bg-slate-50 hover:bg-slate-100 hover:border-slate-300 text-slate-800'
-                }`}
-                title="Sign in with Apple"
-              >
-                <svg className="w-4 h-4 fill-current" viewBox="0 0 170 170">
-                  <path d="M150.37 130.25c-2.45 5.66-5.35 10.87-8.71 15.66-4.58 6.53-8.33 11.05-11.22 13.56-4.48 4.12-9.28 6.23-14.42 6.35-3.69 0-8.14-1.05-13.32-3.18-5.19-2.12-9.97-3.17-14.34-3.17-4.58 0-9.49 1.05-14.75 3.17-5.26 2.13-9.5 3.24-12.74 3.35-4.35.13-9.16-1.9-14.42-6.08-3.7-3.04-7.66-7.85-11.87-14.42-6.53-10.22-11.66-21.68-15.38-34.38-3.72-12.7-5.58-24.81-5.58-36.33 0-14.7 3.59-27.15 10.77-37.34 7.18-10.19 16.48-15.38 27.9-15.58 4.89 0 10.37 1.25 16.44 3.75 6.07 2.5 10.25 3.8 12.54 3.9 1.85 0 6.13-1.4 12.84-4.2 6.71-2.8 12.44-4.05 17.19-3.75 12.84.76 23.36 5.61 31.56 14.55-11.2 6.74-16.63 16.2-16.3 28.37.33 9.46 3.91 17.45 10.74 23.97 6.83 6.52 14.95 10.25 24.36 11.19-2.07 6.3-4.73 12.87-7.98 19.7zM119.22 33.55c0-7.39 2.61-14.24 7.83-20.55 5.22-6.31 11.74-10.33 19.56-12.06.33 1.09.49 2.18.49 3.27 0 7.28-2.67 14.24-8.01 20.88-5.34 6.64-12.01 10.55-20.01 11.73-.11-.98-.16-1.98-.16-3.27z"/>
-                </svg>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setError('Corporate Single-Sign-On is available for verified organization accounts.');
-                }}
-                className={`flex items-center justify-center w-12 h-8.5 rounded-xl border transition-all cursor-pointer shadow-xs ${
-                  isDark ? 'border-[var(--kt-s5)] bg-[var(--kt-s2)] hover:bg-[var(--kt-s4)] text-[var(--kt-accent)]' : 'border-slate-200 bg-slate-50 hover:bg-slate-100 text-blue-700'
-                }`}
-                title="Sign in with Enterprise Workstation SSO"
-              >
-                <KeyRound size={15} />
-              </button>
+      {/* STEP 1.5: password accepted; the code is only emailed when the user asks for it */}
+      {step === 'otp_gate' && (
+        <div className="space-y-4 animate-in fade-in">
+          <div className="p-3 bg-[var(--kt-s0)] border border-[var(--kt-s4)] rounded-xl text-center">
+            <span className="text-[11px] text-slate-400 block mb-1">Signing in as</span>
+            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[var(--kt-s2)] border border-[var(--kt-s5)] text-xs font-mono text-[var(--kt-accent)]">
+              <Mail size={12} />
+              <span>{maskedEmail}</span>
             </div>
           </div>
-        </form>
+
+          <p className="text-[11.5px] text-slate-400 text-center leading-relaxed">
+            Your password was accepted. To finish signing in, request a one-time code. It is only emailed after you tap the button below.
+          </p>
+
+          <button
+            type="button"
+            onClick={handleRequestOtp}
+            disabled={isRequestingOtp}
+            className="w-full py-2.5 px-4 rounded-xl text-xs font-bold bg-[var(--kt-accent)] hover:bg-[var(--kt-accent)] text-[var(--kt-accent-ink)] transition-all shadow-[0_0_20px_rgba(var(--kt-accent-rgb),0.3)] hover:shadow-[0_0_25px_rgba(var(--kt-accent-rgb),0.45)] cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {isRequestingOtp ? (
+              <>
+                <Loader2 size={16} className="animate-spin" />
+                <span>Sending code...</span>
+              </>
+            ) : (
+              <>
+                <Mail size={15} />
+                <span>Login with OTP</span>
+              </>
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={handleBackToCredentials}
+            className="w-full text-xs text-slate-400 hover:text-white flex items-center justify-center gap-1.5 transition-colors cursor-pointer bg-transparent border-0 p-1"
+          >
+            <ArrowLeft size={14} />
+            <span>Back to Sign In</span>
+          </button>
+        </div>
       )}
 
       {/* STEP 2: MFA OTP VERIFICATION */}

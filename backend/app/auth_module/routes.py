@@ -40,6 +40,13 @@ def is_super_admin(email: Optional[str]) -> bool:
 
 auth_router = APIRouter()
 
+# A login challenge is created as soon as the password is accepted, but the 6-digit code is only
+# generated and emailed when the user asks for it (POST /request-otp). Until then the stored hash
+# is this marker, which can never match a real HMAC digest.
+OTP_NOT_REQUESTED = "PENDING"
+PASSWORD_STEP_VALID_MINUTES = 10   # how long a verified password can be exchanged for a code
+CHALLENGE_MAX_LIFETIME_MINUTES = 15  # hard cap: after this the user must enter the password again
+
 def get_client_ip(request: Request) -> str:
     """Extract client IP address, handling proxy headers."""
     x_forwarded = request.headers.get("x-forwarded-for")
@@ -495,8 +502,8 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_aut
     - Checks IP & Account brute-force lockout (5 attempts in 10 min -> 15 min lock)
     - Enforces bot challenge after 2 failed attempts to protect Brevo quota
     - Verifies password against salt and PBKDF2 hash
-    - Dispatches temporary 6-digit OTP via Brevo
-    - Issues MFA challenge_id
+    - Issues an MFA challenge_id but does NOT email anything yet: the user must choose
+      "Login with OTP" (POST /request-otp) before a code is generated and sent
     """
     email_clean = payload.email.strip().lower()
     client_ip = get_client_ip(request)
@@ -613,53 +620,35 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_aut
     db.query(LoginOTP).filter(LoginOTP.user_id == user.id).delete()
     db.commit()
 
-    # 9. Generate cryptographically secure 6-digit OTP and HMAC hash
-    otp_code = generate_secure_otp()
-    otp_hash_val = hash_otp(otp_code)
+    # 9. Password is correct: open a challenge, but do not generate or send a code yet.
     challenge_id = uuid.uuid4().hex
-
     new_challenge = LoginOTP(
         user_id=user.id,
         challenge_id=challenge_id,
-        otp_hash=otp_hash_val,
-        expires_at=now_utc + timedelta(minutes=5),
+        otp_hash=OTP_NOT_REQUESTED,
+        expires_at=now_utc + timedelta(minutes=PASSWORD_STEP_VALID_MINUTES),
         attempts=0,
         created_at=now_utc,
-        last_resend_at=now_utc,
+        # far enough in the past that the first request is not held back by the resend cooldown
+        last_resend_at=now_utc - timedelta(seconds=120),
         operating_location=op_loc_normalized
     )
     db.add(new_challenge)
     db.commit()
 
-    # 10. Send plaintext OTP strictly to user's registered email via Brevo Transactional Email API
-    brevo_res = send_mfa_login_otp_email(
-        user_name=user.name,
-        user_email=user.email,
-        otp=otp_code
-    )
-
-    if not brevo_res.get("success"):
-        # Roll back challenge if email dispatch failed completely
-        db.delete(new_challenge)
-        db.commit()
-        err_msg = brevo_res.get("error", "Email dispatch error.")
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Verification email code could not be sent: {err_msg}"
-        )
-
-    # Return MFA challenge response (NO JWT/session issued yet!)
     parts = user.email.split("@")
     masked_name = parts[0][0] + "***" + (parts[0][-1] if len(parts[0]) > 1 else "")
     masked_email = f"{masked_name}@{parts[1]}"
 
+    # Return MFA challenge response (NO JWT/session issued yet, NO email sent yet)
     return {
         "success": True,
         "mfa_required": True,
+        "otp_sent": False,
         "challenge_id": challenge_id,
         "email_masked": masked_email,
-        "expires_in_seconds": 300,
-        "message": f"A 6-digit verification code has been sent to {masked_email}."
+        "expires_in_seconds": PASSWORD_STEP_VALID_MINUTES * 60,
+        "message": "Password verified. Choose \"Login with OTP\" to receive a one-time code by email."
     }
 
 
@@ -691,6 +680,13 @@ def verify_login_otp(
     now_utc = datetime.now(timezone.utc)
     exp = challenge.expires_at.replace(tzinfo=timezone.utc) if challenge.expires_at.tzinfo is None else challenge.expires_at
 
+    # 0. A code must have been requested first (the user explicitly chooses "Login with OTP")
+    if challenge.otp_hash == OTP_NOT_REQUESTED:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="No code has been sent yet. Choose \"Login with OTP\" to receive one first."
+        )
+
     # 1. Expiration check (5 minutes)
     if now_utc > exp:
         db.delete(challenge)
@@ -712,6 +708,13 @@ def verify_login_otp(
     # 3. Verify HMAC hash
     if not verify_otp_hash(otp_candidate, challenge.otp_hash):
         challenge.attempts += 1
+        # Wrong codes also count towards the account/IP lockout, so guessing cannot be restarted by
+        # simply logging in again with the password (each login would otherwise grant 5 fresh guesses).
+        db.add(AuthFailedAttempt(
+            email=challenge.user.email,
+            ip_address=get_client_ip(request),
+            attempt_time=now_utc
+        ))
         db.commit()
         remaining_attempts = max(0, 5 - challenge.attempts)
         if remaining_attempts == 0:
@@ -828,13 +831,16 @@ def verify_login_otp(
     }
 
 
+@auth_router.post("/request-otp")
 @auth_router.post("/resend-otp")
 def resend_login_otp(
     payload: ResendOtpRequest,
     db: Session = Depends(get_auth_db)
 ):
     """
-    Resends fresh OTP with 60-second cooldown protection.
+    Generates and emails a fresh OTP for an existing login challenge. This is both the first send
+    ("Login with OTP") and the resend. 60-second cooldown, and the challenge itself dies after
+    CHALLENGE_MAX_LIFETIME_MINUTES so codes cannot be requested forever from one password entry.
     """
     challenge_id = payload.challenge_id.strip()
     challenge = db.query(LoginOTP).filter(LoginOTP.challenge_id == challenge_id).first()
@@ -845,6 +851,14 @@ def resend_login_otp(
         )
 
     now_utc = datetime.now(timezone.utc)
+    created = challenge.created_at.replace(tzinfo=timezone.utc) if challenge.created_at.tzinfo is None else challenge.created_at
+    if now_utc - created > timedelta(minutes=CHALLENGE_MAX_LIFETIME_MINUTES):
+        db.delete(challenge)
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This sign-in attempt has timed out. Please enter your password again."
+        )
     last_resend = challenge.last_resend_at.replace(tzinfo=timezone.utc) if challenge.last_resend_at.tzinfo is None else challenge.last_resend_at
 
     # 60s cooldown
@@ -874,10 +888,14 @@ def resend_login_otp(
         err_msg = brevo_res.get("error", "Email dispatch failed.")
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Failed to resend code: {err_msg}")
 
+    parts = user.email.split("@")
+    masked_name = parts[0][0] + "***" + (parts[0][-1] if len(parts[0]) > 1 else "")
     return {
         "success": True,
-        "message": "A fresh verification code has been sent to your email.",
-        "expires_in_seconds": 300
+        "message": f"A 6-digit verification code has been sent to {masked_name}@{parts[1]}.",
+        "email_masked": f"{masked_name}@{parts[1]}",
+        "expires_in_seconds": 300,
+        "resend_cooldown_seconds": 60
     }
 
 

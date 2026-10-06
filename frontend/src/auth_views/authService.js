@@ -142,6 +142,21 @@ export async function resendLoginOtp({ challenge_id }) {
   return data;
 }
 
+export async function requestLoginOtp({ challenge_id }) {
+  const base = getApiBase();
+  const res = await fetchWithTimeout(`${base}/api/auth/request-otp`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ challenge_id })
+  }, 15000);
+
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.detail || 'Failed to resend verification code.');
+  }
+  return data;
+}
+
 export async function verifyEmailToken(token) {
   const base = getApiBase();
   const res = await fetchWithTimeout(`${base}/api/auth/verify-email?token=${encodeURIComponent(token)}`, {}, 10000);
