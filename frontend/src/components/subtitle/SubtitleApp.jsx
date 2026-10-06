@@ -40,6 +40,8 @@ import ReloadConfirmModal from '../ReloadConfirmModal';
 import NotificationBellDropdown from '../NotificationBellDropdown';
 import { useTheme } from '../../context/ThemeContext';
 import { extractAudioFromMedia, computeWaveformPeaks } from '../../utils/audioExtractor';
+import { xhrPostForm, createRateMeter } from '../../utils/xhrUpload';
+import MediaProgress from './MediaProgress';
 
 function formatTime(seconds) {
   if (isNaN(seconds) || seconds == null) return "00:00.000";
@@ -50,10 +52,11 @@ function formatTime(seconds) {
 }
 
 // Sliced multi-part chunked upload for files > 90MB (bypasses Cloudflare 100MB proxy limits)
-async function uploadFileInChunks(file, apiBase, onProgress) {
+async function uploadFileInChunks(file, apiBase, onProgress, onAllSent) {
   const chunkSize = 12 * 1024 * 1024; // 12 MB slices (safe for any proxy/cloud gateway)
   const totalChunks = Math.ceil(file.size / chunkSize);
   const uploadId = 'up_' + Math.random().toString(36).substring(2, 10);
+  const meter = createRateMeter();
 
   let lastData = null;
   for (let i = 0; i < totalChunks; i++) {
@@ -61,34 +64,36 @@ async function uploadFileInChunks(file, apiBase, onProgress) {
     const end = Math.min(file.size, start + chunkSize);
     const chunkBlob = file.slice(start, end);
 
-    const formData = new FormData();
-    formData.append('chunk', chunkBlob, file.name);
-    formData.append('upload_id', uploadId);
-    formData.append('chunk_index', i.toString());
-    formData.append('total_chunks', totalChunks.toString());
-    formData.append('filename', file.name);
-
-    if (onProgress) {
-      const pct = Math.round(((i + 1) / totalChunks) * 100);
-      onProgress({ percent: pct, detail: `Uploading slice ${i + 1}/${totalChunks}...` });
-    }
+    const buildForm = () => {
+      const formData = new FormData();
+      formData.append('chunk', chunkBlob, file.name);
+      formData.append('upload_id', uploadId);
+      formData.append('chunk_index', i.toString());
+      formData.append('total_chunks', totalChunks.toString());
+      formData.append('filename', file.name);
+      return formData;
+    };
 
     let success = false;
     let lastErr = null;
     for (let attempt = 1; attempt <= 4; attempt++) {
       try {
-        const res = await fetch(`${apiBase}/api/subtitle/upload_chunk`, {
-          method: 'POST',
-          body: formData
+        // Real bytes sent so far across ALL slices (earlier slices + the part of this one already out)
+        const res = await xhrPostForm(`${apiBase}/api/subtitle/upload_chunk`, buildForm(), {
+          meter,
+          baseLoaded: start,
+          grandTotal: file.size,
+          onProgress: (p) => { if (onProgress) onProgress({ ...p, detail: `Uploading slice ${i + 1} of ${totalChunks}` }); },
+          // After the very last byte the server still assembles the file and analyses the audio
+          onSent: () => { if (i === totalChunks - 1 && onAllSent) onAllSent(); },
         });
 
         if (res.ok) {
-          lastData = await res.json();
+          lastData = res.data;
           success = true;
           break;
         } else {
-          const err = await res.json().catch(() => null);
-          lastErr = new Error(err?.detail || `Slice ${i + 1}/${totalChunks} failed with status ${res.status}`);
+          lastErr = new Error(res.data?.detail || `Slice ${i + 1}/${totalChunks} failed with status ${res.status}`);
           if (res.status >= 500 || res.status === 429) {
             await new Promise(r => setTimeout(r, attempt * 1500));
             continue;
@@ -98,11 +103,14 @@ async function uploadFileInChunks(file, apiBase, onProgress) {
         }
       } catch (fetchErr) {
         lastErr = fetchErr;
+        if (fetchErr?.status && fetchErr.status >= 400 && fetchErr.status < 500 && fetchErr.status !== 429) throw fetchErr;
         if (attempt < 4) {
           if (onProgress) {
             onProgress({
-              percent: Math.round(((i) / totalChunks) * 100),
-              detail: `Server connecting (attempt ${attempt}/4)... Retrying slice ${i + 1}/${totalChunks}...`
+              percent: (start / file.size) * 100,
+              loaded: start,
+              total: file.size,
+              detail: `Connection problem. Retrying slice ${i + 1} of ${totalChunks} (attempt ${attempt + 1}/4)`
             });
           }
           await new Promise(r => setTimeout(r, attempt * 2500));
@@ -256,16 +264,16 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
       /\.(wma)$/i.test(fileToProcess?.name || '')
     );
 
+    // Every update replaces the whole status so no stale numbers from a previous stage linger
+    const report = (p) => setAudioExtractionStatus({ flow: (!isAudio || isWma) ? 'video' : 'audio', ...p });
+
     // 1. If video file or WMA file, extract lightweight mono audio track in browser or via backend (or reuse cached)
     if (!isAudio || isWma) {
       if (extractedAudioFileRef.current && !isWma) {
         uploadTarget = extractedAudioFileRef.current;
       } else {
         try {
-          setAudioExtractionStatus({ stage: 'extracting', percent: 20, detail: 'Extracting clean audio stream...' });
-          const extracted = await extractAudioFromMedia(fileToProcess, (p) => {
-            setAudioExtractionStatus({ stage: 'extracting', ...p });
-          }, API_BASE);
+          const extracted = await extractAudioFromMedia(fileToProcess, (p) => report(p), API_BASE);
           if (extracted.peaks && extracted.peaks.length > 0) {
             setInitialWaveformPeaks(extracted.peaks);
           }
@@ -302,11 +310,12 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
 
     // 2. Upload to backend (chunked if > 20MB or if direct upload fails)
     try {
+      const prepareStage = () => report({ stage: 'prepare', percent: null, detail: 'Upload complete. The server is preparing the audio for your workspace' });
       if (uploadTarget.size > 20 * 1024 * 1024) {
-        setAudioExtractionStatus({ stage: 'uploading', percent: 10, detail: 'Uploading via chunked slices...' });
+        report({ stage: 'send', percent: 0, loaded: 0, total: uploadTarget.size, detail: 'Uploading the audio to your workspace' });
         const chunkData = await uploadFileInChunks(uploadTarget, API_BASE, (p) => {
-          setAudioExtractionStatus({ stage: 'uploading', ...p });
-        });
+          report({ stage: 'send', ...p });
+        }, prepareStage);
         if (chunkData?.video_id) {
           setCurrentVideoId(chunkData.video_id);
           if (chunkData.peaks && chunkData.peaks.length > 0) {
@@ -322,17 +331,17 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
           return chunkData.video_id;
         }
       } else {
-        setAudioExtractionStatus({ stage: 'uploading', percent: 50, detail: 'Transferring audio to server...' });
+        report({ stage: 'send', percent: 0, loaded: 0, total: uploadTarget.size, detail: 'Uploading the audio to your workspace' });
         let uploadSucceeded = false;
         try {
           const formData = new FormData();
           formData.append('file', uploadTarget);
-          const res = await fetch(`${API_BASE}/api/subtitle/upload`, {
-            method: 'POST',
-            body: formData
+          const res = await xhrPostForm(`${API_BASE}/api/subtitle/upload`, formData, {
+            onProgress: (p) => report({ stage: 'send', detail: 'Uploading the audio to your workspace', ...p }),
+            onSent: prepareStage,
           });
           if (res.ok) {
-            const data = await res.json();
+            const data = res.data || {};
             if (data.video_id) {
               setCurrentVideoId(data.video_id);
               if (data.peaks && data.peaks.length > 0) {
@@ -363,8 +372,8 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
         if (!uploadSucceeded) {
           console.log("[Subtitle Studio] Fallback: uploading media in resilient sliced chunks...");
           const chunkData = await uploadFileInChunks(uploadTarget, API_BASE, (p) => {
-            setAudioExtractionStatus({ stage: 'uploading', ...p });
-          });
+            report({ stage: 'send', ...p });
+          }, prepareStage);
           if (chunkData?.video_id) {
             setCurrentVideoId(chunkData.video_id);
             if (chunkData.peaks && chunkData.peaks.length > 0) {
@@ -2815,18 +2824,8 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
         </div>
       )}
 
-      {/* Client Audio Extraction & Fast Cloud Transfer Progress Banner */}
-      {audioExtractionStatus && (
-        <div className="px-4 py-2 flex items-center justify-between border-b border-blue-800/60 bg-blue-950/90 text-blue-200 text-xs shrink-0 z-10 transition-all animate-pulse">
-          <div className="flex items-center gap-2">
-            <Loader2 className="w-4 h-4 text-blue-400 animate-spin shrink-0" />
-            <span>
-              <strong>⚡ Fast Cloud Transfer:</strong> {audioExtractionStatus.detail || 'Extracting lightweight audio from video...'} ({audioExtractionStatus.percent || 0}%)
-            </span>
-          </div>
-          <span className="text-[11px] text-blue-300 font-mono hidden sm:inline">Bypassing 100MB cloud limits</span>
-        </div>
-      )}
+      {/* Real-time media preparation progress (measured bytes, FFmpeg media time, server stages) */}
+      {audioExtractionStatus && <MediaProgress status={audioExtractionStatus} fileName={selectedFile?.name} />}
 
       {/* Draft Restore Notification Banner */}
       {pendingDraft && (

@@ -873,6 +873,107 @@ async def extract_audio_endpoint(request: Request, file: UploadFile = File(...))
         raise HTTPException(status_code=500, detail=f"Audio extraction failed: {str(err)}")
 
 
+# ── Audio extraction with live progress ─────────────────────────────────────────
+# POST /api/audio/extract_async saves the upload and starts the same extraction as /api/audio/extract
+# in the background; GET /api/audio/extract_status/{job_id} reports real progress (FFmpeg media time).
+_extract_jobs: dict = {}
+
+
+def _prune_extract_jobs():
+    cutoff = time.time() - 3600
+    for jid in [j for j, v in _extract_jobs.items() if v.get("updated", 0) < cutoff]:
+        _extract_jobs.pop(jid, None)
+
+
+async def _run_extract_job(job_id: str, file_path: Path, original_filename: str):
+    job = _extract_jobs[job_id]
+
+    def set_state(**kw):
+        job.update(kw)
+        job["updated"] = time.time()
+
+    def on_ffmpeg(pct, done, total):
+        set_state(stage="extracting", percent=None if pct is None else round(pct, 1), seconds_done=round(done, 1), seconds_total=round(total, 1))
+
+    try:
+        from app.video_processor import extract_audio_from_video, get_video_metadata
+        from app.audio_processor import compute_acoustic_waveform_peaks
+
+        set_state(stage="extracting", percent=0.0, detail="Extracting the audio track with FFmpeg")
+        audio_info = await asyncio.to_thread(extract_audio_from_video, str(file_path), None, on_ffmpeg)
+        audio_path = audio_info.get("audio_path")
+        if not audio_path or not os.path.exists(audio_path):
+            raise RuntimeError("Failed to extract the audio track from this file.")
+
+        audio_name = Path(audio_path).name
+        meta = await asyncio.to_thread(get_video_metadata, str(file_path))
+
+        set_state(stage="waveform", percent=None, detail="Drawing the waveform")
+        wdata = await asyncio.to_thread(compute_acoustic_waveform_peaks, str(audio_path), 50)
+        peaks = wdata.get("peaks", [])
+        duration = float(audio_info.get("duration") or meta.get("duration") or wdata.get("duration", 0.0))
+
+        cache_path = UPLOAD_DIR / f"{Path(audio_name).stem}.peaks.json"
+        with open(cache_path, "w", encoding="utf-8") as f:
+            json.dump({"peaks": peaks, "duration": duration, "points_per_sec": 50}, f)
+
+        set_state(
+            stage="done",
+            percent=100.0,
+            result={
+                "status": "success",
+                "original_filename": original_filename,
+                "audio_filename": audio_name,
+                "audio_url": f"/api/audio/{audio_name}",
+                "duration": round(duration, 3),
+                "sample_rate": 16000,
+                "channels": 1,
+                "audio_bytes": os.path.getsize(audio_path),
+                "peaks": peaks,
+            },
+        )
+    except Exception as err:
+        import traceback
+        traceback.print_exc()
+        set_state(stage="error", error=f"Audio extraction failed: {err}")
+
+
+@app.post("/api/audio/extract_async")
+async def extract_audio_async_endpoint(request: Request, file: UploadFile = File(...)):
+    """Save the upload, then extract its audio in the background and report live progress."""
+    client_ip = get_client_ip(request)
+    _check_rate_limit(client_ip)
+    _prune_extract_jobs()
+
+    unique_prefix = uuid.uuid4().hex[:8]
+    raw_stem = Path(file.filename).stem
+    ext = Path(file.filename).suffix.lower()
+    clean_stem = re.sub(r'[^\w\.-]', '_', raw_stem).strip()
+    clean_stem = re.sub(r'_+', '_', clean_stem)
+    file_path = UPLOAD_DIR / f"{unique_prefix}_{clean_stem}{ext}"
+
+    try:
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+    except Exception as e:
+        if file_path.exists():
+            file_path.unlink()
+        raise HTTPException(status_code=500, detail=f"Error saving file: {e}")
+
+    job_id = uuid.uuid4().hex
+    _extract_jobs[job_id] = {"stage": "queued", "percent": 0.0, "updated": time.time(), "bytes": file_path.stat().st_size}
+    asyncio.create_task(_run_extract_job(job_id, file_path, file.filename))
+    return {"job_id": job_id, "bytes": _extract_jobs[job_id]["bytes"]}
+
+
+@app.get("/api/audio/extract_status/{job_id}")
+async def extract_audio_status_endpoint(job_id: str):
+    job = _extract_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Extraction job not found or expired.")
+    return {k: v for k, v in job.items() if k != "updated"}
+
+
 @app.post("/api/lint")
 async def lint_segments_endpoint(payload: dict):
     """REL-06: Re-lint segment list after manual edits with resilient schema validation."""

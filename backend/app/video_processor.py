@@ -151,8 +151,13 @@ def _parse_metadata_via_ffmpeg(video_path: str, default_meta: dict) -> dict:
     return default_meta
 
 
-def extract_audio_from_video(video_path: str, output_path: str = None) -> dict:
-    """Extract or convert audio track from video/audio to 16kHz mono WAV file using FFmpeg."""
+def extract_audio_from_video(video_path: str, output_path: str = None, progress_cb=None) -> dict:
+    """Extract or convert audio track from video/audio to 16kHz mono WAV file using FFmpeg.
+
+    progress_cb(percent, seconds_done, seconds_total) is optional: when given, FFmpeg runs with
+    `-progress` so the caller gets real, time-based progress. The FFmpeg arguments that shape the
+    output are identical either way, so the resulting WAV is the same.
+    """
     base_path = os.path.splitext(video_path)[0]
     ext = Path(video_path).suffix.lower()
 
@@ -201,6 +206,9 @@ def extract_audio_from_video(video_path: str, output_path: str = None) -> dict:
         output_path
     ]
     
+    if progress_cb is not None:
+        return _extract_with_progress(video_path, output_path, cmd, progress_cb)
+
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
         if result.returncode != 0:
@@ -231,6 +239,57 @@ def extract_audio_from_video(video_path: str, output_path: str = None) -> dict:
         "channels": 0
     }
 
+
+
+def _extract_with_progress(video_path: str, output_path: str, cmd: list, progress_cb, timeout_sec: int = 3600) -> dict:
+    """Run the same FFmpeg extraction as extract_audio_from_video, reporting real progress.
+
+    FFmpeg's `-progress pipe:1` stream prints `out_time_us=<microseconds of media processed>`;
+    dividing by the container duration gives an honest percentage.
+    """
+    import time as _time
+
+    failed = {"audio_path": None, "duration": 0.0, "sample_rate": 0, "channels": 0}
+    total = float(get_video_metadata(video_path).get("duration", 0.0) or 0.0)
+    progress_cmd = [cmd[0], "-progress", "pipe:1", "-nostats", "-loglevel", "error"] + cmd[1:]
+    started = _time.time()
+    tail = []
+    try:
+        proc = subprocess.Popen(progress_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+        for line in proc.stdout:
+            line = line.strip()
+            if line.startswith("out_time_us=") or line.startswith("out_time_ms="):
+                try:
+                    micros = int(line.split("=", 1)[1])
+                except ValueError:
+                    continue
+                done = max(0.0, micros / 1_000_000.0)
+                pct = min(99.0, done / total * 100.0) if total > 0 else None
+                try:
+                    progress_cb(pct, done, total)
+                except Exception:
+                    pass
+            elif "=" not in line and line:
+                tail.append(line)
+                tail = tail[-10:]
+            if _time.time() - started > timeout_sec:
+                proc.kill()
+                logger.error("FFmpeg extract audio timed out")
+                return failed
+        proc.wait()
+        if proc.returncode != 0:
+            logger.error(f"FFmpeg extract audio error: {' | '.join(tail)}")
+            return failed
+        if Path(output_path).exists():
+            return {
+                "audio_path": output_path,
+                "duration": total,
+                "sample_rate": 16000,
+                "channels": 1
+            }
+    except Exception as e:
+        logger.error(f"Exception extracting audio: {e}")
+    return failed
 
 def detect_shot_changes(video_path: str, threshold: float = 0.3) -> List[float]:
     """Use FFmpeg scene detection filter to find shot changes (skipped on low-resource cloud)."""
