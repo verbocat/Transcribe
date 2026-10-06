@@ -316,6 +316,25 @@ export function EditorPage({ c }) {
         <SwitchRow label="Confirm before generating" hint="Generating replaces the current subtitles and uses ElevenLabs credits." checked={prefs.confirmGenerate} onChange={(v) => setPref('confirmGenerate', v)} />
       </Section>
 
+      <Section title="Large files">
+        <Row
+          label="Extract audio on this computer"
+          hint="Uploads only the audio (about 2 MB per minute) instead of the whole video, which is far faster for big files. The audio can differ from the server's by 1 step in 65,536 on a tiny share of samples, so the default only uses it for videos of 100 MB or more."
+          stacked
+        >
+          <Segmented
+            label="Extract audio on this computer"
+            value={prefs.localExtraction}
+            onChange={(v) => setPref('localExtraction', v)}
+            options={[
+              { value: 'large', label: 'Large videos only' },
+              { value: 'always', label: 'Always' },
+              { value: 'never', label: 'Never (server)' },
+            ]}
+          />
+        </Row>
+      </Section>
+
       <Section title="Playback">
         <Slider label="Arrow-key seek step" hint="How far ← and → jump." value={prefs.seekStep} min={0.5} max={30} step={0.5} unit="s" decimals={1} defaultValue={DEFAULT_PREFS.seekStep} onChange={(v) => setPref('seekStep', v)} />
       </Section>

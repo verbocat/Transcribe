@@ -10,6 +10,7 @@ export const DEFAULT_PREFS = {
   confirmGenerate: true,  // ask before replacing subtitles with a fresh generation
   newSubDuration: 2.4,    // seconds for a newly added subtitle
   newSubText: 'New dialogue subtitle line',
+  localExtraction: 'large', // large (videos of 100 MB+) | always | never: pull the audio out in the browser instead of uploading the video
 };
 
 export const AUTOSAVE_CHOICES = [0, 30, 60, 120, 300];
@@ -26,7 +27,17 @@ export function normalizePrefs(raw) {
     confirmGenerate: typeof s.confirmGenerate === 'boolean' ? s.confirmGenerate : DEFAULT_PREFS.confirmGenerate,
     newSubDuration: num(s.newSubDuration, DEFAULT_PREFS.newSubDuration, 0.5, 10),
     newSubText: typeof s.newSubText === 'string' ? s.newSubText.slice(0, 120) : DEFAULT_PREFS.newSubText,
+    localExtraction: ['large', 'always', 'never'].includes(s.localExtraction) ? s.localExtraction : DEFAULT_PREFS.localExtraction,
   };
+}
+
+/** Read the saved preferences outside React (e.g. inside a callback). */
+export function loadPrefs() {
+  try {
+    return normalizePrefs(JSON.parse(localStorage.getItem(KEY) || 'null'));
+  } catch (_) {
+    return { ...DEFAULT_PREFS };
+  }
 }
 
 export function useStudioPrefs() {

@@ -16,6 +16,11 @@ const VIDEO_STEPS = [
   { key: 'send', label: 'Upload audio', stages: ['send'] },
   { key: 'prepare', label: 'Prepare workspace', stages: ['prepare'] },
 ];
+const LOCAL_STEPS = [
+  { key: 'local', label: 'Extract audio here', stages: ['engine', 'local'] },
+  { key: 'send', label: 'Upload audio', stages: ['send'] },
+  { key: 'prepare', label: 'Prepare workspace', stages: ['prepare'] },
+];
 const AUDIO_STEPS = [
   { key: 'decode', label: 'Decode audio', stages: ['decode'] },
   { key: 'send', label: 'Upload audio', stages: ['send'] },
@@ -35,8 +40,8 @@ export default function MediaProgress({ status, fileName }) {
   }, [startedAt]);
 
   const { stage, percent, detail, loaded, total, speed, eta } = status;
-  const flow = SERVER_STAGES.includes(stage) || status.flow === 'video' ? 'video' : 'audio';
-  const steps = flow === 'video' ? VIDEO_STEPS : AUDIO_STEPS;
+  const flow = status.flow || (SERVER_STAGES.includes(stage) ? 'video' : 'audio');
+  const steps = flow === 'local' ? LOCAL_STEPS : flow === 'video' ? VIDEO_STEPS : AUDIO_STEPS;
   const activeIdx = Math.max(0, steps.findIndex((s) => s.stages.includes(stage)));
   const determinate = typeof percent === 'number' && Number.isFinite(percent);
   const pct = determinate ? Math.max(0, Math.min(100, percent)) : 0;

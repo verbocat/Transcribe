@@ -10,6 +10,11 @@ export default defineConfig({
     tailwindcss(),
   ],
 
+  // The browser FFmpeg builds its own worker; pre-bundling breaks that
+  optimizeDeps: {
+    exclude: ['@ffmpeg/ffmpeg', '@ffmpeg/util'],
+  },
+
   server: {
     host: '0.0.0.0',
     port: 5173,

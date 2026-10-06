@@ -5,7 +5,7 @@
  * and extracts acoustic waveform peaks in under 1 second.
  */
 
-export function computeWaveformPeaks(channelData, duration, pps = 50) {
+export function computeWaveformPeaks(channelData, duration, pps = 50, scale = 1) {
   const totalPoints = Math.max(1, Math.floor(duration * pps));
   const blockSize = Math.max(1, Math.floor(channelData.length / totalPoints));
   const peaks = new Float32Array(totalPoints);
@@ -17,7 +17,7 @@ export function computeWaveformPeaks(channelData, duration, pps = 50) {
     const step = Math.max(1, Math.floor(blockSize / 32));
     let count = 0;
     for (let j = 0; j < blockSize && start + j < channelData.length; j += step) {
-      const val = Math.abs(channelData[start + j]);
+      const val = Math.abs(channelData[start + j]) * scale;
       if (val > maxVal) maxVal = val;
       sumSq += val * val;
       count++;
@@ -83,7 +83,7 @@ export function encodeWAV(samples, sampleRate) {
 
 import { xhrPostForm, fetchBlobWithProgress, createRateMeter } from './xhrUpload';
 
-export async function extractAudioFromMedia(file, onProgress, apiBase = '') {
+export async function extractAudioFromMedia(file, onProgress, apiBase = '', { preferLocal = true } = {}) {
   const isVideo = Boolean(
     file.type?.startsWith('video/') ||
     /\.(mp4|mkv|mov|webm|avi|flv|wmv|m4v|ts)$/i.test(file.name || '')
@@ -163,6 +163,19 @@ export async function extractAudioFromMedia(file, onProgress, apiBase = '') {
       };
     } catch (browserDecodeErr) {
       console.warn("Client Web Audio decode fallback to server FFmpeg:", browserDecodeErr);
+    }
+  }
+
+  // Preferred for video: extract the audio on THIS computer (WebAssembly FFmpeg) so only ~2 MB per
+  // minute of audio is uploaded instead of the whole video. Falls back to the server on any problem.
+  if (preferLocal) {
+    try {
+      const { extractAudioInBrowser, browserExtractionSupported } = await import('./browserAudioExtract');
+      if (browserExtractionSupported()) {
+        return await extractAudioInBrowser(file, onProgress);
+      }
+    } catch (localErr) {
+      console.warn('Browser audio extraction unavailable, using the server instead:', localErr);
     }
   }
 

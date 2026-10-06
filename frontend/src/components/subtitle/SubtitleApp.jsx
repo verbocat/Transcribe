@@ -29,7 +29,7 @@ import StudioMenuBar from './StudioMenuBar';
 import CommandPalette from './CommandPalette';
 import { ShiftTimingsDialog, GoToDialog, FindReplaceDialog } from './ToolDialogs';
 import { Button, IconButton, Kbd } from './ui/controls';
-import { useStudioPrefs, formatTimecode } from './prefs';
+import { useStudioPrefs, formatTimecode, loadPrefs } from './prefs';
 import { SETTINGS_GROUPS } from './SubtitleSettingsModal';
 import * as tools from './subtitleTools';
 import SpeakerCustomizerModal from '../SpeakerCustomizerModal';
@@ -265,7 +265,13 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
     );
 
     // Every update replaces the whole status so no stale numbers from a previous stage linger
-    const report = (p) => setAudioExtractionStatus({ flow: (!isAudio || isWma) ? 'video' : 'audio', ...p });
+    let flow = (!isAudio || isWma) ? 'video' : 'audio';
+    const report = (p) => {
+      if (p.stage === 'engine' || p.stage === 'local') flow = 'local';
+      else if (['upload', 'saving', 'extract', 'waveform', 'download'].includes(p.stage)) flow = 'video';
+      else if (p.stage === 'decode') flow = 'audio';
+      setAudioExtractionStatus({ flow, ...p });
+    };
 
     // 1. If video file or WMA file, extract lightweight mono audio track in browser or via backend (or reuse cached)
     if (!isAudio || isWma) {
@@ -273,7 +279,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
         uploadTarget = extractedAudioFileRef.current;
       } else {
         try {
-          const extracted = await extractAudioFromMedia(fileToProcess, (p) => report(p), API_BASE);
+          const extracted = await extractAudioFromMedia(fileToProcess, (p) => report(p), API_BASE, { preferLocal: (() => { const m = loadPrefs().localExtraction; return m === 'always' || (m === 'large' && fileToProcess.size >= 100 * 1024 * 1024); })() });
           if (extracted.peaks && extracted.peaks.length > 0) {
             setInitialWaveformPeaks(extracted.peaks);
           }

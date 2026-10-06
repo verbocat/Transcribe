@@ -52,3 +52,6 @@ backend/models/
 backend/bin/
 scratch/
 screenshotfiles/
+
+# Browser FFmpeg engine, copied from node_modules by scripts/copy-ffmpeg-core.mjs
+frontend/public/ffmpeg/
