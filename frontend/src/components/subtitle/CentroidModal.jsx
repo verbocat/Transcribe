@@ -10,9 +10,9 @@ import { COMMON_LANGS, OTHER_LANGS, ALL_LANGS, langName } from './languages';
 
 const COMMON = COMMON_LANGS;
 const OTHERS = OTHER_LANGS;
-const langOptions = (exclude) => [
-  { group: 'Common', items: COMMON.filter(([c]) => c !== exclude) },
-  { group: 'All languages', items: OTHERS.filter(([c]) => c !== exclude) },
+const langOptions = () => [
+  { group: 'Common', items: COMMON },
+  { group: 'All languages', items: OTHERS },
 ];
 
 const CONTENT_TYPES = ['Film', 'TV series', 'Documentary', 'Reality / unscripted', 'Animation / kids', 'Advertisement', 'E-learning / training', 'News / interview', 'Stand-up / comedy'];
@@ -111,7 +111,7 @@ function parseGlossary(text) {
 const readStore = (key, fallback) => { try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; } catch (_) { return fallback; } };
 const writeStore = (key, value) => { try { localStorage.setItem(key, JSON.stringify(value)); } catch (_) { /* storage unavailable */ } };
 
-function LangSelect({ value, onChange, exclude, label }) {
+function LangSelect({ value, onChange, label }) {
   return (
     <select
       aria-label={label}
@@ -119,7 +119,7 @@ function LangSelect({ value, onChange, exclude, label }) {
       onChange={(e) => onChange(e.target.value)}
       className="h-9 w-full min-w-0 rounded-lg border border-[var(--ss-line)] bg-[var(--ss-bg)] px-2.5 text-[13px] text-[var(--ss-text)] hover:border-[var(--ss-muted)] focus:border-[var(--ss-accent)] focus:outline-none cursor-pointer"
     >
-      {langOptions(exclude).map((g) => (
+      {langOptions().map((g) => (
         <optgroup key={g.group} label={g.group}>
           {g.items.map(([c, n]) => <option key={c} value={c}>{n}</option>)}
         </optgroup>
@@ -255,8 +255,15 @@ export default function CentroidModal({
 
   // Translating from what you are looking at: when you switch language tracks, that language becomes the source
   useEffect(() => {
-    if (activeLang && ALL_LANGS.some(([c]) => c === activeLang)) setSourceLang(activeLang);
+    if (activeLang && ALL_LANGS.some(([c]) => c === activeLang)) {
+      setSourceLang(activeLang);
+      setTargetLang((t) => (t === activeLang ? (activeLang === 'en' ? 'hi' : 'en') : t));
+    }
   }, [activeLang]);
+  // Safety net for saved or default values
+  useEffect(() => {
+    if (sourceLang === targetLang) setTargetLang(sourceLang === 'en' ? 'hi' : 'en');
+  }, [sourceLang, targetLang]);
 
   // The rail asks for a specific tab ("Translate" vs "Centroid QC")
   useEffect(() => { if (isOpen) setTab(startTab); }, [startTab, startTabNonce, isOpen]);
@@ -313,6 +320,10 @@ export default function CentroidModal({
     setUploaded({ name: file.name, cues });
     setSourceMode('upload');
   };
+
+  // Source and target are never the same: picking the language that is already on the other side swaps them
+  const changeSource = (code) => { if (code === targetLang) setTargetLang(sourceLang); setSourceLang(code); };
+  const changeTarget = (code) => { if (code === sourceLang) setSourceLang(targetLang); setTargetLang(code); };
 
   const swapLanguages = () => {
     const s = sourceLang;
@@ -593,9 +604,9 @@ export default function CentroidModal({
             <section>
               <h3 className="text-[12.5px] font-semibold mb-2">Languages</h3>
               <div className="grid grid-cols-[1fr_auto_1fr] items-end gap-2">
-                <Field label="From"><LangSelect label="Source language" value={sourceLang} onChange={setSourceLang} exclude={targetLang} /></Field>
+                <Field label="From"><LangSelect label="Source language" value={sourceLang} onChange={changeSource} /></Field>
                 <IconButton icon={ArrowLeftRight} label="Swap languages" variant="secondary" size="lg" onClick={swapLanguages} />
-                <Field label="To"><LangSelect label="Target language" value={targetLang} onChange={setTargetLang} exclude={sourceLang} /></Field>
+                <Field label="To"><LangSelect label="Target language" value={targetLang} onChange={changeTarget} /></Field>
               </div>
               <button type="button" onClick={() => setShowMore((v) => !v)} className="mt-2 text-[12px] text-[var(--ss-accent)] hover:underline cursor-pointer inline-flex items-center gap-1">
                 <Plus size={12} /> {showMore ? 'Hide extra languages' : `Also translate into more languages${extraTargets.length ? ` (${extraTargets.length})` : ''}`}

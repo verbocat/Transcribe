@@ -1916,7 +1916,8 @@ async def generate_subtitles_stream_endpoint(request: Request, payload: dict):
     batch_mode = payload.get("batch_mode", "all")
     user_feedback = payload.get("user_feedback")
     project_glossary = payload.get("project_glossary") or payload.get("glossary", [])
-    
+    context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
+
     if not video_id:
         raise HTTPException(status_code=400, detail="video_id is required")
         
@@ -1986,6 +1987,9 @@ async def generate_subtitles_stream_endpoint(request: Request, payload: dict):
         snap_to_shot_changes=snap_to_shot_changes,
         num_speakers=num_speakers,
         strict_native_script=strict_native_script,
+        context=context,
+        project_glossary=project_glossary,
+        user_feedback=user_feedback,
         user_id=user_id,
         video_id=video_id
     )
@@ -2030,6 +2034,54 @@ async def generate_subtitles_stream_endpoint(request: Request, payload: dict):
             "X-Accel-Buffering": "no"
         }
     )
+
+
+@app.post("/api/subtitle/context_autofill")
+async def subtitle_context_autofill(payload: dict):
+    """Read the current subtitles and draft the context (type, topic, speakers, key terms, misheard names)."""
+    from app import context_polisher
+    events = payload.get("events") or []
+    if not any(str(e.get("text") or "").strip() for e in events):
+        raise HTTPException(status_code=400, detail="There are no subtitles to read yet. Generate or import subtitles first.")
+    try:
+        return await context_polisher.autofill_context(events, payload.get("language") or "auto")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Could not read the subtitles: {e}")
+
+
+@app.post("/api/subtitle/context_polish")
+async def subtitle_context_polish(payload: dict):
+    """Proofread existing subtitles against the user's context. Timing never changes; only text fixes are returned."""
+    from app import context_polisher as cp
+    events = payload.get("events") or []
+    ctx = dict(payload.get("context") or {})
+    glossary = [t for t in (payload.get("glossary") or []) if isinstance(t, str) and t.strip()]
+    if glossary:
+        ctx["key_terms"] = "\n".join([*cp._lines(ctx.get("key_terms")), *glossary])
+    if cp.context_is_empty(ctx):
+        raise HTTPException(status_code=400, detail="Fill in some context first (speakers, key terms or notes).")
+    corrections = cp.parse_corrections(ctx.get("corrections"))
+    items = [{"id": e.get("id", e.get("event_id", i + 1)), "text": str(e.get("text") or "")} for i, e in enumerate(events)]
+    fixes, seen = [], set()
+    for it in items:
+        new_text, n = cp.apply_corrections(it["text"], corrections) if corrections else (it["text"], 0)
+        if n:
+            fixes.append({"id": it["id"], "before": it["text"], "after": new_text, "reason": "your correction list"})
+            it["text"] = new_text
+            seen.add(it["id"])
+    ai_error = None
+    try:
+        ai = await cp.polish_texts(items, ctx, payload.get("language") or "auto",
+                                   int(payload.get("cpl_limit") or 42), int(payload.get("max_lines") or 2))
+        for fx in ai:
+            prior = next((f for f in fixes if f["id"] == fx["id"]), None)
+            if prior:
+                prior["after"], prior["reason"] = fx["after"], prior["reason"] + " + " + fx["reason"]
+            else:
+                fixes.append(fx)
+    except Exception as e:
+        ai_error = str(e)
+    return {"fixes": fixes, "count": len(fixes), "ai_error": ai_error}
 
 
 @app.post("/api/subtitle/extract_glossary_file")

@@ -43,7 +43,8 @@ import NotificationBellDropdown from '../NotificationBellDropdown';
 import { useTheme } from '../../context/ThemeContext';
 import { extractAudioFromMedia, computeWaveformPeaks } from '../../utils/audioExtractor';
 import { xhrPostForm, createRateMeter } from '../../utils/xhrUpload';
-import MediaProgress from './MediaProgress';
+import MediaProgress, { GenerateProgress } from './MediaProgress';
+import ContextPanel, { loadContext, saveContext, contextForRequest } from './ContextPanel';
 
 function formatTime(seconds) {
   if (isNaN(seconds) || seconds == null) return "00:00.000";
@@ -490,11 +491,26 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
   const [centroidTab, setCentroidTab] = useState('translate');
   const [centroidNonce, setCentroidNonce] = useState(0);
   const [centroidState, setCentroidState] = useState({ hasResults: false, qcIssues: null });
+  // Context for the transcript (speakers, key terms, writing style): saved per video file, sent with every Generate
+  const [showContextPanel, setShowContextPanel] = useState(false);
+  const [genContext, setGenContext] = useState(() => loadContext(null));
+  const [contextRun, setContextRun] = useState(null); // what the last generation corrected using the context
+  const [progressMeta, setProgressMeta] = useState({ step: 1, steps: 1, estimated: false, eta: null });
   const openCentroid = useCallback((tab = 'translate') => {
     setCentroidTab(tab);
     setCentroidNonce((n) => n + 1);
+    setShowContextPanel(false);
     setShowCentroidModal(true);
   }, []);
+  const openContext = useCallback(() => {
+    setShowCentroidModal(false);
+    setShowContextPanel(true);
+  }, []);
+  const updateGenContext = useCallback((next) => {
+    setGenContext(next);
+    saveContext(selectedFile?.name, next);
+  }, [selectedFile]);
+  useEffect(() => { setGenContext(loadContext(selectedFile?.name)); setContextRun(null); }, [selectedFile?.name]);
   const [qcUnavailable, setQcUnavailable] = useState(false);
   const diffDecisionRef = useRef(null); // 'accepted' once the user accepts auto-fix changes
   const [showDiffModal, setShowDiffModal] = useState(false);
@@ -1583,15 +1599,12 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
   }, [processAndUploadMedia]);
 
   // Discard previous work for currently selected media: purges local drafts and deletes backend audio/peaks/chunks
-  const handleDiscardPreviousWork = useCallback(async (customFileName = null, customVideoId = null) => {
+  // Discard the saved draft and the subtitles on screen. The loaded video, its audio and the waveform stay exactly as they are,
+  // so nothing is deleted from the server and nothing is extracted or uploaded again.
+  const handleDiscardPreviousWork = useCallback(() => {
     resetTracks();
-    const fileNameToDiscard = customFileName || selectedFile?.name;
-    const videoIdToDiscard = customVideoId || currentVideoId;
-
     try {
-      if (fileNameToDiscard) {
-        localStorage.removeItem(`karya_subtitle_autosave_${fileNameToDiscard}`);
-      }
+      if (selectedFile?.name) localStorage.removeItem(`karya_subtitle_autosave_${selectedFile.name}`);
       localStorage.removeItem('karya_subtitle_autosave_draft_subtitle');
     } catch (_) { }
 
@@ -1604,35 +1617,21 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
     setTotalErrors(0);
     setTotalWarnings(0);
 
-    // Call backend to purge all .wav, .mp3, .mp4, .peaks.json, .part files related to this media
-    if (fileNameToDiscard || videoIdToDiscard) {
-      try {
-        await fetch(`${API_BASE}/api/media/discard`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            filename: fileNameToDiscard,
-            video_id: videoIdToDiscard
-          })
-        });
-      } catch (discardErr) {
-        console.warn('[Subtitle Studio] Non-fatal discard cleanup error:', discardErr);
-      }
-    }
-
-    // Reset media cache state
-    setCurrentVideoId(null);
-    extractedAudioFileRef.current = null;
-    setInitialWaveformPeaks([]);
-
-    // If a media file is currently loaded in the studio, start fresh upload & waveform extraction immediately
-    if (selectedFile) {
-      uploadPromiseRef.current = processAndUploadMedia(selectedFile, isAudioFile);
-    }
-
-    setAutoSaveStatus('Previous work discarded & started fresh ✓');
+    setAutoSaveStatus('Draft discarded');
     setTimeout(() => setAutoSaveStatus(''), 3000);
-  }, [selectedFile, currentVideoId, isAudioFile, processAndUploadMedia]);
+  }, [selectedFile]);
+
+  /** Apply the fixes from the Context panel to the subtitles on screen (undoable). Timing is untouched. */
+  const handleApplyContextFixes = useCallback((fixes) => {
+    const byId = new Map(fixes.map((f) => [f.id, f.after]));
+    const next = events.map((e) => {
+      const id = e.id ?? e.event_id;
+      return byId.has(id) ? { ...e, text: byId.get(id), lines: byId.get(id).split('\n') } : e;
+    });
+    setEvents(next);
+    pushToHistory(next);
+    handleLint(next);
+  }, [events, pushToHistory, handleLint]);
 
   // Available speakers list derived from all current subtitle events
   const availableSpeakers = useMemo(() => {
@@ -1965,7 +1964,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
     setUserFeedbackText('');
 
     setIsGenerating(true);
-    setProgressPercent(5);
+    setProgressPercent(null);
     setProgressStage('Uploading Video & Extracting Audio');
     setProgressDetail('Demuxing audio stream via FFmpeg...');
     setElapsedSeconds(0);
@@ -1977,7 +1976,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
 
     try {
       // Preflight server wake-up check (Render free tier cold start handler)
-      setProgressPercent(6);
+      setProgressPercent(null);
       setProgressStage('Connecting to Server');
       setProgressDetail('Checking backend connection...');
       for (let attempt = 1; attempt <= 8; attempt++) {
@@ -1998,7 +1997,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
 
       let videoId = currentVideoId;
       if (!videoId && uploadPromiseRef.current) {
-        setProgressPercent(10);
+        setProgressPercent(null);
         setProgressStage('Finalizing Media Transfer');
         setProgressDetail('Waiting for background media upload to finish...');
         try {
@@ -2012,7 +2011,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
       }
 
       if (!videoId) {
-        setProgressPercent(12);
+        setProgressPercent(null);
         setProgressStage('Transferring Audio to Server');
         setProgressDetail('Transferring media to server...');
         videoId = await processAndUploadMedia(selectedFile, isAudioFile);
@@ -2023,7 +2022,8 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
         }
       }
 
-      setProgressPercent(20);
+      setProgressPercent(null);
+      setProgressMeta({ step: 1, steps: 1, estimated: false, eta: null });
       setProgressStage('Starting AI Subtitle Stream');
       setProgressDetail('Connecting to ElevenLabs Scribe v2 transcription pipeline...');
 
@@ -2073,6 +2073,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
           strict_native_script: strictNativeScript,
           elevenlabs_api_key: localStorage.getItem('elevenlabs_api_key') || '',
           user_feedback: userFeedbackText.trim() || null,
+          context: contextForRequest(genContext),
           project_glossary: glossaryTerms
         })
       });
@@ -2082,7 +2083,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
       if (streamRes.status === 404) {
         console.warn(`[Subtitle Studio] Session for ${videoId} expired on server (404). Automatically re-uploading media...`);
         setCurrentVideoId(null);
-        setProgressPercent(14);
+        setProgressPercent(null);
         setProgressStage('Re-synchronizing Media to Server');
         setProgressDetail('Cloud server session expired or restarted. Re-uploading audio track...');
 
@@ -2092,7 +2093,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
         }
         setCurrentVideoId(videoId);
 
-        setProgressPercent(22);
+        setProgressPercent(null);
         setProgressStage('Starting AI Subtitle Stream');
         setProgressDetail('Connecting to ElevenLabs Scribe v2 pipeline with active session...');
         console.log(`[Subtitle Studio] Retrying stream for new Video ID: ${videoId}`);
@@ -2119,6 +2120,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
             strict_native_script: strictNativeScript,
             elevenlabs_api_key: localStorage.getItem('elevenlabs_api_key') || '',
             user_feedback: userFeedbackText.trim() || null,
+            context: contextForRequest(genContext),
             project_glossary: glossaryTerms
           })
         });
@@ -2160,18 +2162,16 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
             if (data.type === 'init') {
               setShotChanges(data.shot_changes || []);
               if (data.frame_rate) setFrameRate(data.frame_rate);
-              setProgressPercent(20);
-              setProgressStage('Media Audio Extracted');
-              setProgressDetail('Initializing ElevenLabs Scribe v2 transcription...');
               console.log(
                 '%c[SSE Init]%c Video initialized -> Frame Rate: ' + (data.frame_rate || frameRate) + ' fps | Audio Duration: ' + (data.audio_duration ? data.audio_duration.toFixed(2) + 's' : 'N/A') + ' | Shot Changes: ' + (data.shot_changes?.length || 0),
                 'background: #0284c7; color: white; padding: 2px 6px; border-radius: 3px; font-weight: bold;',
                 'color: #0284c7; font-weight: 500;'
               );
             } else if (data.type === 'progress') {
-              setProgressPercent(data.progress || 50);
-              setProgressStage(data.stage || 'Transcribing with ElevenLabs Scribe v2...');
-              setProgressDetail(data.detail || data.stage || 'Conforming subtitles to Netflix Timed Text guidelines...');
+              setProgressPercent(typeof data.progress === 'number' ? data.progress : null);
+              setProgressStage(data.stage || 'Working');
+              setProgressDetail(data.detail || '');
+              setProgressMeta({ step: data.step || 1, steps: data.steps || 1, estimated: !!data.estimated, eta: data.eta ?? null });
               console.log(
                 '%c[SSE Progress ' + (data.progress || 0) + '%]%c ' + data.stage + (data.detail ? ' (' + data.detail + ')' : ''),
                 'background: #6366f1; color: white; padding: 2px 6px; border-radius: 3px; font-weight: bold;',
@@ -2194,6 +2194,11 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
               setTotalWarnings(res.total_warnings || 0);
               setCpsStats(res.cps_stats || null);
               setProgressPercent(100);
+              setContextRun(data.context_fixes || null);
+              if (data.context_fixes && (data.context_fixes.ai_fixes + data.context_fixes.applied_corrections) > 0) {
+                setAutoSaveStatus(`${data.context_fixes.ai_fixes + data.context_fixes.applied_corrections} subtitles corrected using your context`);
+                setTimeout(() => setAutoSaveStatus(''), 6000);
+              }
 
               const totalSec = ((Date.now() - startTimer) / 1000).toFixed(2);
               console.log(
@@ -2633,7 +2638,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
         { type: 'separator' },
         { label: 'Settings…', icon: Settings, shortcut: 'Ctrl+,', onSelect: () => openSettings() },
         { type: 'separator' },
-        { label: 'Discard and start fresh', icon: Trash2, danger: true, onSelect: () => handleDiscardPreviousWork() },
+        { label: 'Discard draft', icon: Trash2, danger: true, onSelect: () => handleDiscardPreviousWork() },
       ],
     },
     {
@@ -2694,6 +2699,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
         { label: 'Re-sync timings to speech…', icon: Volume2, disabled: !hasEvents || !currentVideoId, onSelect: handleAcousticSync },
         { label: 'Fix QC issues with Gemini…', icon: Wand2, disabled: !hasEvents, onSelect: handleGeminiFix },
         { label: 'Re-break all line breaks', icon: AlignJustify, disabled: !hasEvents, onSelect: handleRebreakAll },
+        { label: 'Context…', icon: BookText, onSelect: openContext },
         { label: 'Translate subtitles…', icon: Languages, onSelect: () => openCentroid('translate') },
         ...(centroidState.hasResults ? [{ label: 'Centroid QC…', icon: ShieldCheck, onSelect: () => openCentroid('qc') }] : []),
         { type: 'separator' },
@@ -2870,35 +2876,12 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
       </header>
       )}
 
-      {/* ── Broadcast-Grade AI Streaming Progress Bar & Stage Status (Below Nav, Zero Nav Overflow) ── */}
+      {/* Generation progress: one slim strip. Percent, stage and ETA come from the server's real stage events. */}
       {isGenerating && (
-        <div className={`px-4 py-2 flex items-center justify-between border-b backdrop-blur-xs text-xs shrink-0 z-10 transition-all border-[var(--ss-accent)]/30 bg-[var(--kt-s1)]/95 text-slate-200`}>
-          <div className="flex items-center gap-2.5 min-w-0">
-            <Loader2 className={`w-3.5 h-3.5 animate-spin shrink-0 text-[var(--ss-accent)]`} />
-            <span className={`font-bold text-xs tracking-tight text-[var(--ss-accent)]`}>
-              {progressStage || 'Generating Subtitles...'}
-            </span>
-            {progressDetail && (
-              <span className={`text-[11px] truncate hidden sm:inline opacity-80 text-slate-400`}>
-                · {progressDetail}
-              </span>
-            )}
-          </div>
-          <div className="flex items-center gap-3 shrink-0 font-mono text-[11px]">
-            <span className={`w-12 text-right font-bold tabular-nums text-[var(--ss-accent)]`}>
-              {Math.round(progressPercent)}%
-            </span>
-            <div className={`w-24 sm:w-36 h-1.5 rounded-none overflow-hidden border bg-[var(--ss-raised)] border-[var(--ss-line)]`}>
-              <div
-                className="h-full bg-gradient-to-r from-[var(--ss-accent)] via-[var(--ss-accent-hover)] to-[var(--kt-accent)] transition-all duration-300 shadow-[0_0_8px_rgba(var(--kt-accent-rgb),0.4)]"
-                style={{ width: `${progressPercent}%` }}
-              />
-            </div>
-            <span className={`w-16 text-right tabular-nums font-medium text-slate-400`}>
-              [{elapsedSeconds.toFixed(1)}s]
-            </span>
-          </div>
-        </div>
+        <GenerateProgress
+          progress={{ percent: progressPercent, stage: progressStage, detail: progressDetail, ...progressMeta }}
+          elapsed={elapsedSeconds}
+        />
       )}
 
       {/* Backend Connection Warning Banner */}
@@ -2949,21 +2932,11 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
             <button
               onClick={() => handleDiscardPreviousWork()}
               className={`px-3 py-1 rounded-none cursor-pointer transition-colors bg-[var(--ss-hover)] hover:bg-rose-950/40 hover:text-rose-300 text-slate-300`}
-              title="Discard previous draft and delete all previous audio, video, and peaks files on the server"
+              title="Discard this saved draft. Your video and audio stay loaded."
             >
-              Discard & Start Fresh
+              Discard draft
             </button>
           </div>
-        </div>
-      )}
-
-      {/* Slim Real-Time Progress Line during Streaming */}
-      {isGenerating && (
-        <div className={`w-full h-1 overflow-hidden shrink-0 bg-[var(--ss-raised)]`}>
-          <div
-            className="h-full bg-gradient-to-r from-[var(--ss-accent)] via-[var(--ss-accent-hover)] to-[var(--kt-accent-2)] shadow-[0_0_8px_rgba(var(--kt-accent-rgb),0.5)] transition-all duration-300"
-            style={{ width: `${progressPercent}%` }}
-          />
         </div>
       )}
 
@@ -2983,6 +2956,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
             if (tabId === 'generate') {
               confirmGenerate();
             }
+            if (tabId === 'context') { if (showContextPanel) setShowContextPanel(false); else openContext(); }
             if (tabId === 'qa') setShowQcDrawer(true);
             if (tabId === 'export') setShowExportModal(true);
             if (tabId === 'translate') { if (showCentroidModal && centroidTab === 'translate') setShowCentroidModal(false); else openCentroid('translate'); }
@@ -2991,6 +2965,8 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
           onOpenLayout={() => openSettings('layout')}
           layoutOpen={showSettingsModal && settingsPage === 'layout'}
           translateOpen={showCentroidModal}
+          contextOpen={showContextPanel}
+          contextActive={Object.keys(contextForRequest(genContext)).some((k) => !['strict', 'writing_style', 'fillers', 'stutters', 'numbers', 'profanity'].includes(k))}
           hasTranslation={centroidState.hasResults}
           centroidQcCount={centroidState.qcIssues}
           position={layout.sidebar}
@@ -3355,6 +3331,23 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
         trackLangs={Object.keys(tracks)}
         onTranslated={handleTranslated}
         onShowTrack={showTranslatedTrack}
+      />
+
+      {/* ── Context for the transcript (kept mounted so nothing is lost when it is closed) ── */}
+      <ContextPanel
+        isOpen={showContextPanel}
+        onClose={() => setShowContextPanel(false)}
+        ctx={genContext}
+        onChange={updateGenContext}
+        events={events}
+        fileName={selectedFile?.name}
+        language={language}
+        cplLimit={cplLimit}
+        maxLines={maxLines}
+        glossaryTerms={glossaryTerms}
+        onApplyFixes={handleApplyContextFixes}
+        lastRun={contextRun}
+        onJumpToEvent={(id) => { setActiveEventId(id); handlePlayEvent(id); }}
       />
 
       {/* ── Export Deliverables Modal ── */}

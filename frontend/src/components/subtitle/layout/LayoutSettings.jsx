@@ -183,7 +183,7 @@ export default function LayoutSettings({ studio }) {
 
           <Section title="Tool rail" description="The Open / Import / Generate / QC / Export buttons.">
             <div className="p-3"><Segmented label="Tool rail position" value={layout.sidebar} onChange={set('sidebar')} options={posOptions(['left', 'right', 'top', 'bottom', 'hidden'])} /></div>
-            {layout.sidebar !== 'hidden' && <SwitchRow label="Show button labels" checked={layout.sidebarLabels} onChange={set('sidebarLabels')} />}
+            {(layout.sidebar === 'top' || layout.sidebar === 'bottom') && <SwitchRow label="Show button labels" checked={layout.sidebarLabels} onChange={set('sidebarLabels')} />}
           </Section>
 
           <Section title="QC report" description="Overlay floats above the workspace. Docked pins it beside or below your panes so you can fix issues while reading.">

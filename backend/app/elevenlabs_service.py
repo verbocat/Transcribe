@@ -194,9 +194,11 @@ async def transcribe_with_scribe_v2(
     num_speakers: Optional[int] = None,
     api_key: Optional[str] = None,
     model_id: str = DEFAULT_MODEL_ID,
+    keyterms: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """
     Transcribe an audio file using ElevenLabs Scribe v2.
+    `keyterms` (names, brands, technical terms) bias the engine towards the correct spelling.
 
     Returns:
         Dict containing:
@@ -245,9 +247,14 @@ async def transcribe_with_scribe_v2(
         data_payload["language_code"] = lang_code
     if num_speakers and num_speakers > 0:
         data_payload["num_speakers"] = str(num_speakers)
+    clean_terms = [t.strip() for t in (keyterms or []) if isinstance(t, str) and t.strip() and len(t.strip()) <= 50][:100]
+    keyterm_tag = ""
+    if clean_terms:
+        import hashlib
+        keyterm_tag = "_kt" + hashlib.md5("|".join(sorted(clean_terms)).encode("utf-8")).hexdigest()[:8]
 
     # ElevenLabs Scribe v2 local cache check to prevent redundant API calls
-    cache_name = f"{file_p.name}_{lang_code or 'auto'}_sdh{tag_audio_events}_spk{num_speakers or 'auto'}.scribe.json"
+    cache_name = f"{file_p.name}_{lang_code or 'auto'}_sdh{tag_audio_events}_spk{num_speakers or 'auto'}{keyterm_tag}.scribe.json"
     cache_path = file_p.parent / cache_name
     resp_json = None
     if cache_path.exists() and cache_path.stat().st_size > 100:
@@ -262,7 +269,7 @@ async def transcribe_with_scribe_v2(
         # ElevenLabs Scribe v2 requires multipart file upload
         st_time = time.time()
         log_terminal("ELEVENLABS-API", f"Uploading audio stream to {ELEVENLABS_STT_ENDPOINT}...")
-        def _post_upload() -> httpx.Response:
+        def _post_upload(with_keyterms: bool = True) -> httpx.Response:
             # Blocking client in a worker thread: large uploads never touch the asyncio socket
             # transport (the Windows SelectorEventLoop used by `uvicorn --reload` can spin forever
             # with "Data should not be empty" mid-upload), and the event loop stays responsive.
@@ -271,10 +278,13 @@ async def transcribe_with_scribe_v2(
                     files = {
                         "file": (file_p.name, f, mime_type)
                     }
+                    payload = dict(data_payload)
+                    if with_keyterms and clean_terms:
+                        payload["keyterms"] = clean_terms  # repeated multipart field
                     return client.post(
                         ELEVENLABS_STT_ENDPOINT,
                         headers=headers,
-                        data=data_payload,
+                        data=payload,
                         files=files,
                     )
 
@@ -288,6 +298,13 @@ async def transcribe_with_scribe_v2(
         except httpx.RequestError as exc:
             log_terminal("ELEVENLABS-API", f"Connection error to ElevenLabs API: {exc}", level="ERROR")
             raise RuntimeError(f"Connection error to ElevenLabs API: {exc}")
+
+        if clean_terms and response.status_code in (400, 422) and "keyterm" in (response.text or "").lower():
+            # This account/model does not accept key terms: transcribe without them (context polish still fixes the names)
+            log_terminal("ELEVENLABS-API", "Key terms were not accepted by ElevenLabs. Retrying without them.", level="WARNING")
+            response = await asyncio.to_thread(_post_upload, False)
+        elif clean_terms:
+            log_terminal("ELEVENLABS-API", f"Sent {len(clean_terms)} key terms to bias the transcription.")
 
         elapsed_sec = round(time.time() - st_time, 2)
         log_terminal("ELEVENLABS-API", f"ElevenLabs responded with HTTP {response.status_code} in {elapsed_sec}s")
