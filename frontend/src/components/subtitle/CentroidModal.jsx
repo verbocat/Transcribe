@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import {
   X, Languages, ShieldCheck, Download, Check, AlertTriangle, Wand2, Loader2, ChevronDown,
-  ChevronRight, Package, FileInput, ArrowLeftRight, BadgeCheck, Eye, EyeOff, Crosshair, Plus, Pencil,
+  ChevronRight, Package, FileInput, ArrowLeftRight, BadgeCheck, Eye, EyeOff, Crosshair, Plus, Pencil, Sparkles,
 } from 'lucide-react';
 import { API_BASE } from '../../config';
 import { parseSrtText, cuesToSrt, downloadBlob, buildZip } from '../../utils/centroidSrt';
@@ -16,7 +16,69 @@ const langOptions = (exclude) => [
 ];
 
 const CONTENT_TYPES = ['Film', 'TV series', 'Documentary', 'Reality / unscripted', 'Animation / kids', 'Advertisement', 'E-learning / training', 'News / interview', 'Stand-up / comedy'];
-const TONES = ['Neutral', 'Casual / colloquial', 'Formal', 'Humorous', 'Dramatic / emotional', 'Technical'];
+const TONES = [
+  'Natural everyday conversation', 'Casual / youthful', 'Formal / polite', 'Humorous',
+  'Dramatic / emotional', 'Kid-friendly', 'Technical / educational',
+];
+const ENGLISH_USAGE = [
+  { value: 'natural', label: 'Natural mix: keep common English words' },
+  { value: 'pure', label: 'Pure target language' },
+  { value: 'heavy', label: 'Heavy English mix' },
+];
+const ADDRESS_FORMS = [
+  { value: 'by_character', label: 'Per character (use the character list)' },
+  { value: 'informal', label: 'Informal “you” (tum / tu)' },
+  { value: 'polite', label: 'Polite “you” (aap)' },
+];
+const PROFANITY = [
+  { value: 'keep', label: 'Keep as in the source' },
+  { value: 'soften', label: 'Soften' },
+  { value: 'remove', label: 'Remove' },
+];
+const AUDIENCE_AGES = [
+  { value: '', label: 'Not specified' },
+  { value: 'toddler', label: 'Young children (3 to 6)' },
+  { value: 'kids', label: 'Kids (7 to 12)' },
+  { value: 'teens', label: 'Teenagers' },
+  { value: 'adults', label: 'Adults' },
+  { value: 'everyone', label: 'Everyone / family' },
+];
+const HUMOUR = [
+  { value: 'adapt', label: 'Adapt jokes so they are funny in the target language' },
+  { value: 'literal', label: 'Translate jokes faithfully' },
+];
+const CULTURE = [
+  { value: 'localise', label: 'Localise references (food, festivals, idioms)' },
+  { value: 'keep', label: 'Keep the original references' },
+];
+const BREVITY = [
+  { value: 'balanced', label: 'Balanced' },
+  { value: 'short', label: 'Short and quick to read' },
+  { value: 'full', label: 'Complete and faithful' },
+];
+const NUMBERS = [
+  { value: 'guide', label: '1 to 10 in words, 11+ as digits' },
+  { value: 'digits', label: 'Always digits' },
+  { value: 'words', label: 'Words where natural' },
+];
+const GENDERS = [
+  { value: '', label: 'Gender' },
+  { value: 'male', label: 'Male' },
+  { value: 'female', label: 'Female' },
+  { value: 'nonbinary', label: 'Non-binary' },
+];
+const EMPTY_CTX = {
+  title: '', content_type: '', genre: '', audience: '', setting: '',
+  tone: 'Natural everyday conversation', english_usage: 'natural', address_form: 'by_character', profanity: 'keep',
+  audience_age: '', dialect: '', humour: 'adapt', culture: 'localise', brevity: 'balanced', numbers: 'guide',
+  synopsis: '', scene_notes: '', series_notes: '', style_examples: '', characters: [], dos: '', donts: '', notes: '', strict: true,
+};
+const TYPE_FROM_ANALYSIS = {
+  film: 'Film', series: 'TV series', documentary: 'Documentary', animation: 'Animation / kids',
+  ad: 'Advertisement', 'e-learning': 'E-learning / training', interview: 'News / interview',
+};
+const known = (v) => v && String(v).trim() && String(v).trim().toLowerCase() !== 'unknown';
+const AREA = 'w-full rounded-lg border border-[var(--ss-line)] bg-[var(--ss-bg)] px-2.5 py-1.5 text-[12px] placeholder:text-[var(--ss-faint)] focus:border-[var(--ss-accent)] focus:outline-none';
 
 // The editor's language setting uses a few codes Centroid doesn't know
 const toCentroidLang = (code) => ({ auto: 'en', hinglish: 'hi' }[code] || code);
@@ -33,11 +95,16 @@ async function api(path, body) {
   return data;
 }
 
+/** One term per line: `Name`, `Name = translation`, optionally `@hi` at the end to apply to one language only. */
 function parseGlossary(text) {
   return text.split('\n').map((l) => l.trim()).filter(Boolean).map((l) => {
-    const [src, ...rest] = l.split(/\s*(?:=|->|=>)\s*/);
+    let line = l;
+    let lang = null;
+    const m = line.match(/\s@([A-Za-z-]{2,8})\s*$/);
+    if (m) { lang = m[1].toLowerCase(); line = line.slice(0, m.index).trim(); }
+    const [src, ...rest] = line.split(/\s*(?:=|->|=>)\s*/);
     const target = rest.join(' = ').trim();
-    return { source: src.trim(), target: target || null, do_not_translate: !target };
+    return { source: src.trim(), target: target || null, do_not_translate: !target, ...(lang ? { lang } : {}) };
   }).filter((g) => g.source);
 }
 
@@ -80,6 +147,20 @@ function Collapsible({ title, hint, open, setOpen, children }) {
       </button>
       {open && <div className="px-3 pb-3 pt-1 border-t border-[var(--ss-line)]/70">{children}</div>}
     </section>
+  );
+}
+
+function SubGroup({ title, hint, defaultOpen = false, children }) {
+  const [on, setOn] = useState(defaultOpen);
+  return (
+    <div className="mt-3 first:mt-0 rounded-lg border border-[var(--ss-line)]/80">
+      <button type="button" aria-expanded={on} onClick={() => setOn(!on)} className="w-full h-9 px-3 flex items-center gap-2 text-left cursor-pointer">
+        {on ? <ChevronDown size={13} className="text-[var(--ss-muted)]" /> : <ChevronRight size={13} className="text-[var(--ss-muted)]" />}
+        <span className="text-[12px] font-semibold">{title}</span>
+        <span className="ml-auto text-[11px] text-[var(--ss-faint)] truncate">{hint}</span>
+      </button>
+      {on && <div className="px-3 pb-3 pt-1">{children}</div>}
+    </div>
   );
 }
 
@@ -126,12 +207,20 @@ export default function CentroidModal({
   const [targetLang, setTargetLang] = useState(() => readStore('centroid_tgt_v2', null) || 'hi');
   const [extraTargets, setExtraTargets] = useState([]);
   const [showMore, setShowMore] = useState(false);
-  const [ctx, setCtx] = useState({ title: '', content_type: '', tone: '', synopsis: '', characters: '', notes: '' });
-  const [glossaryText, setGlossaryText] = useState('');
+  const ctxKey = `centroid_ctx_v3:${fileName}`;
+  const glossKey = `centroid_gloss_v3:${fileName}`;
+  const [ctx, setCtx] = useState(() => ({ ...EMPTY_CTX, ...readStore(ctxKey, {}) }));
+  const [glossaryText, setGlossaryText] = useState(() => readStore(glossKey, ''));
+  const updateCtx = (next) => { setCtx(next); writeStore(ctxKey, next); };
+  const patchCtx = (k, v) => updateCtx({ ...ctx, [k]: v });
+  const updateGloss = (text) => { setGlossaryText(text); writeStore(glossKey, text); };
+  const [quality, setQuality] = useState(() => readStore('centroid_quality_v1', 'high'));
+  const [analyzing, setAnalyzing] = useState(false);
+  const [analyzeNote, setAnalyzeNote] = useState('');
   const [keepNames, setKeepNames] = useState(true);
   const [limits, setLimits] = useState({ max_cpl: cplLimit, max_lines: maxLines, max_cps: cpsLimit });
   const [autoQc, setAutoQc] = useState(() => readStore('centroid_autoqc_v2', false));
-  const [open, setOpen] = useState({ ctx: false, gloss: false, limits: false });
+  const [open, setOpen] = useState({ ctx: true, gloss: false, limits: false });
   const [busy, setBusy] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [error, setError] = useState('');
@@ -144,8 +233,7 @@ export default function CentroidModal({
   const [qcTarget, setQcTarget] = useState(''); // 'editor' | lang code
   const [qcBusy, setQcBusy] = useState(false);
   const [qc, setQc] = useState(null); // {summary, issues, target}
-  const [qcFilter, setQcFilter] = useState('all');
-  const [qcError, setQcError] = useState('');
+    const [qcError, setQcError] = useState('');
 
   useEffect(() => {
     if (!isOpen) return;
@@ -155,6 +243,15 @@ export default function CentroidModal({
   useEffect(() => { setLimits((l) => ({ ...l, max_cpl: cplLimit, max_lines: maxLines, max_cps: cpsLimit })); }, [cplLimit, maxLines, cpsLimit]);
   useEffect(() => { writeStore('centroid_src_v2', sourceLang); writeStore('centroid_tgt_v2', targetLang); }, [sourceLang, targetLang]);
   useEffect(() => { writeStore('centroid_autoqc_v2', autoQc); }, [autoQc]);
+  useEffect(() => { writeStore('centroid_quality_v1', quality); }, [quality]);
+
+  // A different video was opened: load the context saved for it
+  useEffect(() => {
+    setCtx({ ...EMPTY_CTX, ...readStore(ctxKey, {}) });
+    setGlossaryText(readStore(glossKey, ''));
+    setAnalyzeNote('');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fileName]);
 
   // Translating from what you are looking at: when you switch language tracks, that language becomes the source
   useEffect(() => {
@@ -184,7 +281,16 @@ export default function CentroidModal({
 
   const buildContext = () => {
     const out = {};
-    Object.entries(ctx).forEach(([k, v]) => { if (String(v).trim()) out[k] = String(v).trim(); });
+    Object.entries(ctx).forEach(([k, v]) => {
+      if (k === 'characters') {
+        const rows = (v || []).filter((c) => (c.name || '').trim());
+        if (rows.length) out.characters = rows;
+      } else if (k === 'strict') {
+        out.strict = !!v;
+      } else if (String(v ?? '').trim()) {
+        out[k] = String(v).trim();
+      }
+    });
     return out;
   };
   const buildGlossary = () => {
@@ -214,6 +320,60 @@ export default function CentroidModal({
     setTargetLang(s);
   };
 
+  /** Let Centroid read the whole script and fill in the briefing: synopsis, characters, tone and a name glossary. */
+  const runAnalyze = async () => {
+    setError('');
+    setAnalyzeNote('');
+    if (!sourceCues.length) { setError('There are no subtitles to read yet.'); return; }
+    setAnalyzing(true);
+    try {
+      const data = await api('/api/centroid/analyze', {
+        events: sourceCues.map((c) => ({ start_time: c.start_time ?? c.start, end_time: c.end_time ?? c.end, text: c.text })),
+        source_lang: sourceLang, target_langs: targets, context: buildContext(),
+      });
+      const next = { ...ctx };
+      ['title', 'genre', 'audience', 'setting', 'synopsis'].forEach((k) => { if (!String(next[k]).trim() && known(data[k])) next[k] = data[k]; });
+      if (!next.content_type && TYPE_FROM_ANALYSIS[data.content_type]) next.content_type = TYPE_FROM_ANALYSIS[data.content_type];
+      if (!(next.characters || []).length && (data.characters || []).length) {
+        next.characters = data.characters.map((c) => ({
+          name: c.name,
+          gender: ['male', 'female', 'nonbinary'].includes(c.gender) ? c.gender : '',
+          role: known(c.role) ? c.role : '',
+          style: [known(c.style) && c.style, known(c.addresses) && `addresses others: ${c.addresses}`].filter(Boolean).join('; '),
+        }));
+      }
+      if (!next.audience_age && AUDIENCE_AGES.some((a) => a.value && a.value === data.audience_age)) next.audience_age = data.audience_age;
+      if (!String(next.scene_notes).trim() && (data.scene_notes || []).length) next.scene_notes = data.scene_notes.join('\n');
+      if (!String(next.series_notes).trim() && known(data.series_notes)) next.series_notes = data.series_notes;
+      let exampleCount = 0;
+      if (!String(next.style_examples).trim() && (data.style_examples || []).length) {
+        const rows = [];
+        data.style_examples.forEach((e) => targets.forEach((code) => { if (e.translations?.[code]) rows.push(`${e.source} => ${e.translations[code]} @${code}`); }));
+        exampleCount = rows.length;
+        next.style_examples = rows.join('\n');
+      }
+      updateCtx(next);
+
+      const have = new Set(parseGlossary(glossaryText).map((g) => `${g.source.toLowerCase()}@${g.lang || ''}`));
+      const lines = [];
+      (data.names || []).forEach((n) => {
+        [n.source, ...(n.variants || [])].forEach((src) => {
+          targets.forEach((code) => {
+            const t = n.translations?.[code];
+            if (t && !have.has(`${src.toLowerCase()}@${code}`)) lines.push(`${src} = ${t} @${code}`);
+          });
+        });
+      });
+      if (lines.length) updateGloss([glossaryText.trim(), ...lines].filter(Boolean).join('\n'));
+      setOpen((o) => ({ ...o, ctx: true, gloss: lines.length ? true : o.gloss }));
+      setAnalyzeNote(`Centroid read ${data.cues_read} of ${data.cues_total} subtitles and drafted the briefing: ${(data.characters || []).length} characters, ${(data.names || []).length} names${exampleCount ? `, ${exampleCount} example lines` : ''}. Please check the genders, name spellings and example lines. Correct them if they are wrong, because Centroid follows them strictly.`);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setAnalyzing(false);
+    }
+  };
+
   /** Build source/target pairs for QC from a language result, or from the editor. */
   const pairsFor = useCallback((code, res, snap) => {
     if (!code || !snap.length) return { pairs: [], error: 'Translate first, so Centroid has the source text to compare against.' };
@@ -239,7 +399,7 @@ export default function CentroidModal({
     try {
       const data = await api('/api/centroid/qc', {
         cues: pairs, source_lang: sourceLang, target_lang: lang,
-        context: buildContext(), glossary: buildGlossary(), constraints: buildLimits(), include_technical: true,
+        context: buildContext(), glossary: buildGlossary(), constraints: buildLimits(),
       });
       setQc({ ...data, target: code, issues: (data.issues || []).map((i, n) => ({ ...i, key: `${i.index}-${i.category}-${n}` })) });
     } catch (e) {
@@ -259,6 +419,7 @@ export default function CentroidModal({
       const data = await api('/api/centroid/translate', {
         events: sourceCues.map((c) => ({ start_time: c.start_time ?? c.start, end_time: c.end_time ?? c.end, text: c.text })),
         source_lang: sourceLang, target_langs: targets, context: buildContext(), glossary: buildGlossary(), constraints: buildLimits(),
+        quality,
       });
       const snap = sourceCues.map((c, i) => ({ id: i + 1, editorId: c.id ?? c.event_id, start_time: c.start_time ?? c.start, end_time: c.end_time ?? c.end, text: c.text }));
       const res = data.results || {};
@@ -355,7 +516,7 @@ export default function CentroidModal({
     });
   };
 
-  const shownIssues = (qc?.issues || []).filter((i) => qcFilter === 'all' || i.severity === qcFilter);
+  const shownIssues = qc?.issues || [];
   const fixable = (qc?.issues || []).filter((i) => i.suggestion).length;
 
   if (!isOpen) return null;
@@ -460,14 +621,87 @@ export default function CentroidModal({
             </section>
 
             {/* optional detail */}
-            <Collapsible title="Context" hint="Optional · improves names, gender and tone" open={open.ctx} setOpen={(v) => setOpen((o) => ({ ...o, ctx: v }))}>
-              <div className="grid grid-cols-2 gap-3">
-                <Field label="Title"><TextInput value={ctx.title} onChange={(e) => setCtx({ ...ctx, title: e.target.value })} placeholder="e.g. The Last Train" /></Field>
-                <Field label="Content type"><Select label="Content type" value={ctx.content_type} onChange={(v) => setCtx({ ...ctx, content_type: v })} options={[{ value: '', label: 'Not specified' }, ...CONTENT_TYPES.map((t) => ({ value: t, label: t }))]} className="w-full" /></Field>
-                <Field label="Tone / register" className="col-span-2"><Select label="Tone" value={ctx.tone} onChange={(v) => setCtx({ ...ctx, tone: v })} options={[{ value: '', label: 'Not specified' }, ...TONES.map((t) => ({ value: t, label: t }))]} className="w-full" /></Field>
-                <Field label="Synopsis" className="col-span-2"><textarea rows={2} className="w-full rounded-lg border border-[var(--ss-line)] bg-[var(--ss-bg)] px-2.5 py-1.5 text-[12px] placeholder:text-[var(--ss-faint)] focus:border-[var(--ss-accent)] focus:outline-none" value={ctx.synopsis} onChange={(e) => setCtx({ ...ctx, synopsis: e.target.value })} placeholder="What is this about? Setting, plot, topic." /></Field>
-                <Field label="Characters / speakers" className="col-span-2"><textarea rows={2} className="w-full rounded-lg border border-[var(--ss-line)] bg-[var(--ss-bg)] px-2.5 py-1.5 text-[12px] placeholder:text-[var(--ss-faint)] focus:border-[var(--ss-accent)] focus:outline-none" value={ctx.characters} onChange={(e) => setCtx({ ...ctx, characters: e.target.value })} placeholder="Raj (male, 30s, narrator); Meera (female, his boss, formal with Raj)" /></Field>
-                <Field label="Extra instructions" className="col-span-2"><TextInput value={ctx.notes} onChange={(e) => setCtx({ ...ctx, notes: e.target.value })} placeholder="e.g. keep swear words mild, use ‘aap’ not ‘tum’" /></Field>
+            <Collapsible title="Context" hint={`${ctx.tone || 'No tone set'} · ${(ctx.characters || []).filter((c) => c.name).length} characters`} open={open.ctx} setOpen={(v) => setOpen((o) => ({ ...o, ctx: v }))}>
+              <div className="mb-3 flex items-start gap-3 rounded-lg border border-[var(--ss-accent)]/30 bg-[var(--ss-accent)]/5 p-2.5">
+                <div className="flex-1 min-w-0 text-[11.5px] text-[var(--ss-muted)] leading-snug">
+                  The more Centroid knows, the more natural and consistent the translation. Let it read your subtitles and draft the briefing, then correct anything it got wrong. Centroid follows these fields as strict rules.
+                </div>
+                <Button size="sm" variant="primary" icon={analyzing ? Loader2 : Sparkles} disabled={analyzing || notReady || !sourceCues.length} onClick={runAnalyze}>
+                  {analyzing ? 'Reading…' : 'Auto-fill'}
+                </Button>
+              </div>
+              {analyzeNote && <div className="mb-3"><Notice tone="good">{analyzeNote}</Notice></div>}
+
+              <SubGroup title="About the video" hint="What it is and who it is for" defaultOpen>
+                <div className="grid grid-cols-2 gap-3">
+                  <Field label="Title"><TextInput value={ctx.title} onChange={(e) => patchCtx('title', e.target.value)} placeholder="e.g. The Last Train" /></Field>
+                  <Field label="Content type"><Select label="Content type" value={ctx.content_type} onChange={(v) => patchCtx('content_type', v)} options={[{ value: '', label: 'Not specified' }, ...CONTENT_TYPES.map((t) => ({ value: t, label: t }))]} className="w-full" /></Field>
+                  <Field label="Genre"><TextInput value={ctx.genre} onChange={(e) => patchCtx('genre', e.target.value)} placeholder="e.g. fantasy adventure, comedy" /></Field>
+                  <Field label="Audience age"><Select label="Audience age" value={ctx.audience_age} onChange={(v) => patchCtx('audience_age', v)} options={AUDIENCE_AGES} className="w-full" /></Field>
+                  <Field label="Audience details" className="col-span-2"><TextInput value={ctx.audience} onChange={(e) => patchCtx('audience', e.target.value)} placeholder="e.g. urban Indian kids, families watching together" /></Field>
+                  <Field label="Setting / era" className="col-span-2"><TextInput value={ctx.setting} onChange={(e) => patchCtx('setting', e.target.value)} placeholder="e.g. fantasy world, modern Mumbai, 1970s village" /></Field>
+                  <Field label="Synopsis" className="col-span-2"><textarea rows={3} className={AREA} value={ctx.synopsis} onChange={(e) => patchCtx('synopsis', e.target.value)} placeholder="What happens, who is involved, what the scene is about." /></Field>
+                  <Field label="Scene notes (optional)" className="col-span-2"><textarea rows={3} className={AREA} value={ctx.scene_notes} onChange={(e) => patchCtx('scene_notes', e.target.value)} placeholder={'One per line, with the time.\n00:01:10 chase scene, everyone is out of breath and scared'} /></Field>
+                  <Field label="Series notes (optional)" className="col-span-2"><textarea rows={2} className={AREA} value={ctx.series_notes} onChange={(e) => patchCtx('series_notes', e.target.value)} placeholder="Catchphrases, running jokes, special terms and how they should be translated" /></Field>
+                </div>
+              </SubGroup>
+
+              <SubGroup title="How it should sound" hint={ctx.tone || 'Not set'} defaultOpen>
+                <div className="grid grid-cols-2 gap-3">
+                  <Field label="Tone / register" className="col-span-2"><Select label="Tone" value={ctx.tone} onChange={(v) => patchCtx('tone', v)} options={[{ value: '', label: 'Not specified' }, ...TONES.map((t) => ({ value: t, label: t }))]} className="w-full" /></Field>
+                  <Field label="Language variety (optional)" className="col-span-2"><TextInput value={ctx.dialect} onChange={(e) => patchCtx('dialect', e.target.value)} placeholder="e.g. everyday Mumbai Hindi, standard Hindi, Hinglish" /></Field>
+                  <Field label="English words"><Select label="English words" value={ctx.english_usage} onChange={(v) => patchCtx('english_usage', v)} options={ENGLISH_USAGE} className="w-full" /></Field>
+                  <Field label="Forms of address"><Select label="Forms of address" value={ctx.address_form} onChange={(v) => patchCtx('address_form', v)} options={ADDRESS_FORMS} className="w-full" /></Field>
+                  <Field label="Humour and wordplay"><Select label="Humour" value={ctx.humour} onChange={(v) => patchCtx('humour', v)} options={HUMOUR} className="w-full" /></Field>
+                  <Field label="Cultural references"><Select label="Cultural references" value={ctx.culture} onChange={(v) => patchCtx('culture', v)} options={CULTURE} className="w-full" /></Field>
+                  <Field label="Length"><Select label="Length" value={ctx.brevity} onChange={(v) => patchCtx('brevity', v)} options={BREVITY} className="w-full" /></Field>
+                  <Field label="Numbers"><Select label="Numbers" value={ctx.numbers} onChange={(v) => patchCtx('numbers', v)} options={NUMBERS} className="w-full" /></Field>
+                  <Field label="Profanity" className="col-span-2"><Select label="Profanity" value={ctx.profanity} onChange={(v) => patchCtx('profanity', v)} options={PROFANITY} className="w-full" /></Field>
+                </div>
+              </SubGroup>
+
+              <SubGroup title="Characters" hint={`${(ctx.characters || []).filter((c) => c.name).length} added`} defaultOpen>
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <p className="text-[11.5px] text-[var(--ss-faint)]">Gender and speaking style decide the verb forms and word choice for each speaker.</p>
+                  <Button size="sm" variant="ghost" icon={Plus} onClick={() => patchCtx('characters', [...(ctx.characters || []), { name: '', gender: '', role: '', style: '' }])}>Add</Button>
+                </div>
+                <div className="space-y-2">
+                  {(ctx.characters || []).map((c, i) => {
+                    const setRow = (patch) => patchCtx('characters', ctx.characters.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+                    return (
+                      <div key={i} className="rounded-lg border border-[var(--ss-line)] p-2 space-y-1.5">
+                        <div className="grid grid-cols-[1fr_130px_auto] gap-2 items-center">
+                          <TextInput value={c.name} onChange={(e) => setRow({ name: e.target.value })} placeholder="Name" aria-label="Character name" />
+                          <Select label="Gender" value={c.gender} onChange={(v) => setRow({ gender: v })} options={GENDERS} className="w-full" />
+                          <IconButton size="sm" icon={X} label="Remove character" onClick={() => patchCtx('characters', ctx.characters.filter((_, j) => j !== i))} />
+                        </div>
+                        <TextInput value={c.role} onChange={(e) => setRow({ role: e.target.value })} placeholder="Role and relationships, e.g. Raj’s boss, rival of Meera" aria-label="Character role" />
+                        <TextInput value={c.style || ''} onChange={(e) => setRow({ style: e.target.value })} placeholder="How they speak, e.g. bossy and formal, calls Raj ‘tum’" aria-label="Character speaking style" />
+                      </div>
+                    );
+                  })}
+                </div>
+              </SubGroup>
+
+              <SubGroup title="Example lines" hint="Strongest way to set the voice">
+                <p className="mb-2 text-[11.5px] text-[var(--ss-faint)] leading-snug">Write 3 to 6 lines exactly the way you want them to sound. Centroid copies the voice, word choice and formality. Format: <code>English line =&gt; your Hindi line</code>. Add <code>@hi</code> at the end to limit it to one language.</p>
+                <textarea rows={5} className={`${AREA} font-mono`} value={ctx.style_examples} onChange={(e) => patchCtx('style_examples', e.target.value)} placeholder={'I\'m worried about him. => मुझे उसकी बहुत फ़िक्र हो रही है। @hi\nLet\'s go! => चलो चलो, जल्दी करो! @hi'} aria-label="Example lines" />
+              </SubGroup>
+
+              <SubGroup title="Rules" hint="Always do, never do">
+                <div className="grid grid-cols-2 gap-3">
+                  <Field label="Always do"><textarea rows={2} className={AREA} value={ctx.dos} onChange={(e) => patchCtx('dos', e.target.value)} placeholder="e.g. keep lines short and punchy" /></Field>
+                  <Field label="Never do"><textarea rows={2} className={AREA} value={ctx.donts} onChange={(e) => patchCtx('donts', e.target.value)} placeholder="e.g. no Sanskrit-heavy words" /></Field>
+                  <Field label="Anything else" className="col-span-2"><TextInput value={ctx.notes} onChange={(e) => patchCtx('notes', e.target.value)} placeholder="Any other instruction for the translator" /></Field>
+                </div>
+              </SubGroup>
+
+              <div className="mt-3 flex items-center justify-between gap-3 rounded-lg border border-[var(--ss-line)] px-3 py-2">
+                <div className="min-w-0">
+                  <div className="text-[12.5px]">Treat this context as strict rules</div>
+                  <div className="text-[11.5px] text-[var(--ss-faint)]">Centroid must obey every field above. With a natural tone, it also re-checks the result for bookish words and rewrites them.</div>
+                </div>
+                <Switch checked={!!ctx.strict} onChange={(v) => patchCtx('strict', v)} label="Strict context" />
               </div>
             </Collapsible>
 
@@ -483,8 +717,8 @@ export default function CentroidModal({
                 rows={4}
                 className="mt-1 w-full rounded-lg border border-[var(--ss-line)] bg-[var(--ss-bg)] px-2.5 py-1.5 font-mono text-[12px] placeholder:text-[var(--ss-faint)] focus:border-[var(--ss-accent)] focus:outline-none"
                 value={glossaryText}
-                onChange={(e) => setGlossaryText(e.target.value)}
-                placeholder={'One per line.\nAcme Corp        (kept as is)\nsubscriber = सब्सक्राइबर   (forced translation)'}
+                onChange={(e) => updateGloss(e.target.value)}
+                placeholder={'One per line.\nAcme Corp        (kept as is)\nsubscriber = सब्सक्राइबर   (forced translation)\nEldrador = एल्ड्रेडोर @hi   (only for Hindi)'}
                 aria-label="Extra glossary terms"
               />
             </Collapsible>
@@ -497,6 +731,14 @@ export default function CentroidModal({
               </div>
               <p className="mt-2 text-[11.5px] text-[var(--ss-faint)]">Starts from your Settings → Timing &amp; QC values.</p>
             </Collapsible>
+
+            <div className="flex items-center justify-between gap-3 rounded-xl border border-[var(--ss-line)] px-3 py-2.5">
+              <div className="min-w-0">
+                <div className="text-[12.5px]">High quality mode</div>
+                <div className="text-[11.5px] text-[var(--ss-faint)]">Translates, then a second pass edits every line for natural speech. Slower.</div>
+              </div>
+              <Switch checked={quality === 'high'} onChange={(v) => setQuality(v ? 'high' : 'standard')} label="High quality mode" />
+            </div>
 
             <div className="flex items-center justify-between gap-3 rounded-xl border border-[var(--ss-line)] px-3 py-2.5">
               <div className="min-w-0">
@@ -524,7 +766,7 @@ export default function CentroidModal({
                         <div className="flex-1 min-w-0">
                           <div className="text-[13px] font-semibold">{langName(sourceLang)} → {langName(code)}</div>
                           <div className="text-[11.5px] text-[var(--ss-faint)]">
-                            {r.stats.cues} cues{r.stats.failed ? ` · ${r.stats.failed} failed` : ''}{r.warnings.length ? ` · ${r.warnings.length} limit warnings` : ' · no limit warnings'}
+                            {r.stats.cues} cues{r.stats.tone_fixed ? ` · ${r.stats.tone_fixed} lines made more natural` : ''}{r.stats.failed ? ` · ${r.stats.failed} failed` : ''}{r.warnings.length ? ` · ${r.warnings.length} limit warnings` : ' · no limit warnings'}
                           </div>
                         </div>
                         <IconButton size="sm" icon={showing ? EyeOff : Eye} label={showing ? 'Hide preview' : 'Preview translation'} onClick={() => setPreviewLang(showing ? null : code)} />
@@ -589,7 +831,7 @@ export default function CentroidModal({
                 {!qc.summary.ai_checked && <Notice tone="warn">The AI review didn’t complete for part of the file, so only rule-based checks are shown for it. Run QC again to retry.</Notice>}
 
                 <div className="flex items-center gap-2">
-                  <Segmented label="Filter issues" value={qcFilter} onChange={setQcFilter} className="w-60" options={[{ value: 'all', label: 'All' }, { value: 'error', label: 'Errors' }, { value: 'warning', label: 'Warnings' }]} />
+                  <span className="text-[12px] text-[var(--ss-muted)]">{qc.issues.length} translation {qc.issues.length === 1 ? 'issue' : 'issues'}</span>
                   <span className="flex-1" />
                   {fixable > 0 && <Button variant="primary" icon={Wand2} onClick={applyAll}>Apply all {fixable} fixes</Button>}
                 </div>

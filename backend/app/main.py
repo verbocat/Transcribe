@@ -2113,7 +2113,7 @@ async def centroid_translate(payload: dict):
         raise HTTPException(status_code=400, detail="Provide 'srt' or 'events'.")
     if not (payload.get("target_langs") or payload.get("target_lang")):
         raise HTTPException(status_code=400, detail="Choose at least one target language.")
-    body = {k: payload[k] for k in ("srt", "source_lang", "target_langs", "target_lang", "context", "glossary", "constraints") if payload.get(k)}
+    body = {k: payload[k] for k in ("srt", "source_lang", "target_langs", "target_lang", "context", "glossary", "constraints", "quality") if payload.get(k)}
     cues = payload.get("cues") or payload.get("events")
     if cues and not body.get("srt"):
         body["cues"] = [
@@ -2121,6 +2121,21 @@ async def centroid_translate(payload: dict):
             for e in cues
         ]
     return await centroid_client.post("/subtitles/translate", body)
+
+
+@app.post("/api/centroid/analyze")
+async def centroid_analyze(payload: dict):
+    """Ask Centroid to read the whole script and propose context, characters and a name glossary."""
+    from app import centroid_client
+    cues = payload.get("cues") or payload.get("events") or []
+    if not cues:
+        raise HTTPException(status_code=400, detail="There are no subtitles to analyse.")
+    body = {k: payload[k] for k in ("source_lang", "target_langs", "context") if payload.get(k)}
+    body["cues"] = [
+        {"start": e.get("start_time", e.get("start")), "end": e.get("end_time", e.get("end")), "text": e.get("text", "")}
+        for e in cues
+    ]
+    return await centroid_client.post("/subtitles/analyze", body)
 
 
 @app.post("/api/centroid/qc")
