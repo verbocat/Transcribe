@@ -14,7 +14,8 @@ from .models import (
     PasswordResetToken,
     LoginOTP,
     AuthFailedAttempt,
-    SessionTakeoverRequest
+    SessionTakeoverRequest,
+    AdminNotification
 )
 from .security import (
     validate_verbolabs_email,
@@ -29,6 +30,13 @@ from .security import (
     get_otp_secret
 )
 from .brevo_service import send_verification_email, send_password_reset_email, send_mfa_login_otp_email
+
+SUPER_ADMIN_EMAILS = {"arpit.purohit@verbolabs.com", "arpit.purohit@verbolab.com"}
+
+def is_super_admin(email: Optional[str]) -> bool:
+    if not email:
+        return False
+    return email.strip().lower() in SUPER_ADMIN_EMAILS
 
 auth_router = APIRouter()
 
@@ -182,11 +190,53 @@ def get_current_user_from_token(
             detail="Session has expired due to 4 hours of inactivity. Please log in again."
         )
 
+    if session.user.is_blocked:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Account has been suspended by an administrator."
+        )
+
     # Slide 4-hour inactivity window forward on active use
     session.expires_at = now_utc + timedelta(hours=4)
     db.commit()
 
     return session.user
+
+
+def get_current_admin_user(
+    current_user: User = Depends(get_current_user_from_token)
+) -> User:
+    """Dependency ensuring caller is strictly the Super Administrator (Arpit Purohit)."""
+    if not is_super_admin(current_user.email):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access forbidden: Enterprise Admin Command Center is restricted strictly to the Super Administrator."
+        )
+    return current_user
+
+
+def get_optional_user_from_token(
+    authorization: Optional[str] = Header(None),
+    db: Session = Depends(get_auth_db)
+) -> Optional[User]:
+    """Dependency that extracts user if Bearer token is provided, or None if anonymous/unauthenticated."""
+    if not authorization or not authorization.startswith("Bearer "):
+        return None
+    try:
+        token = authorization.split(" ")[1].strip()
+        session = db.query(AuthSession).filter(
+            AuthSession.session_token == token,
+            AuthSession.is_active == True
+        ).first()
+        if not session or not session.user:
+            return None
+        now_utc = datetime.now(timezone.utc)
+        exp = session.expires_at.replace(tzinfo=timezone.utc) if session.expires_at.tzinfo is None else session.expires_at
+        if now_utc > exp or session.user.is_blocked:
+            return None
+        return session.user
+    except Exception:
+        return None
 
 
 @auth_router.post("/signup", status_code=status.HTTP_201_CREATED)
@@ -508,11 +558,11 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_aut
             detail="No account found with this email address. Please sign up first."
         )
 
-    # 6. Check verification status
-    if not user.is_verified:
+    # 6. Check restricted / blocked status
+    if user.is_blocked:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Your email has not been verified yet. Please check your inbox for the verification link or request a new one."
+            detail="Your account has been restricted or suspended by an administrator. Please contact support."
         )
 
     # 7. Verify password
@@ -771,6 +821,8 @@ def verify_login_otp(
             "name": user.name,
             "email": user.email,
             "employee_id": user.employee_id,
+            "role": user.role or "editor",
+            "is_admin": bool(user.is_admin or (user.role and user.role.lower() == "admin")),
             "operating_location": op_loc
         }
     }
@@ -1098,6 +1150,14 @@ def get_current_user_profile(
             "name": user.name,
             "email": user.email,
             "employee_id": user.employee_id,
+            "role": user.role or "editor",
+            "is_admin": is_super_admin(user.email),
+            "total_spend_usd": getattr(user, "total_spend_usd", 0.0) or 0.0,
+            "monthly_budget_usd": getattr(user, "monthly_budget_usd", 50.0) or 50.0,
+            "max_videos_quota": getattr(user, "max_videos_quota", -1) if getattr(user, "max_videos_quota", None) is not None else -1,
+            "can_export": getattr(user, "can_export", True) if getattr(user, "can_export", None) is not None else True,
+            "can_ai_optimize": getattr(user, "can_ai_optimize", True) if getattr(user, "can_ai_optimize", None) is not None else True,
+            "can_audio_peaks": getattr(user, "can_audio_peaks", True) if getattr(user, "can_audio_peaks", None) is not None else True,
             "is_verified": user.is_verified,
             "created_at": user.created_at.isoformat() if user.created_at else None
         }
@@ -1110,13 +1170,17 @@ def logout(
     db: Session = Depends(get_auth_db)
 ):
     """
-    Terminates the active session token.
+    Terminates the active session token and any user sessions.
     """
     if authorization and authorization.startswith("Bearer "):
         token = authorization.split(" ")[1].strip()
         session = db.query(AuthSession).filter(AuthSession.session_token == token).first()
         if session:
-            session.is_active = False
+            user_id = session.user_id
+            db.query(AuthSession).filter(
+                AuthSession.user_id == user_id,
+                AuthSession.is_active == True
+            ).update({"is_active": False})
             db.commit()
     return {"success": True, "message": "Successfully logged out."}
 
@@ -1128,3 +1192,114 @@ def validate_password_live(payload: dict):
     """
     pwd = payload.get("password", "")
     return check_password_policy(pwd)
+
+
+@auth_router.get("/notifications")
+def get_user_notifications(
+    current_user: User = Depends(get_current_user_from_token),
+    db: Session = Depends(get_auth_db)
+):
+    """Fetch notifications and feedback sent to current user."""
+    notes = db.query(AdminNotification).filter(
+        AdminNotification.user_id == current_user.id
+    ).order_by(AdminNotification.created_at.desc()).limit(50).all()
+
+    unread_count = sum(1 for n in notes if not n.is_read)
+
+    return {
+        "success": True,
+        "unread_count": unread_count,
+        "notifications": [
+            {
+                "id": n.id,
+                "title": n.title,
+                "message": n.message,
+                "notification_type": n.notification_type,
+                "admin_email": n.admin_email,
+                "is_read": n.is_read,
+                "created_at": n.created_at.isoformat() if n.created_at else None
+            }
+            for n in notes
+        ]
+    }
+
+
+@auth_router.post("/notifications/{notification_id}/read")
+def mark_notification_read(
+    notification_id: str,
+    current_user: User = Depends(get_current_user_from_token),
+    db: Session = Depends(get_auth_db)
+):
+    """Mark a notification as read."""
+    note = db.query(AdminNotification).filter(
+        AdminNotification.id == notification_id,
+        AdminNotification.user_id == current_user.id
+    ).first()
+    if not note:
+        raise HTTPException(status_code=404, detail="Notification not found.")
+    note.is_read = True
+    db.commit()
+    return {"success": True, "message": "Notification marked as read."}
+
+
+@auth_router.delete("/notifications/clear-all")
+@auth_router.post("/notifications/clear-all")
+def clear_all_notifications(
+    current_user: User = Depends(get_current_user_from_token),
+    db: Session = Depends(get_auth_db)
+):
+    """Dismisses and clears all administrative notifications for current user."""
+    db.query(AdminNotification).filter(
+        AdminNotification.user_id == current_user.id
+    ).delete()
+    db.commit()
+    return {"success": True, "message": "All notifications cleared."}
+
+
+@auth_router.delete("/notifications/{notification_id}")
+def delete_notification(
+    notification_id: str,
+    current_user: User = Depends(get_current_user_from_token),
+    db: Session = Depends(get_auth_db)
+):
+    """Dismisses/deletes an individual notification by ID."""
+    note = db.query(AdminNotification).filter(
+        AdminNotification.id == notification_id,
+        AdminNotification.user_id == current_user.id
+    ).first()
+    if not note:
+        raise HTTPException(status_code=404, detail="Notification not found.")
+    db.delete(note)
+    db.commit()
+    return {"success": True, "message": "Notification dismissed."}
+
+
+class UpdateProfileRequest(BaseModel):
+    name: Optional[str] = None
+    operating_location: Optional[str] = None
+
+@auth_router.patch("/profile")
+def update_profile(
+    payload: UpdateProfileRequest,
+    current_user: User = Depends(get_current_user_from_token),
+    db: Session = Depends(get_auth_db)
+):
+    """Allows authenticated user to update their profile name and operating location."""
+    if payload.name is not None and payload.name.strip():
+        current_user.name = payload.name.strip()
+    if payload.operating_location is not None:
+        current_user.operating_location = payload.operating_location.strip()
+    db.commit()
+    return {
+        "success": True,
+        "message": "Profile updated successfully.",
+        "user": {
+            "id": current_user.id,
+            "name": current_user.name,
+            "email": current_user.email,
+            "role": current_user.role or "editor",
+            "is_admin": is_super_admin(current_user.email),
+            "is_verified": current_user.is_verified
+        }
+    }
+

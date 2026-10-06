@@ -34,12 +34,12 @@ export default function QAPanel({
   }, [segments]);
 
   return (
-    <div className="bg-[#14151a] border border-[#262734] rounded-lg p-3.5 shadow-sm flex flex-col gap-3 sticky top-[180px]">
+    <div className="bg-[var(--kt-s1)] border border-[var(--kt-s4)] rounded-lg p-3.5 shadow-sm flex flex-col gap-3 sticky top-[180px]">
       {/* Compliance Scorecard */}
       <div>
         <div className="flex items-center justify-between mb-2">
           <div className="flex items-center gap-2">
-            <ShieldCheck className="w-4 h-4 text-[#00e5be]" />
+            <ShieldCheck className="w-4 h-4 text-[var(--kt-accent)]" />
             <h3 className="font-bold text-xs text-slate-200 uppercase tracking-wider">Karya Compliance Score</h3>
           </div>
           <span className="text-[11px] font-semibold text-slate-500">Target: ≥ 98%</span>
@@ -48,10 +48,10 @@ export default function QAPanel({
         {/* Score Progress Box */}
         <div className={`p-3 rounded-lg border transition-all ${
           isPassing
-            ? 'bg-[#181920] border-emerald-500/40'
+            ? 'bg-[var(--kt-s2)] border-emerald-500/40'
             : complianceScore >= 80
-            ? 'bg-[#181920] border-amber-500/40'
-            : 'bg-[#181920] border-rose-500/40'
+            ? 'bg-[var(--kt-s2)] border-amber-500/40'
+            : 'bg-[var(--kt-s2)] border-rose-500/40'
         }`}>
           <div className="flex items-center justify-between">
             <div>
@@ -91,7 +91,7 @@ export default function QAPanel({
 
       {/* QC Issues Summary List */}
       {issueSummary.length > 0 && (
-        <div className="bg-[#181920] p-2.5 rounded-lg border border-[#262734] space-y-2">
+        <div className="bg-[var(--kt-s2)] p-2.5 rounded-lg border border-[var(--kt-s4)] space-y-2">
           <div className="flex items-center justify-between">
             <span className="text-xs font-bold text-slate-200 flex items-center gap-1.5">
               <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
@@ -109,7 +109,7 @@ export default function QAPanel({
                     : 'bg-amber-500/10 border-amber-500/30 text-amber-300'
                 }`}
               >
-                <span className="font-mono font-bold text-[10px] bg-[#22232c] px-1.5 py-0.5 rounded border border-[#323444] text-slate-300 shrink-0">
+                <span className="font-mono font-bold text-[10px] bg-[var(--kt-s3)] px-1.5 py-0.5 rounded border border-[var(--kt-s5)] text-slate-300 shrink-0">
                   Seg #{item.segmentId}
                 </span>
                 <span className="text-[11px] font-medium leading-tight">{item.message}</span>
@@ -126,21 +126,21 @@ export default function QAPanel({
 
       {/* Acoustic Audio Specs */}
       {audioInfo && (
-        <div className="bg-[#181920] p-2.5 rounded-lg border border-[#262734]">
+        <div className="bg-[var(--kt-s2)] p-2.5 rounded-lg border border-[var(--kt-s4)]">
           <div className="flex items-center gap-1.5 text-xs font-bold text-slate-200 mb-2">
-            <Volume2 className="w-3.5 h-3.5 text-[#00e5be]" />
+            <Volume2 className="w-3.5 h-3.5 text-[var(--kt-accent)]" />
             Acoustic Analysis
           </div>
           <div className="grid grid-cols-3 gap-1.5 text-center text-xs">
-            <div className="p-1.5 rounded bg-[#22232c] border border-[#323444]">
+            <div className="p-1.5 rounded bg-[var(--kt-s3)] border border-[var(--kt-s5)]">
               <span className="text-[10px] text-slate-400 block font-medium">Duration</span>
               <span className="font-mono font-bold text-slate-200">{audioInfo.duration}s</span>
             </div>
-            <div className="p-1.5 rounded bg-[#22232c] border border-[#323444]">
+            <div className="p-1.5 rounded bg-[var(--kt-s3)] border border-[var(--kt-s5)]">
               <span className="text-[10px] text-slate-400 block font-medium">Volume</span>
               <span className="font-mono font-bold text-slate-200">{audioInfo.rms_db} dB</span>
             </div>
-            <div className="p-1.5 rounded bg-[#22232c] border border-[#323444]">
+            <div className="p-1.5 rounded bg-[var(--kt-s3)] border border-[var(--kt-s5)]">
               <span className="text-[10px] text-slate-400 block font-medium">Noise (SNR)</span>
               <span className="font-mono font-bold text-slate-200">{audioInfo.snr_db} dB</span>
             </div>
@@ -151,7 +151,7 @@ export default function QAPanel({
       {/* Export Deliverables Button */}
       <button
         onClick={onOpenExport}
-        className="w-full py-2.5 px-3 bg-[#00e5be] hover:bg-[#00c9a7] active:bg-[#00b4d8] text-black font-bold rounded shadow-[0_0_12px_rgba(0,229,190,0.25)] flex items-center justify-center gap-2 transition-transform active:scale-95 cursor-pointer text-xs"
+        className="w-full py-2.5 px-3 bg-[var(--kt-accent)] hover:bg-[var(--kt-accent-strong)] active:bg-[var(--kt-accent-2)] text-black font-bold rounded shadow-[0_0_12px_rgba(var(--kt-accent-rgb),0.25)] flex items-center justify-center gap-2 transition-transform active:scale-95 cursor-pointer text-xs"
       >
         <Download className="w-4 h-4" />
         Export Deliverables (CSV, DOCX, XLSX, SRT)

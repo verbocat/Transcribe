@@ -57,6 +57,7 @@ class TranscriptionResult(BaseModel):
     is_rejected: bool = False
     rejection_category: Optional[str] = None
     rejection_reason: Optional[str] = None
+    processing_notes: List[str] = []  # warnings about degraded detectors, shown in the UI
 
 class BatchTask(BaseModel):
     task_id: str

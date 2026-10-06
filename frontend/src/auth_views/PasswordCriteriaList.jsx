@@ -1,8 +1,10 @@
 import React from 'react';
 import { Check, Circle } from 'lucide-react';
 import { checkPasswordCriteria } from './authService';
+import { useTheme } from '../context/ThemeContext';
 
 export default function PasswordCriteriaList({ password }) {
+  const { isDark } = useTheme();
   const criteria = checkPasswordCriteria(password);
 
   const items = [
@@ -14,8 +16,8 @@ export default function PasswordCriteriaList({ password }) {
   ];
 
   return (
-    <div className="bg-[#0e0f12] border border-[#262734] rounded-lg p-2.5 my-1">
-      <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
+    <div className={`rounded-lg p-2.5 my-1 transition-colors ${isDark ? 'bg-[var(--kt-s0)] border border-[var(--kt-s4)]' : 'bg-slate-50 border border-slate-200'}`}>
+      <div className={`text-[10px] font-bold uppercase tracking-wider mb-1.5 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
         Password Requirements:
       </div>
       <ul className="grid grid-cols-2 gap-1.5 list-none p-0 m-0">
@@ -23,13 +25,15 @@ export default function PasswordCriteriaList({ password }) {
           <li
             key={item.key}
             className={`flex items-center gap-1.5 text-[10.5px] transition-colors ${
-              item.met ? 'text-[#00e5be] font-semibold' : 'text-slate-500'
+              item.met
+                ? isDark ? 'text-[var(--kt-accent)] font-semibold' : 'text-blue-700 font-semibold'
+                : isDark ? 'text-slate-500' : 'text-slate-400'
             }`}
           >
             {item.met ? (
-              <Check size={12} strokeWidth={3} className="text-[#00e5be] shrink-0" />
+              <Check size={12} strokeWidth={3} className={isDark ? "text-[var(--kt-accent)] shrink-0" : "text-blue-600 shrink-0"} />
             ) : (
-              <Circle size={8} strokeWidth={2} className="text-slate-600 shrink-0" />
+              <Circle size={8} strokeWidth={2} className={isDark ? "text-slate-600 shrink-0" : "text-slate-300 shrink-0"} />
             )}
             <span>{item.label}</span>
           </li>

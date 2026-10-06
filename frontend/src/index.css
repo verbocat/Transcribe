@@ -2,19 +2,49 @@
 
 @layer base {
   :root {
-    --studio-bg: #0e0f12;
-    --studio-panel: #14151a;
-    --studio-panel-secondary: #181920;
-    --studio-surface: #22232c;
-    --studio-surface-hover: #2a2b38;
-    --studio-border: #262734;
-    --studio-border-light: #323444;
-    --studio-cyan: #00e5be;
-    --studio-cyan-hover: #00d4af;
-    --studio-cyan-glow: rgba(0, 229, 190, 0.25);
+    /* ===== Karya theme tokens: every colour, font and shape the Appearance dashboard can change ===== */
+    --kt-s0: #0b0d12;      /* app background */
+    --kt-s1: #10131a;      /* panels */
+    --kt-s2: #171b25;      /* cards, raised surfaces */
+    --kt-s3: #1e2330;      /* hover */
+    --kt-s4: #252b3a;      /* borders */
+    --kt-s5: #323a4f;      /* strong borders */
+    --kt-text: #e8ebf2;
+    --kt-muted: #a3abbc;
+    --kt-faint: #7d8699;
+    --kt-accent: #4d8dff;
+    --kt-accent-rgb: 77, 141, 255;
+    --kt-accent-strong: #3f7bf0;
+    --kt-accent-soft: #74a5ff;
+    --kt-accent-2: #7a70ff;
+    --kt-info: #8ab4ff;
+    --kt-accent-ink: #06122f;
+    --kt-selected: #132039;
+    --kt-success: #10b981;
+    --kt-warn: #f5b84a;
+    --kt-danger: #ff6b81;
+    --kt-font-ui: 'IBM Plex Sans', 'Noto Sans Devanagari', 'Noto Sans Bengali', 'Noto Sans Tamil', 'Noto Sans Telugu', 'Noto Sans Gujarati', 'Noto Sans Kannada', system-ui, sans-serif;
+    --kt-font-script: 'Noto Sans', 'Noto Sans Devanagari', 'Noto Sans Bengali', 'Noto Sans Tamil', 'Noto Sans Telugu', 'Noto Sans Gujarati', 'Noto Sans Kannada', 'IBM Plex Sans', system-ui, sans-serif;
+    --kt-font-mono: 'IBM Plex Mono', ui-monospace, Consolas, monospace;
+    --kt-r1: 6px;
+    --kt-r2: 8px;
+    --kt-r3: 12px;
+    --kt-r4: 16px;
+    --kt-density: 1;
+    --kt-transcript-size: 15px;
+    --studio-bg: #080a12;
+    --studio-panel: #0b0e17;
+    --studio-panel-secondary: #0d101a;
+    --studio-surface: #141828;
+    --studio-surface-hover: #1c2238;
+    --studio-border: #1b2136;
+    --studio-border-light: #232942;
+    --studio-cyan: var(--kt-info);
+    --studio-cyan-hover: var(--kt-info);
+    --studio-cyan-glow: rgba(var(--kt-accent-rgb), 0.20);
     --studio-text: #f1f2f6;
-    --studio-text-secondary: #9496a8;
-    --studio-text-muted: #5c5e70;
+    --studio-text-secondary: #94a3b8;
+    --studio-text-muted: #475569;
   }
 
   html {
@@ -28,23 +58,26 @@
     min-height: 100%;
     overflow-x: hidden;
     overflow-y: visible;
-    background-color: #0e0f12;
-    color: #f1f2f6;
-    font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background-color: var(--kt-s0);
+    color: var(--kt-text);
+    font-family: var(--kt-font-ui);
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
 
   ::selection {
-    background-color: #00e5be;
-    color: #0b0c10;
+    background-color: var(--kt-accent);
+    color: var(--kt-accent-ink);
   }
 }
 
-/* Subtle, sleek professional scrollbars */
+/* ==========================================================================
+   Pro Studio Dark Scrollbars
+   ========================================================================== */
+
 * {
   scrollbar-width: thin;
-  scrollbar-color: #262734 transparent;
+  scrollbar-color: #1e2540 transparent;
 }
 
 *::-webkit-scrollbar {
@@ -57,12 +90,12 @@
 }
 
 *::-webkit-scrollbar-thumb {
-  background: #262734;
+  background: #1e2540;
   border-radius: 4px;
 }
 
 *::-webkit-scrollbar-thumb:hover {
-  background: #36384a;
+  background: #2a3358;
 }
 
 .custom-scrollbar::-webkit-scrollbar {
@@ -71,12 +104,12 @@
 }
 
 .custom-scrollbar::-webkit-scrollbar-thumb {
-  background: #282a3a;
+  background: #1e2540;
   border-radius: 4px;
 }
 
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: #00e5be;
+  background: #3b82f6;
 }
 
 .no-scrollbar::-webkit-scrollbar {
@@ -95,21 +128,21 @@ input:focus, textarea:focus, select:focus {
   outline: none;
 }
 
-/* =========================================================
-   CAPCUT / NLE STYLE WAVESURFER REGIONS & HANDLES
-   ========================================================= */
+/* ==========================================================================
+   NLE TIMELINE — WaveSurfer Regions & Handles
+   ========================================================================== */
 
 .wavesurfer-region {
-  border-radius: 4px;
-  transition: background-color 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+  border-radius: 3px;
+  transition: background-color 0.12s ease, box-shadow 0.12s ease;
   overflow: visible !important;
   cursor: grab;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08), 0 2px 6px rgba(0, 0, 0, 0.4);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06), 0 2px 6px rgba(0, 0, 0, 0.5);
 }
 
 .wavesurfer-region:hover {
   z-index: 50 !important;
-  box-shadow: inset 0 0 0 1.5px #00e5be, 0 4px 14px rgba(0, 229, 190, 0.3) !important;
+  box-shadow: inset 0 0 0 1.5px #3b82f6, 0 4px 14px rgba(59, 130, 246, 0.3) !important;
 }
 
 .wavesurfer-region:active {
@@ -121,9 +154,9 @@ input:focus, textarea:focus, select:focus {
 .wavesurfer-region [data-resize="left"],
 .wavesurfer-region [part*="handle-start"] {
   width: 5px !important;
-  background-color: #00e5be !important;
+  background-color: #3b82f6 !important;
   cursor: ew-resize !important;
-  transition: all 0.15s ease;
+  transition: all 0.12s ease;
   z-index: 30;
   border-top-left-radius: 3px;
   border-bottom-left-radius: 3px;
@@ -138,17 +171,17 @@ input:focus, textarea:focus, select:focus {
   left: -13px;
   width: 13px;
   height: 20px;
-  background: #00e5be;
-  color: #0b0c10;
+  background: #3b82f6;
+  color: #ffffff;
   font-size: 8px;
   font-weight: 900;
   display: flex;
   align-items: center;
   justify-content: center;
   border-radius: 3px 0 0 3px;
-  box-shadow: -2px 2px 5px rgba(0, 0, 0, 0.4);
-  opacity: 0.95;
-  transition: all 0.15s ease;
+  box-shadow: -2px 2px 5px rgba(0, 0, 0, 0.5);
+  opacity: 0.9;
+  transition: all 0.12s ease;
   cursor: ew-resize;
 }
 
@@ -156,9 +189,9 @@ input:focus, textarea:focus, select:focus {
 .wavesurfer-region [data-resize="left"]:hover::before,
 .wavesurfer-region [part*="handle-start"]:hover::before {
   opacity: 1;
-  background: #00f0ca;
-  transform: scale(1.15);
-  box-shadow: -3px 3px 8px rgba(0, 229, 190, 0.5);
+  background: #60a5fa;
+  transform: scale(1.12);
+  box-shadow: -3px 3px 8px rgba(59, 130, 246, 0.5);
 }
 
 /* Right End Handle */
@@ -168,7 +201,7 @@ input:focus, textarea:focus, select:focus {
   width: 5px !important;
   background-color: #f59e0b !important;
   cursor: ew-resize !important;
-  transition: all 0.15s ease;
+  transition: all 0.12s ease;
   z-index: 30;
   border-top-right-radius: 3px;
   border-bottom-right-radius: 3px;
@@ -191,9 +224,9 @@ input:focus, textarea:focus, select:focus {
   align-items: center;
   justify-content: center;
   border-radius: 0 3px 3px 0;
-  box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.4);
-  opacity: 0.95;
-  transition: all 0.15s ease;
+  box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.5);
+  opacity: 0.9;
+  transition: all 0.12s ease;
   cursor: ew-resize;
 }
 
@@ -202,7 +235,7 @@ input:focus, textarea:focus, select:focus {
 .wavesurfer-region [part*="handle-end"]:hover::before {
   opacity: 1;
   background: #fbbf24;
-  transform: scale(1.15);
+  transform: scale(1.12);
   box-shadow: 3px 3px 8px rgba(245, 158, 11, 0.5);
 }
 
@@ -212,11 +245,11 @@ input:focus, textarea:focus, select:focus {
   font-weight: 700;
   color: #f1f2f6;
   padding: 2px 7px;
-  background: rgba(14, 15, 18, 0.92);
+  background: rgba(8, 10, 18, 0.92);
   backdrop-filter: blur(6px);
-  border-radius: 4px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+  border-radius: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
   position: absolute;
   top: 4px;
   left: 8px;
@@ -228,15 +261,15 @@ input:focus, textarea:focus, select:focus {
   line-height: 1.2;
 }
 
-/* Timeline Ruler Styling */
+/* Timeline Ruler */
 .wavesurfer-timeline {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
   font-size: 9px !important;
-  color: #7a7c8e !important;
+  color: #475569 !important;
 }
 
 /* ==========================================================================
-   macOS Squish-and-Pop Modal Animation (Smooth Bottom Genie Squish)
+   macOS Squish-and-Pop Modal Animation
    ========================================================================== */
 @keyframes macSquishPop {
   0% {
@@ -261,12 +294,8 @@ input:focus, textarea:focus, select:focus {
 }
 
 @keyframes macBackdropExit {
-  0% {
-    opacity: 1;
-  }
-  100% {
-    opacity: 0;
-  }
+  0% { opacity: 1; }
+  100% { opacity: 0; }
 }
 
 .animate-mac-squish {
@@ -283,70 +312,13 @@ input:focus, textarea:focus, select:focus {
   animation: macBackdropExit 0.24s ease-out forwards;
 }
 
-/* Dynamic Interactive Spotlight Card */
-.spotlight-card {
-  position: relative;
-  overflow: hidden;
-  transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.28s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.28s ease;
-}
-
-.spotlight-card::before {
-  content: '';
-  position: absolute;
-  inset: -1px;
-  background: radial-gradient(
-    550px circle at var(--mouse-x, -500px) var(--mouse-y, -500px),
-    rgba(0, 229, 190, 0.16),
-    transparent 50%
-  );
-  border-radius: inherit;
-  pointer-events: none;
-  z-index: 1;
-  opacity: 0;
-  transition: opacity 0.35s ease;
-}
-
-.spotlight-card:hover::before {
-  opacity: 1;
-}
-
-.spotlight-card::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: radial-gradient(
-    400px circle at var(--mouse-x, -500px) var(--mouse-y, -500px),
-    rgba(0, 201, 255, 0.08),
-    transparent 45%
-  );
-  border-radius: inherit;
-  pointer-events: none;
-  z-index: 2;
-  opacity: 0;
-  transition: opacity 0.35s ease;
-}
-
-.spotlight-card:hover::after {
-  opacity: 1;
-}
-
-/* Subtle 3D Tilt Hover */
-.tilt-card {
-  transform-style: preserve-3d;
-  will-change: transform;
-}
-
-.tilt-card:hover {
-  transform: translateY(-4px) scale(1.012);
-}
-
 /* ==========================================================================
    Studio Entrance & Tab Slide Navigation Animations
    ========================================================================== */
 @keyframes studioEntrance {
   0% {
     opacity: 0;
-    transform: translateY(22px) scale(0.985);
+    transform: translateY(18px) scale(0.988);
   }
   100% {
     opacity: 1;
@@ -355,13 +327,13 @@ input:focus, textarea:focus, select:focus {
 }
 
 .animate-studio-entrance {
-  animation: studioEntrance 0.38s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  animation: studioEntrance 0.32s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
 @keyframes tabSlideFade {
   0% {
     opacity: 0;
-    transform: translateY(10px);
+    transform: translateY(8px);
   }
   100% {
     opacity: 1;
@@ -370,7 +342,43 @@ input:focus, textarea:focus, select:focus {
 }
 
 .animate-tab-slide {
-  animation: tabSlideFade 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  animation: tabSlideFade 0.22s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* ==========================================================================
+   Spotlight Card (hover glow)
+   ========================================================================== */
+
+.spotlight-card {
+  position: relative;
+  overflow: hidden;
+}
+
+.spotlight-card::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  background: radial-gradient(
+    500px circle at var(--mouse-x, -500px) var(--mouse-y, -500px),
+    rgba(59, 130, 246, 0.12),
+    transparent 50%
+  );
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: 1;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.spotlight-card:hover::before {
+  opacity: 1;
 }
 
 
+/* Appearance dashboard: "reduce motion" */
+html.kt-reduce-motion *, html.kt-reduce-motion *::before, html.kt-reduce-motion *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  scroll-behavior: auto !important;
+}

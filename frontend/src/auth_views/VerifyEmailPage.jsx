@@ -34,10 +34,10 @@ export default function VerifyEmailPage({ token: propToken, onVerified }) {
   }, [propToken]);
 
   return (
-    <div className="w-full max-w-[440px] bg-[#14151a] border border-[#262734] rounded-2xl p-6 sm:p-7 shadow-[0_25px_60px_-15px_rgba(0,0,0,0.9),0_0_25px_rgba(0,229,190,0.06)] relative z-10 text-center animate-mac-squish">
+    <div className="w-full max-w-[440px] bg-[var(--kt-s1)] border border-[var(--kt-s4)] rounded-2xl p-6 sm:p-7 shadow-[0_25px_60px_-15px_rgba(0,0,0,0.9),0_0_25px_rgba(var(--kt-accent-rgb),0.06)] relative z-10 text-center animate-mac-squish">
       {status === 'verifying' && (
         <>
-          <div className="w-14 h-14 rounded-2xl bg-[#00e5be]/10 border border-[#00e5be]/30 text-[#00e5be] flex items-center justify-center mx-auto mb-4 shadow-[0_0_15px_rgba(0,229,190,0.2)]">
+          <div className="w-14 h-14 rounded-2xl bg-[var(--kt-accent)]/10 border border-[var(--kt-accent)]/30 text-[var(--kt-accent)] flex items-center justify-center mx-auto mb-4 shadow-[0_0_15px_rgba(var(--kt-accent-rgb),0.2)]">
             <Loader2 size={28} className="animate-spin" />
           </div>
           <h2 className="text-xl font-extrabold text-white tracking-tight">Verifying Account</h2>
@@ -47,7 +47,7 @@ export default function VerifyEmailPage({ token: propToken, onVerified }) {
 
       {status === 'success' && (
         <>
-          <div className="w-14 h-14 rounded-2xl bg-emerald-500/15 border border-emerald-500/40 text-emerald-400 flex items-center justify-center mx-auto mb-4 shadow-[0_0_20px_rgba(16,185,129,0.3)]">
+          <div className="w-14 h-14 rounded-2xl bg-emerald-500/15 border border-emerald-500/40 text-emerald-400 flex items-center justify-center mx-auto mb-4 shadow-[0_0_20px_rgba(var(--kt-accent-rgb),0.3)]">
             <CheckCircle2 size={32} />
           </div>
           <h2 className="text-xl font-extrabold text-white tracking-tight">Email Verified!</h2>
@@ -55,7 +55,7 @@ export default function VerifyEmailPage({ token: propToken, onVerified }) {
           <button
             type="button"
             onClick={onVerified}
-            className="w-full py-2.5 px-4 rounded-xl text-xs font-bold bg-[#00e5be] hover:bg-[#00d4af] text-black transition-all shadow-[0_0_20px_rgba(0,229,190,0.3)] cursor-pointer flex items-center justify-center gap-2"
+            className="w-full py-2.5 px-4 rounded-xl text-xs font-bold bg-[var(--kt-accent)] hover:bg-[var(--kt-accent)] text-black transition-all shadow-[0_0_20px_rgba(var(--kt-accent-rgb),0.3)] cursor-pointer flex items-center justify-center gap-2"
           >
             <span>Sign In to Studio</span>
             <ArrowRight size={15} />
@@ -73,7 +73,7 @@ export default function VerifyEmailPage({ token: propToken, onVerified }) {
           <button
             type="button"
             onClick={onVerified}
-            className="w-full py-2.5 px-4 rounded-xl text-xs font-bold bg-[#1e202a] hover:bg-[#272a38] text-white border border-[#2f3142] transition-colors cursor-pointer flex items-center justify-center gap-2"
+            className="w-full py-2.5 px-4 rounded-xl text-xs font-bold bg-[var(--kt-s3)] hover:bg-[var(--kt-s4)] text-white border border-[var(--kt-s5)] transition-colors cursor-pointer flex items-center justify-center gap-2"
           >
             <span>Back to Sign In</span>
             <ArrowRight size={15} />

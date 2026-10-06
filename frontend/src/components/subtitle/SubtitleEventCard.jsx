@@ -2,7 +2,8 @@ import React, { useState, useRef, useMemo, useEffect } from 'react';
 import {
   Play, Trash2, Scissors, Merge,
   Italic, Clock, Sparkles, CornerDownLeft,
-  Minus, Plus, ChevronUp, ChevronDown, AlertTriangle
+  Minus, Plus, ChevronUp, ChevronDown, AlertTriangle,
+  User, Edit2, Check, X
 } from 'lucide-react';
 
 /**
@@ -17,6 +18,35 @@ function formatTime(secs) {
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(ms).padStart(3, '0')}`;
 }
 
+export function getSpeakerBadgeClasses(speaker = '') {
+  const s = String(speaker).toLowerCase();
+  if (s.includes('1') || s.includes('first')) {
+    return 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/25';
+  }
+  if (s.includes('2') || s.includes('second')) {
+    return 'bg-purple-500/15 text-purple-400 border-purple-500/30 hover:bg-purple-500/25';
+  }
+  if (s.includes('3') || s.includes('third')) {
+    return 'bg-amber-500/15 text-amber-400 border-amber-500/30 hover:bg-amber-500/25';
+  }
+  if (s.includes('4') || s.includes('fourth')) {
+    return 'bg-rose-500/15 text-rose-400 border-rose-500/30 hover:bg-rose-500/25';
+  }
+  if (s.includes('dual')) {
+    return 'bg-indigo-500/15 text-indigo-400 border-indigo-500/30 hover:bg-indigo-500/25';
+  }
+  return 'bg-blue-500/15 text-blue-400 border-blue-500/30 hover:bg-blue-500/25';
+}
+
+export function getSpeakerDotClasses(speaker = '') {
+  const s = String(speaker).toLowerCase();
+  if (s.includes('1')) return 'bg-emerald-400';
+  if (s.includes('2')) return 'bg-purple-400';
+  if (s.includes('3')) return 'bg-amber-400';
+  if (s.includes('4')) return 'bg-rose-400';
+  return 'bg-blue-400';
+}
+
 function SubtitleEventCard({
   event,
   isActive = false,
@@ -29,6 +59,8 @@ function SubtitleEventCard({
   onRebreak = () => {},
   onNavigatePrev = () => {},
   onNavigateNext = () => {},
+  onRenameSpeaker = null,
+  availableSpeakers = [],
   cplLimit = 42,
   cpsLimit = 20,
   frameRate = 24.0,
@@ -36,7 +68,7 @@ function SubtitleEventCard({
   onSeek = null,
   theme = 'dark'
 }) {
-  const isDark = theme === 'dark';
+  const isDark = true;
   const [localText, setLocalText] = useState(event.text || '');
   const textareaRef = useRef(null);
   const cardRef = useRef(null);
@@ -44,12 +76,71 @@ function SubtitleEventCard({
   const isFocusedRef = useRef(false);
   const nudgeStep = 1 / frameRate; // 1 frame (~0.042s)
 
-  // Auto-scroll active card into view
+  // Speaker Tag State
+  const [isSpeakerMenuOpen, setIsSpeakerMenuOpen] = useState(false);
+  const [isRenaming, setIsRenaming] = useState(false);
+  const [newSpeakerName, setNewSpeakerName] = useState('');
+  const [renameAllEvents, setRenameAllEvents] = useState(true);
+
+  const currentSpeaker = event.speaker || (event.speakers && event.speakers[0]) || 'Speaker 1';
+
+  const speakerOptions = useMemo(() => {
+    const list = ['Speaker 1', 'Speaker 2', 'Speaker 3', 'Speaker 4'];
+    (availableSpeakers || []).forEach(s => {
+      if (s && !list.includes(s)) list.push(s);
+    });
+    if (event.speaker && !list.includes(event.speaker)) {
+      list.push(event.speaker);
+    }
+    return list;
+  }, [availableSpeakers, event.speaker]);
+
+  const handleSelectSpeaker = (spk) => {
+    onUpdate(event.id, 'speaker', spk);
+    onUpdate(event.id, 'speakers', [spk]);
+  };
+
+  const handleSaveRename = () => {
+    const clean = (newSpeakerName || '').trim();
+    if (!clean) {
+      setIsRenaming(false);
+      return;
+    }
+    if (onRenameSpeaker) {
+      onRenameSpeaker(event.id, currentSpeaker, clean, renameAllEvents);
+    } else {
+      handleSelectSpeaker(clean);
+    }
+    setIsRenaming(false);
+    setIsSpeakerMenuOpen(false);
+  };
+
+  useEffect(() => {
+    if (!isSpeakerMenuOpen) return;
+    const handleOutsideClick = () => {
+      setIsSpeakerMenuOpen(false);
+      setIsRenaming(false);
+    };
+    window.addEventListener('click', handleOutsideClick);
+    return () => window.removeEventListener('click', handleOutsideClick);
+  }, [isSpeakerMenuOpen]);
+
+  // Auto-scroll active card into view and auto-highlight textarea if newly created
   useEffect(() => {
     if (isActive && cardRef.current) {
       cardRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
-  }, [isActive]);
+    if (isActive && event.autoFocusText && textareaRef.current) {
+      const timer = setTimeout(() => {
+        if (textareaRef.current) {
+          textareaRef.current.focus();
+          textareaRef.current.select();
+          try { event.autoFocusText = false; } catch (_) {}
+        }
+      }, 50);
+      return () => clearTimeout(timer);
+    }
+  }, [isActive, event.autoFocusText]);
 
   // Sync localText with incoming event updates when not actively typing
   useEffect(() => {
@@ -216,13 +307,13 @@ function SubtitleEventCard({
       title="Double click to seek playhead to this subtitle"
       className={`group relative rounded-xl border transition-all duration-150 p-2.5 flex flex-col gap-2 cursor-pointer ${
         isActive 
-          ? 'bg-[#181920] border-[#00e5be] shadow-[0_0_15px_rgba(0,229,190,0.15)] ring-1 ring-[#00e5be]/50' 
-          : 'bg-[#14151a] border-[#262734] hover:border-[#383a4c] hover:bg-[#181920]'
+          ? 'bg-[var(--kt-s2)] border-[var(--kt-accent)] shadow-[0_0_15px_rgba(var(--kt-accent-rgb),0.15)] ring-1 ring-[var(--kt-accent)]/50' 
+          : 'bg-[var(--kt-s1)] border-[var(--kt-s4)] hover:border-[#383a4c] hover:bg-[var(--kt-s2)]'
       }`}
     >
       {/* Active Left Indicator Bar */}
       {isActive && (
-        <div className="absolute left-0 top-3 bottom-3 w-1 bg-[#00e5be] rounded-r" />
+        <div className="absolute left-0 top-3 bottom-3 w-1 bg-[var(--kt-accent)] rounded-r" />
       )}
 
       {/* Top Header Row: ID, Timecode Controls, Duration, QC Badges */}
@@ -233,7 +324,7 @@ function SubtitleEventCard({
           {/* Badge ID & Jumpers */}
           <div className="flex items-center gap-0.5">
             <span className={`px-2 py-0.5 rounded font-mono text-[11px] font-black ${
-              isActive ? 'bg-[#00e5be] text-black shadow-xs' : 'bg-[#181920] border border-[#262734] text-slate-300'
+              isActive ? 'bg-[var(--kt-accent)] text-black shadow-xs' : 'bg-[var(--kt-s2)] border border-[var(--kt-s4)] text-slate-300'
             }`}>
               #{event.id}
             </span>
@@ -245,7 +336,7 @@ function SubtitleEventCard({
                     e.stopPropagation();
                     onNavigatePrev();
                   }}
-                  className="p-0.5 rounded border border-[#262734] bg-[#0e0f12] text-slate-400 hover:text-white hover:border-[#00e5be] cursor-pointer transition-colors"
+                  className="p-0.5 rounded border border-[var(--kt-s4)] bg-[var(--kt-s0)] text-slate-400 hover:text-white hover:border-[var(--kt-accent)] cursor-pointer transition-colors"
                   title="Previous Subtitle (Up Arrow)"
                 >
                   <ChevronUp size={11} />
@@ -256,11 +347,120 @@ function SubtitleEventCard({
                     e.stopPropagation();
                     onNavigateNext();
                   }}
-                  className="p-0.5 rounded border border-[#262734] bg-[#0e0f12] text-slate-400 hover:text-white hover:border-[#00e5be] cursor-pointer transition-colors"
+                  className="p-0.5 rounded border border-[var(--kt-s4)] bg-[var(--kt-s0)] text-slate-400 hover:text-white hover:border-[var(--kt-accent)] cursor-pointer transition-colors"
                   title="Next Subtitle (Down Arrow)"
                 >
                   <ChevronDown size={11} />
                 </button>
+              </div>
+            )}
+          </div>
+
+          {/* Speaker Badge with Quick Switch & Rename */}
+          <div className="relative">
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setIsSpeakerMenuOpen(!isSpeakerMenuOpen);
+              }}
+              className={`px-2 py-0.5 rounded font-medium text-[10.5px] border flex items-center gap-1 transition-all cursor-pointer ${getSpeakerBadgeClasses(currentSpeaker)}`}
+              title="Click to change or rename speaker"
+            >
+              <User size={10} />
+              <span className="font-bold">{currentSpeaker}</span>
+            </button>
+
+            {isSpeakerMenuOpen && (
+              <div 
+                onClick={(e) => e.stopPropagation()}
+                className="absolute left-0 top-full mt-1 z-40 p-2 rounded-xl border shadow-2xl bg-[var(--kt-s1)] border-[var(--kt-s4)] text-slate-200 min-w-[190px] text-xs space-y-1.5 animate-in fade-in zoom-in-95 duration-100"
+              >
+                <div className="font-bold text-[10px] text-slate-400 uppercase tracking-wider px-1">
+                  Assign Speaker
+                </div>
+                <div className="flex flex-col gap-0.5 max-h-40 overflow-y-auto">
+                  {speakerOptions.map((spk) => (
+                    <button
+                      key={spk}
+                      type="button"
+                      onClick={() => {
+                        handleSelectSpeaker(spk);
+                        setIsSpeakerMenuOpen(false);
+                      }}
+                      className={`px-2 py-1 rounded-lg text-left text-xs font-medium flex items-center justify-between cursor-pointer transition-colors ${
+                        spk === currentSpeaker 
+                          ? 'bg-[var(--kt-accent)]/20 text-[var(--kt-accent)] font-bold' 
+                          : 'hover:bg-[var(--kt-s3)] text-slate-300'
+                      }`}
+                    >
+                      <span className="flex items-center gap-1.5">
+                        <span className={`w-2 h-2 rounded-full ${getSpeakerDotClasses(spk)}`} />
+                        {spk}
+                      </span>
+                      {spk === currentSpeaker && <Check size={12} />}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="border-t border-[var(--kt-s4)] pt-1.5 mt-1">
+                  {!isRenaming ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setNewSpeakerName(currentSpeaker);
+                        setIsRenaming(true);
+                      }}
+                      className="w-full px-2 py-1 rounded-lg text-left text-[11px] text-slate-400 hover:text-white hover:bg-[var(--kt-s3)] flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <Edit2 size={11} />
+                      <span>Rename "{currentSpeaker}"...</span>
+                    </button>
+                  ) : (
+                    <div className="space-y-1.5 p-1">
+                      <input
+                        type="text"
+                        value={newSpeakerName}
+                        onChange={(e) => setNewSpeakerName(e.target.value)}
+                        placeholder="Enter speaker name"
+                        className="w-full px-2 py-1 rounded bg-[var(--kt-s0)] border border-[var(--kt-s4)] text-xs text-white focus:outline-none focus:border-[var(--kt-accent)]"
+                        autoFocus
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') handleSaveRename();
+                          if (e.key === 'Escape') setIsRenaming(false);
+                        }}
+                      />
+                      <div className="flex items-center gap-1.5 text-[10px] text-slate-400">
+                        <input
+                          type="checkbox"
+                          id={`rename-all-${event.id}`}
+                          checked={renameAllEvents}
+                          onChange={(e) => setRenameAllEvents(e.target.checked)}
+                          className="rounded accent-[var(--kt-accent)] w-3 h-3 cursor-pointer"
+                        />
+                        <label htmlFor={`rename-all-${event.id}`} className="cursor-pointer select-none">
+                          Apply to all #{currentSpeaker}
+                        </label>
+                      </div>
+                      <div className="flex items-center gap-1 justify-end pt-1">
+                        <button
+                          type="button"
+                          onClick={() => setIsRenaming(false)}
+                          className="px-2 py-0.5 rounded text-[10px] text-slate-400 hover:text-white cursor-pointer"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleSaveRename}
+                          className="px-2 py-0.5 rounded text-[10px] bg-[var(--kt-accent)] text-black font-bold hover:bg-[var(--kt-accent-strong)] cursor-pointer"
+                        >
+                          Save
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
           </div>
@@ -272,14 +472,14 @@ function SubtitleEventCard({
               e.stopPropagation();
               onPlay(event.id);
             }}
-            className="p-1 rounded bg-[#181920] border border-[#262734] hover:bg-[#00e5be] hover:text-black text-slate-400 transition-colors cursor-pointer"
+            className="p-1 rounded bg-[var(--kt-s2)] border border-[var(--kt-s4)] hover:bg-[var(--kt-accent)] hover:text-black text-slate-400 transition-colors cursor-pointer"
             title="Preview subtitle in player"
           >
             <Play className="w-3 h-3 fill-current" />
           </button>
 
           {/* Start Timecode with Frame Nudge */}
-          <div className="flex items-center bg-[#0e0f12] border border-[#262734] rounded px-1 py-0.5 text-[10px] font-mono text-[#00e5be]">
+          <div className="flex items-center bg-[var(--kt-s0)] border border-[var(--kt-s4)] rounded px-1 py-0.5 text-[10px] font-mono text-[var(--kt-accent)]">
             <button
               type="button"
               onClick={(e) => { e.stopPropagation(); handleTimeNudge('start_time', -nudgeStep); }}
@@ -302,7 +502,7 @@ function SubtitleEventCard({
           <span className="text-slate-500 text-[10px]">→</span>
 
           {/* End Timecode with Frame Nudge */}
-          <div className="flex items-center bg-[#0e0f12] border border-[#262734] rounded px-1 py-0.5 text-[10px] font-mono text-[#00e5be]">
+          <div className="flex items-center bg-[var(--kt-s0)] border border-[var(--kt-s4)] rounded px-1 py-0.5 text-[10px] font-mono text-[var(--kt-accent)]">
             <button
               type="button"
               onClick={(e) => { e.stopPropagation(); handleTimeNudge('end_time', -nudgeStep); }}
@@ -326,7 +526,7 @@ function SubtitleEventCard({
           <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded border ${
             isShortDuration || isLongDuration 
               ? 'bg-rose-950/60 border-rose-800 text-rose-300' 
-              : 'bg-[#0e0f12] border-[#262734] text-slate-300'
+              : 'bg-[var(--kt-s0)] border-[var(--kt-s4)] text-slate-300'
           }`} title={isShortDuration ? "Duration below 0.833s" : isLongDuration ? "Duration exceeds 7.0s" : "Duration"}>
             {duration.toFixed(2)}s
           </span>
@@ -338,7 +538,7 @@ function SubtitleEventCard({
           <span className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded border ${
             isOverCpl 
               ? 'bg-rose-950/80 border-rose-700 text-rose-300 animate-pulse' 
-              : 'bg-[#0e0f12] border-[#262734] text-slate-400'
+              : 'bg-[var(--kt-s0)] border-[var(--kt-s4)] text-slate-400'
           }`} title={`Max Characters Per Line: ${metrics.maxCpl}/${cplLimit}`}>
             {metrics.maxCpl} CPL
           </span>
@@ -349,13 +549,13 @@ function SubtitleEventCard({
               ? 'bg-rose-950/80 border-rose-700 text-rose-300' 
               : metrics.cps > cpsLimit - 2.5 
               ? 'bg-amber-950/80 border-amber-700 text-amber-300' 
-              : 'bg-[#0e0f12] border-[#262734] text-[#00e5be]'
+              : 'bg-[var(--kt-s0)] border-[var(--kt-s4)] text-[var(--kt-accent)]'
           }`} title={`Reading Speed: ${metrics.cps} Characters Per Second (Limit: ${cpsLimit})`}>
             {metrics.cps} CPS
           </span>
 
           {/* Action Buttons Toolbar */}
-          <div className="flex items-center gap-0.5 pl-1 border-l border-[#262734]">
+          <div className="flex items-center gap-0.5 pl-1 border-l border-[var(--kt-s4)]">
             {/* Auto Rebreak Lines */}
             <button
               type="button"
@@ -363,7 +563,7 @@ function SubtitleEventCard({
                 e.stopPropagation();
                 onRebreak(event.id);
               }}
-              className="p-1 rounded text-slate-400 hover:text-[#00e5be] hover:bg-[#181920] transition-colors cursor-pointer"
+              className="p-1 rounded text-slate-400 hover:text-[var(--kt-accent)] hover:bg-[var(--kt-s2)] transition-colors cursor-pointer"
               title="Auto-balance lines (Netflix syntax rules)"
             >
               <CornerDownLeft className="w-3 h-3" />
@@ -376,7 +576,7 @@ function SubtitleEventCard({
                 e.stopPropagation();
                 onSplit(event.id);
               }}
-              className="p-1 rounded text-slate-400 hover:text-amber-400 hover:bg-[#181920] transition-colors cursor-pointer"
+              className="p-1 rounded text-slate-400 hover:text-amber-400 hover:bg-[var(--kt-s2)] transition-colors cursor-pointer"
               title="Split subtitle into two events"
             >
               <Scissors className="w-3 h-3" />
@@ -390,7 +590,7 @@ function SubtitleEventCard({
                   e.stopPropagation();
                   onMerge(event.id);
                 }}
-                className="p-1 rounded text-slate-400 hover:text-cyan-400 hover:bg-[#181920] transition-colors cursor-pointer"
+                className="p-1 rounded text-slate-400 hover:text-blue-400 hover:bg-[var(--kt-s2)] transition-colors cursor-pointer"
                 title="Merge with next subtitle"
               >
                 <Merge className="w-3 h-3" />
@@ -404,8 +604,8 @@ function SubtitleEventCard({
                 e.stopPropagation();
                 toggleItalics();
               }}
-              className={`p-1 rounded text-slate-400 hover:text-white hover:bg-[#181920] transition-colors cursor-pointer ${
-                localText.includes('<i>') ? 'text-[#00e5be] bg-[#00e5be]/10' : ''
+              className={`p-1 rounded text-slate-400 hover:text-white hover:bg-[var(--kt-s2)] transition-colors cursor-pointer ${
+                localText.includes('<i>') ? 'text-[var(--kt-accent)] bg-[var(--kt-accent)]/10' : ''
               }`}
               title="Toggle italics (<i>...</i>)"
             >
@@ -439,10 +639,10 @@ function SubtitleEventCard({
           onKeyDown={handleTextareaKeyDown}
           placeholder="Enter dialogue text (Ctrl+I for italics)..."
           rows={Math.max(2, metrics.lineCount)}
-          className={`w-full bg-[#0e0f12] border rounded-lg px-2.5 py-1.5 text-[13px] font-sans leading-relaxed resize-none focus:outline-none transition-all ${
+          className={`w-full bg-[var(--kt-s0)] border rounded-lg px-2.5 py-1.5 text-[13px] font-sans leading-relaxed resize-none focus:outline-none transition-all ${
             isActive 
-              ? 'border-[#00e5be]/60 text-white focus:border-[#00e5be] focus:ring-1 focus:ring-[#00e5be]/30' 
-              : 'border-[#262734] text-slate-200 hover:border-[#383a4c]'
+              ? 'border-[var(--kt-accent)]/60 text-white focus:border-[var(--kt-accent)] focus:ring-1 focus:ring-[var(--kt-accent)]/30' 
+              : 'border-[var(--kt-s4)] text-slate-200 hover:border-[#383a4c]'
           }`}
         />
         

@@ -71,13 +71,13 @@ export default function ProjectsModal({
         if (e.target === e.currentTarget) handleDismiss();
       }}
     >
-      <div className={`bg-[#14151a] rounded-2xl max-w-2xl w-full max-h-[85vh] shadow-2xl border border-[#262734] overflow-hidden flex flex-col text-slate-200 ${
+      <div className={`bg-[var(--kt-s1)] rounded-2xl max-w-2xl w-full max-h-[85vh] shadow-2xl border border-[var(--kt-s4)] overflow-hidden flex flex-col text-slate-200 ${
         isClosing ? 'animate-mac-squish-exit' : 'animate-mac-squish'
       }`}>
         {/* Modal Header */}
-        <div className="flex items-center justify-between p-5 border-b border-[#262734] bg-[#14151a]">
+        <div className="flex items-center justify-between p-5 border-b border-[var(--kt-s4)] bg-[var(--kt-s1)]">
           <div className="flex items-center gap-2.5">
-            <div className="p-2 rounded-xl bg-[#00e5be]/15 text-[#00e5be] border border-[#00e5be]/30">
+            <div className="p-2 rounded-xl bg-[var(--kt-accent)]/15 text-[var(--kt-accent)] border border-[var(--kt-accent)]/30">
               <Database className="w-5 h-5" />
             </div>
             <div>
@@ -89,14 +89,14 @@ export default function ProjectsModal({
           <div className="flex items-center gap-2">
             <button
               onClick={onRefresh}
-              className="p-2 text-slate-400 hover:text-white hover:bg-[#22232c] rounded-xl transition-colors cursor-pointer"
+              className="p-2 text-slate-400 hover:text-white hover:bg-[var(--kt-s3)] rounded-xl transition-colors cursor-pointer"
               title="Refresh projects list"
             >
               <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
             </button>
             <button
               onClick={onClose}
-              className="p-2 text-slate-400 hover:text-white hover:bg-[#22232c] rounded-xl transition-colors cursor-pointer"
+              className="p-2 text-slate-400 hover:text-white hover:bg-[var(--kt-s3)] rounded-xl transition-colors cursor-pointer"
             >
               <X className="w-5 h-5" />
             </button>
@@ -104,7 +104,7 @@ export default function ProjectsModal({
         </div>
 
         {/* Search Bar */}
-        <div className="p-4 border-b border-[#262734] bg-[#14151a]">
+        <div className="p-4 border-b border-[var(--kt-s4)] bg-[var(--kt-s1)]">
           <div className="relative">
             <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
             <input
@@ -112,7 +112,7 @@ export default function ProjectsModal({
               placeholder="Search by filename, language, or script..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-9 pr-4 py-2 bg-[#0e0f12] border border-[#262734] rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:border-[#00e5be] transition-all"
+              className="w-full pl-9 pr-4 py-2 bg-[var(--kt-s0)] border border-[var(--kt-s4)] rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:border-[var(--kt-accent)] transition-all"
             />
           </div>
         </div>
@@ -121,12 +121,12 @@ export default function ProjectsModal({
         <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar">
           {isLoading ? (
             <div className="text-center py-16 text-slate-400">
-              <RefreshCw className="w-6 h-6 animate-spin mx-auto mb-2 text-[#00e5be]" />
+              <RefreshCw className="w-6 h-6 animate-spin mx-auto mb-2 text-[var(--kt-accent)]" />
               <p className="text-xs font-semibold text-slate-300">Loading projects from Neon DB...</p>
             </div>
           ) : filtered.length === 0 ? (
-            <div className="text-center py-14 px-6 bg-[#181920] border border-dashed border-[#262734] rounded-2xl">
-              <div className="w-12 h-12 rounded-2xl bg-[#00e5be]/15 text-[#00e5be] border border-[#00e5be]/30 flex items-center justify-center mx-auto mb-3">
+            <div className="text-center py-14 px-6 bg-[var(--kt-s2)] border border-dashed border-[var(--kt-s4)] rounded-2xl">
+              <div className="w-12 h-12 rounded-2xl bg-[var(--kt-accent)]/15 text-[var(--kt-accent)] border border-[var(--kt-accent)]/30 flex items-center justify-center mx-auto mb-3">
                 <Database className="w-6 h-6" />
               </div>
               <p className="text-sm font-bold text-white">No saved projects in Neon DB</p>
@@ -135,7 +135,7 @@ export default function ProjectsModal({
               </p>
               <button
                 onClick={onClose}
-                className="mt-4 px-4 py-2 bg-[#00e5be] hover:bg-[#00c9a7] text-black rounded-xl text-xs font-bold transition-all shadow-[0_0_12px_rgba(0,229,190,0.25)] cursor-pointer"
+                className="mt-4 px-4 py-2 bg-[var(--kt-accent)] hover:bg-[var(--kt-accent-strong)] text-black rounded-xl text-xs font-bold transition-all shadow-[0_0_12px_rgba(var(--kt-accent-rgb),0.25)] cursor-pointer"
               >
                 Upload New Audio
               </button>
@@ -144,16 +144,16 @@ export default function ProjectsModal({
             filtered.map((proj) => (
               <div
                 key={proj.id}
-                className="group p-4 bg-[#181920] hover:bg-[#22232c] border border-[#262734] hover:border-[#00e5be] rounded-xl transition-all shadow-xs flex flex-wrap items-center justify-between gap-3"
+                className="group p-4 bg-[var(--kt-s2)] hover:bg-[var(--kt-s3)] border border-[var(--kt-s4)] hover:border-[var(--kt-accent)] rounded-xl transition-all shadow-xs flex flex-wrap items-center justify-between gap-3"
               >
                 <div className="flex items-start gap-3">
-                  <div className="p-2.5 bg-[#14151a] text-[#00e5be] border border-[#262734] rounded-xl mt-0.5">
+                  <div className="p-2.5 bg-[var(--kt-s1)] text-[var(--kt-accent)] border border-[var(--kt-s4)] rounded-xl mt-0.5">
                     <FileAudio className="w-4 h-4" />
                   </div>
                   <div>
                     <h3 className="text-xs font-bold text-white line-clamp-1">{proj.filename}</h3>
                     <div className="flex flex-wrap items-center gap-2 mt-1 text-[11px] text-slate-400">
-                      <span className="font-semibold text-[#00e5be] bg-[#0e0f12] border border-[#262734] px-2 py-0.5 rounded-md">
+                      <span className="font-semibold text-[var(--kt-accent)] bg-[var(--kt-s0)] border border-[var(--kt-s4)] px-2 py-0.5 rounded-md">
                         {proj.language} ({proj.script})
                       </span>
                       <span>•</span>
@@ -172,7 +172,7 @@ export default function ProjectsModal({
                 <div className="flex items-center gap-2">
                   <span className={`text-[11px] font-bold px-2 py-0.5 rounded-lg border ${
                     proj.compliance_score >= 95
-                      ? 'bg-[#00e5be]/15 text-[#00e5be] border-[#00e5be]/30'
+                      ? 'bg-[var(--kt-accent)]/15 text-[var(--kt-accent)] border-[var(--kt-accent)]/30'
                       : 'bg-amber-950/40 text-amber-300 border-amber-800'
                   }`}>
                     {proj.compliance_score.toFixed(0)}% Score
@@ -183,7 +183,7 @@ export default function ProjectsModal({
                       onLoadProject(proj.id);
                       onClose();
                     }}
-                    className="flex items-center gap-1.5 px-3 py-1.5 bg-[#00e5be] hover:bg-[#00c9a7] text-black rounded-xl text-xs font-bold shadow-[0_0_12px_rgba(0,229,190,0.25)] transition-transform active:scale-95 cursor-pointer"
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-[var(--kt-accent)] hover:bg-[var(--kt-accent-strong)] text-black rounded-xl text-xs font-bold shadow-[0_0_12px_rgba(var(--kt-accent-rgb),0.25)] transition-transform active:scale-95 cursor-pointer"
                   >
                     <span>Open</span>
                     <ArrowRight className="w-3.5 h-3.5" />

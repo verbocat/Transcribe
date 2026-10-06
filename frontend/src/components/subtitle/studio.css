@@ -1,0 +1,104 @@
+/* ==========================================================================
+   Subtitle Studio design tokens & typography (scoped to .subtitle-studio)
+   One navy-neutral surface family, one accent (brand teal), Plex for the UI,
+   Plex Mono only for timecodes, Noto script faces for subtitle text.
+   ========================================================================== */
+
+.subtitle-studio {
+  --ss-bg: var(--kt-s0);
+  --ss-panel: var(--kt-s1);
+  --ss-raised: var(--kt-s2);
+  --ss-hover: var(--kt-s3);
+  --ss-selected: var(--kt-selected);
+  --ss-line: var(--kt-s4);
+  --ss-line-soft: var(--kt-s2);
+  --ss-text: var(--kt-text);
+  --ss-muted: var(--kt-muted);
+  --ss-faint: var(--kt-faint);
+  --ss-accent: var(--kt-accent);
+  --ss-accent-hover: var(--kt-accent-soft);
+  --ss-accent-ink: var(--kt-accent-ink);
+  --ss-danger: var(--kt-danger);
+  --ss-warn: var(--kt-warn);
+
+  --ss-font-ui: var(--kt-font-ui);
+  --ss-font-script: var(--kt-font-script);
+  --ss-font-mono: var(--kt-font-mono);
+
+  background-color: var(--ss-bg);
+  color: var(--ss-text);
+  font-family: var(--ss-font-ui);
+  font-size: calc(13px * var(--kt-scale, 1));
+  font-feature-settings: 'kern' 1;
+}
+
+/* Subtitle dialogue: the hero text of the studio */
+.subtitle-studio .ss-script {
+  font-family: var(--ss-font-script);
+  letter-spacing: 0;
+}
+
+/* Timecodes and numbers: aligned digits */
+.subtitle-studio .font-mono,
+.subtitle-studio .tabular-nums {
+  font-family: var(--ss-font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+
+/* Readability floor for long working sessions: nothing smaller than 11px */
+.subtitle-studio .text-\[8px\],
+.subtitle-studio .text-\[9px\],
+.subtitle-studio .text-\[10px\] {
+  font-size: 11px;
+  line-height: 1.35;
+}
+.subtitle-studio .text-xs { font-size: 12px; line-height: 1.4; }
+
+/* Sentence case instead of shouted labels */
+.subtitle-studio .uppercase {
+  text-transform: none;
+  letter-spacing: normal;
+}
+.subtitle-studio .tracking-wider,
+.subtitle-studio .tracking-widest {
+  letter-spacing: 0.01em;
+}
+
+/* Secondary text that passes contrast on every studio surface */
+.subtitle-studio .text-slate-400 { color: var(--ss-muted); }
+.subtitle-studio .text-slate-500,
+.subtitle-studio .text-slate-600 { color: var(--ss-faint); }
+.subtitle-studio .placeholder-slate-500::placeholder,
+.subtitle-studio .placeholder-slate-600::placeholder { color: var(--ss-faint); }
+
+/* Visible keyboard focus everywhere in the studio */
+.subtitle-studio :focus-visible {
+  outline: 2px solid var(--ss-accent);
+  outline-offset: 2px;
+}
+.subtitle-studio input:focus-visible,
+.subtitle-studio textarea:focus-visible,
+.subtitle-studio select:focus-visible {
+  outline-offset: 0;
+}
+
+.subtitle-studio ::selection {
+  background-color: rgba(var(--kt-accent-rgb), 0.35);
+  color: #ffffff;
+}
+
+.subtitle-studio * {
+  scrollbar-color: var(--ss-line) transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .subtitle-studio *,
+  .subtitle-studio *::before,
+  .subtitle-studio *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

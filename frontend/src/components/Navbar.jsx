@@ -4,6 +4,8 @@ import {
   Users, Undo2, Redo2, UploadCloud, GitCompare, StickyNote
 } from 'lucide-react';
 import AccountMenuDropdown from './AccountMenuDropdown';
+import NotificationBellDropdown from './NotificationBellDropdown';
+import ThemeToggle from './ThemeToggle';
 
 export default function Navbar({
   hasApiKey,
@@ -38,30 +40,30 @@ export default function Navbar({
   };
 
   return (
-    <header className="sticky top-0 z-40 bg-[#121318] border-b border-[#262734] px-3 sm:px-4 py-1.5 select-none shadow-sm">
+    <header className="sticky top-0 z-40 bg-[var(--kt-s1)] border-b border-[var(--kt-s4)] px-3 sm:px-4 py-1.5 select-none shadow-sm">
       <div className="w-full flex flex-wrap items-center justify-between gap-2">
         {/* Left: Brand & Undo/Redo */}
         <div className="flex items-center gap-2.5">
-          <div className="h-7 w-7 rounded-lg bg-gradient-to-tr from-[#00e5be] to-teal-600 flex items-center justify-center shadow-xs text-black font-black shrink-0">
+          <div className="h-7 w-7 rounded-lg bg-gradient-to-tr from-[var(--kt-accent)] to-blue-600 flex items-center justify-center shadow-xs text-black font-black shrink-0">
             <Sparkles className="w-3.5 h-3.5 fill-current" />
           </div>
           <div>
             <div className="flex items-center gap-1.5">
               <span className="font-extrabold text-xs text-white uppercase tracking-wider font-mono">Karya Transcribe</span>
-              <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-[#00e5be]/15 text-[#00e5be] border border-[#00e5be]/30 uppercase">
+              <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-[var(--kt-accent)]/15 text-[var(--kt-accent)] border border-[var(--kt-accent)]/30 uppercase">
                 Verbatim AI
               </span>
             </div>
-            <p className="text-[10px] text-[#9496a8] hidden sm:block">Conversational Speech Segmentation & QA Studio</p>
+            <p className="text-[10px] text-[var(--kt-muted)] hidden sm:block">Conversational Speech Segmentation & QA Studio</p>
           </div>
 
           {/* Quick Undo / Redo Controls */}
           {segmentCount > 0 && (
-            <div className="flex items-center gap-0.5 ml-2 pl-2 border-l border-[#262734]">
+            <div className="flex items-center gap-0.5 ml-2 pl-2 border-l border-[var(--kt-s4)]">
               <button
                 onClick={onUndo}
                 disabled={!canUndo}
-                className="p-1 rounded-md text-[#9496a8] hover:text-white hover:bg-[#1e202a] disabled:opacity-25 transition-colors cursor-pointer"
+                className="p-1 rounded-md text-[var(--kt-muted)] hover:text-white hover:bg-[var(--kt-s3)] disabled:opacity-25 transition-colors cursor-pointer"
                 title="Undo (Ctrl+Z)"
               >
                 <Undo2 className="w-3.5 h-3.5" />
@@ -69,7 +71,7 @@ export default function Navbar({
               <button
                 onClick={onRedo}
                 disabled={!canRedo}
-                className="p-1 rounded-md text-[#9496a8] hover:text-white hover:bg-[#1e202a] disabled:opacity-25 transition-colors cursor-pointer"
+                className="p-1 rounded-md text-[var(--kt-muted)] hover:text-white hover:bg-[var(--kt-s3)] disabled:opacity-25 transition-colors cursor-pointer"
                 title="Redo (Ctrl+Y)"
               >
                 <Redo2 className="w-3.5 h-3.5" />
@@ -93,7 +95,7 @@ export default function Navbar({
               <span className="text-[9px] uppercase font-bold px-1 py-0.2 rounded bg-black/40 border border-white/10">
                 {isPassing ? 'PASSED (≥98%)' : 'NEEDS QA'}
               </span>
-              <span className="text-[#9496a8] font-medium text-[11px] ml-0.5">
+              <span className="text-[var(--kt-muted)] font-medium text-[11px] ml-0.5">
                 ({totalErrors} Err · {totalWarnings} Warn)
               </span>
             </div>
@@ -112,10 +114,10 @@ export default function Navbar({
           />
           <button
             onClick={() => subtitleInputRef.current?.click()}
-            className="flex items-center gap-1.5 px-2.5 py-1 bg-[#181920] hover:bg-[#22232c] text-[#e2e4ed] hover:text-white rounded-lg text-xs font-medium border border-[#262734] transition-colors cursor-pointer"
+            className="flex items-center gap-1.5 px-2.5 py-1 bg-[var(--kt-s2)] hover:bg-[var(--kt-s3)] text-[#e2e4ed] hover:text-white rounded-lg text-xs font-medium border border-[var(--kt-s4)] transition-colors cursor-pointer"
             title="Import existing .SRT or .VTT subtitles to edit"
           >
-            <UploadCloud className="w-3.5 h-3.5 text-[#00e5be]" />
+            <UploadCloud className="w-3.5 h-3.5 text-[var(--kt-accent)]" />
             <span className="hidden sm:inline">Import SRT</span>
           </button>
 
@@ -123,10 +125,10 @@ export default function Navbar({
           {segmentCount > 0 && onOpenSpeakers && (
             <button
               onClick={onOpenSpeakers}
-              className="flex items-center gap-1.5 px-2.5 py-1 bg-[#181920] hover:bg-[#22232c] text-[#e2e4ed] hover:text-white rounded-lg text-xs font-medium border border-[#262734] transition-colors cursor-pointer"
+              className="flex items-center gap-1.5 px-2.5 py-1 bg-[var(--kt-s2)] hover:bg-[var(--kt-s3)] text-[#e2e4ed] hover:text-white rounded-lg text-xs font-medium border border-[var(--kt-s4)] transition-colors cursor-pointer"
               title="Manage and Rename Speakers"
             >
-              <Users className="w-3.5 h-3.5 text-[#00e5be]" />
+              <Users className="w-3.5 h-3.5 text-[var(--kt-accent)]" />
               <span className="hidden md:inline">Speakers</span>
             </button>
           )}
@@ -135,10 +137,10 @@ export default function Navbar({
           {segmentCount > 0 && onOpenStats && (
             <button
               onClick={onOpenStats}
-              className="flex items-center gap-1.5 px-2.5 py-1 bg-[#181920] hover:bg-[#22232c] text-[#e2e4ed] hover:text-white rounded-lg text-xs font-medium border border-[#262734] transition-colors cursor-pointer"
+              className="flex items-center gap-1.5 px-2.5 py-1 bg-[var(--kt-s2)] hover:bg-[var(--kt-s3)] text-[#e2e4ed] hover:text-white rounded-lg text-xs font-medium border border-[var(--kt-s4)] transition-colors cursor-pointer"
               title="View Transcript Analytics & Distribution"
             >
-              <BarChart2 className="w-3.5 h-3.5 text-[#00e5be]" />
+              <BarChart2 className="w-3.5 h-3.5 text-[var(--kt-accent)]" />
               <span className="hidden md:inline">Stats</span>
             </button>
           )}
@@ -147,10 +149,10 @@ export default function Navbar({
           {segmentCount > 0 && onOpenDiff && (
             <button
               onClick={onOpenDiff}
-              className="flex items-center gap-1.5 px-2.5 py-1 bg-[#181920] hover:bg-[#22232c] text-[#e2e4ed] hover:text-white rounded-lg text-xs font-medium border border-[#262734] transition-colors cursor-pointer"
+              className="flex items-center gap-1.5 px-2.5 py-1 bg-[var(--kt-s2)] hover:bg-[var(--kt-s3)] text-[#e2e4ed] hover:text-white rounded-lg text-xs font-medium border border-[var(--kt-s4)] transition-colors cursor-pointer"
               title="View side-by-side changes against original AI transcription"
             >
-              <GitCompare className="w-3.5 h-3.5 text-[#00e5be]" />
+              <GitCompare className="w-3.5 h-3.5 text-[var(--kt-accent)]" />
               <span className="hidden md:inline">Diff</span>
             </button>
           )}
@@ -159,10 +161,10 @@ export default function Navbar({
           {segmentCount > 0 && onOpenNotes && (
             <button
               onClick={onOpenNotes}
-              className="flex items-center gap-1.5 px-2.5 py-1 bg-[#181920] hover:bg-[#22232c] text-[#e2e4ed] hover:text-white rounded-lg text-xs font-medium border border-[#262734] transition-colors cursor-pointer"
+              className="flex items-center gap-1.5 px-2.5 py-1 bg-[var(--kt-s2)] hover:bg-[var(--kt-s3)] text-[#e2e4ed] hover:text-white rounded-lg text-xs font-medium border border-[var(--kt-s4)] transition-colors cursor-pointer"
               title="Project Notes & Classification Tags"
             >
-              <StickyNote className="w-3.5 h-3.5 text-[#00e5be]" />
+              <StickyNote className="w-3.5 h-3.5 text-[var(--kt-accent)]" />
               <span className="hidden md:inline">Notes</span>
             </button>
           )}
@@ -170,17 +172,17 @@ export default function Navbar({
           {/* Neon Cloud Projects Button */}
           <button
             onClick={onOpenProjects}
-            className="flex items-center gap-1.5 px-2.5 py-1 bg-[#181920] hover:bg-[#22232c] text-[#00e5be] rounded-lg text-xs font-bold border border-[#00e5be]/30 transition-colors cursor-pointer shadow-xs"
+            className="flex items-center gap-1.5 px-2.5 py-1 bg-[var(--kt-s2)] hover:bg-[var(--kt-s3)] text-[var(--kt-accent)] rounded-lg text-xs font-bold border border-[var(--kt-accent)]/30 transition-colors cursor-pointer shadow-xs"
             title="Open Neon PostgreSQL Cloud Projects"
           >
-            <Database className="w-3.5 h-3.5 text-[#00e5be]" />
+            <Database className="w-3.5 h-3.5 text-[var(--kt-accent)]" />
             <span>Projects</span>
           </button>
 
           {/* Guidelines Button */}
           <button
             onClick={() => setShowGuidelines(true)}
-            className="flex items-center gap-1.5 px-2.5 py-1 bg-[#181920] hover:bg-[#22232c] text-[#9496a8] hover:text-white rounded-lg text-xs font-medium border border-[#262734] transition-colors cursor-pointer"
+            className="flex items-center gap-1.5 px-2.5 py-1 bg-[var(--kt-s2)] hover:bg-[var(--kt-s3)] text-[var(--kt-muted)] hover:text-white rounded-lg text-xs font-medium border border-[var(--kt-s4)] transition-colors cursor-pointer"
           >
             <BookOpen className="w-3.5 h-3.5" />
             <span className="hidden lg:inline">Guidelines</span>
@@ -196,11 +198,17 @@ export default function Navbar({
           >
             <span
               className={`w-1.5 h-1.5 rounded-full ${
-                hasApiKey ? 'bg-[#00e5be] shadow-[0_0_6px_#00e5be]' : 'bg-amber-400'
+                hasApiKey ? 'bg-[var(--kt-accent)] shadow-[0_0_6px_var(--kt-accent)]' : 'bg-amber-400'
               }`}
             />
-            <span className="font-semibold text-[10px]">{hasApiKey ? 'Gemini Flash' : 'API Key Setup'}</span>
+            <span className="font-semibold text-[10px]">{hasApiKey ? 'ElevenLabs Scribe' : 'API Key Setup'}</span>
           </div>
+
+          {/* In-App Administrative Notices & Alerts */}
+          {user && <NotificationBellDropdown />}
+
+          {/* Acoustic Theme Toggle Button */}
+          <ThemeToggle />
 
           {/* User Account & Seat Status Dropdown */}
           {user && (

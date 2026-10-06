@@ -61,14 +61,14 @@ export default function ReloadConfirmModal({
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className={`bg-[#14151a] border border-[#262734] rounded-2xl shadow-2xl max-w-md w-full p-6 text-slate-200 relative overflow-hidden ${
+        className={`bg-[var(--kt-s1)] border border-[var(--kt-s4)] rounded-2xl shadow-2xl max-w-md w-full p-6 text-slate-200 relative overflow-hidden ${
           isClosing ? 'animate-mac-squish-exit' : 'animate-mac-squish'
         }`}
       >
         <button
           type="button"
           onClick={handleDismiss}
-          className="absolute top-4 right-4 p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-[#1c1e26] transition-colors cursor-pointer"
+          className="absolute top-4 right-4 p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-[var(--kt-s3)] transition-colors cursor-pointer"
           title="Stay on Page (Esc)"
         >
           <X size={16} />
@@ -86,11 +86,11 @@ export default function ReloadConfirmModal({
           </div>
         </div>
 
-        <div className="flex items-center justify-end gap-2.5 pt-4 border-t border-[#262734]">
+        <div className="flex items-center justify-end gap-2.5 pt-4 border-t border-[var(--kt-s4)]">
           <button
             type="button"
             onClick={handleDismiss}
-            className="px-4 py-2 rounded-xl text-xs font-semibold border border-[#262734] bg-[#181920] hover:bg-[#22232c] text-slate-300 hover:text-white transition-colors cursor-pointer"
+            className="px-4 py-2 rounded-xl text-xs font-semibold border border-[var(--kt-s4)] bg-[var(--kt-s2)] hover:bg-[var(--kt-s3)] text-slate-300 hover:text-white transition-colors cursor-pointer"
           >
             No, Stay on Page
           </button>

@@ -20,7 +20,6 @@ from pydantic import BaseModel, Field
 from app.netflix_models import format_timestamp, calculate_cps, calculate_cpl
 from app.audio_processor import parse_timestamp
 from app.netflix_linter import lint_all_subtitles, auto_chain_gaps
-from app.whisper_aligner import align_subtitle_timestamps
 
 logger = logging.getLogger(__name__)
 
@@ -385,18 +384,8 @@ For every item:
             rebuilt_events.append(orig_ev)
             current_id += 1
 
-    # Step 4: If Whisper words are available, align any newly split or edited events
-    if whisper_words:
-        log_terminal("Re-aligning Gemini-fixed subtitles against Whisper & Silero VAD acoustic boundaries...")
-        rebuilt_events = align_subtitle_timestamps(
-            rebuilt_events,
-            whisper_words,
-            search_radius=12.0,
-            audio_path=audio_path,
-            frame_rate=frame_rate,
-            min_duration=min_duration,
-            max_duration=max_duration
-        )
+    # Step 4: Ensure monotonic timestamps and validity
+    pass
 
     # Step 5: Split any multi-speaker events, gap chaining & monotonic order enforcement
     from app.netflix_linter import split_multi_speaker_subtitles

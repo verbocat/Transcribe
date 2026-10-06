@@ -81,74 +81,122 @@ export function encodeWAV(samples, sampleRate) {
   return new Blob([view], { type: 'audio/wav' });
 }
 
-export async function extractAudioFromMedia(file, onProgress) {
-  if (onProgress) onProgress({ stage: 'reading', percent: 15, detail: 'Reading media file into memory...' });
-  const arrayBuffer = await file.arrayBuffer();
+export async function extractAudioFromMedia(file, onProgress, apiBase = '') {
+  const isVideo = Boolean(
+    file.type?.startsWith('video/') ||
+    /\.(mp4|mkv|mov|webm|avi|flv|wmv|m4v|ts)$/i.test(file.name || '')
+  );
 
-  if (onProgress) onProgress({ stage: 'decoding', percent: 40, detail: 'Decoding audio track with Web Audio...' });
-  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-  const audioCtx = new AudioContextClass();
+  const isWma = Boolean(
+    file.type === 'audio/x-ms-wma' ||
+    file.type === 'audio/wma' ||
+    /\.(wma)$/i.test(file.name || '')
+  );
 
-  let audioBuffer;
-  try {
-    audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
-  } finally {
-    audioCtx.close().catch(() => {});
+  // If file is a standard browser-supported audio file (and NOT WMA), attempt instant browser Web Audio API decoding first
+  if (!isVideo && !isWma) {
+    try {
+      if (onProgress) onProgress({ stage: 'reading', percent: 15, detail: 'Reading media file into memory...' });
+      const arrayBuffer = await file.arrayBuffer();
+
+      if (onProgress) onProgress({ stage: 'decoding', percent: 40, detail: 'Decoding audio track with Web Audio...' });
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      const audioCtx = new AudioContextClass();
+
+      let audioBuffer;
+      try {
+        audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+      } finally {
+        audioCtx.close().catch(() => {});
+      }
+
+      if (onProgress) onProgress({ stage: 'processing', percent: 70, detail: 'Downmixing to speech mono...' });
+      const duration = audioBuffer.duration;
+      
+      // Downmix to mono
+      const numChannels = audioBuffer.numberOfChannels;
+      const length = audioBuffer.length;
+      let monoChannel;
+      if (numChannels === 1) {
+        monoChannel = audioBuffer.getChannelData(0);
+      } else {
+        monoChannel = new Float32Array(length);
+        const ch0 = audioBuffer.getChannelData(0);
+        const ch1 = audioBuffer.getChannelData(1);
+        for (let i = 0; i < length; i++) {
+          monoChannel[i] = 0.5 * (ch0[i] + ch1[i]);
+        }
+      }
+
+      const peaks = computeWaveformPeaks(monoChannel, duration, 50);
+
+      if (onProgress) onProgress({ stage: 'encoding', percent: 85, detail: 'Encoding clean WAV for upload...' });
+      const targetSampleRate = duration > 2400 ? 12000 : 16000;
+      const srcSampleRate = audioBuffer.sampleRate;
+
+      let finalSamples;
+      if (srcSampleRate === targetSampleRate) {
+        finalSamples = monoChannel;
+      } else {
+        const ratio = srcSampleRate / targetSampleRate;
+        const targetLength = Math.round(length / ratio);
+        finalSamples = new Float32Array(targetLength);
+        for (let i = 0; i < targetLength; i++) {
+          const srcIdx = Math.floor(i * ratio);
+          finalSamples[i] = monoChannel[srcIdx];
+        }
+      }
+
+      const wavBlob = encodeWAV(finalSamples, targetSampleRate);
+      const stem = (file.name || 'audio').replace(/\.[^/.]+$/, '');
+      const cleanStem = stem.replace(/[^\w\.-]/g, '_');
+      const audioFile = new File([wavBlob], `${cleanStem}_audio.wav`, { type: 'audio/wav' });
+
+      if (onProgress) onProgress({ stage: 'done', percent: 100, detail: 'Audio extraction complete!' });
+
+      return {
+        audioBlob: wavBlob,
+        audioFile: audioFile,
+        peaks: peaks,
+        duration: duration,
+        sampleRate: targetSampleRate
+      };
+    } catch (browserDecodeErr) {
+      console.warn("Client Web Audio decode fallback to server FFmpeg:", browserDecodeErr);
+    }
   }
 
-  if (onProgress) onProgress({ stage: 'processing', percent: 70, detail: 'Downmixing to speech mono...' });
-  const duration = audioBuffer.duration;
+  // Server-Side Audio Extraction via FFmpeg (for video files or complex audio codecs)
+  if (onProgress) onProgress({ stage: 'extracting', percent: 35, detail: 'Extracting clean audio track via server FFmpeg...' });
+  const formData = new FormData();
+  formData.append('file', file);
   
-  // Downmix to mono
-  const numChannels = audioBuffer.numberOfChannels;
-  const length = audioBuffer.length;
-  let monoChannel;
-  if (numChannels === 1) {
-    monoChannel = audioBuffer.getChannelData(0);
-  } else {
-    monoChannel = new Float32Array(length);
-    const ch0 = audioBuffer.getChannelData(0);
-    const ch1 = audioBuffer.getChannelData(1);
-    for (let i = 0; i < length; i++) {
-      monoChannel[i] = 0.5 * (ch0[i] + ch1[i]);
-    }
+  const base = apiBase || (window.location.port === '5173' ? 'http://localhost:8000' : '');
+  const res = await fetch(`${base}/api/audio/extract`, {
+    method: 'POST',
+    body: formData
+  });
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    throw new Error(`Server audio extraction failed: ${errText || res.statusText}`);
   }
 
-  // Instant waveform generation
-  const peaks = computeWaveformPeaks(monoChannel, duration, 50);
+  const data = await res.json();
+  if (onProgress) onProgress({ stage: 'downloading', percent: 80, detail: 'Synchronizing extracted audio track...' });
 
-  if (onProgress) onProgress({ stage: 'encoding', percent: 85, detail: 'Encoding clean WAV for upload...' });
+  const audioFetch = await fetch(`${base}${data.audio_url}`);
+  const audioBlob = await audioFetch.blob();
+  const audioFile = new File([audioBlob], data.audio_filename, { type: 'audio/wav' });
 
-  // Choose target sample rate: 16kHz for <= 40 mins (<80MB), 12kHz for > 40 mins (<70MB)
-  // This guarantees the WAV payload is always well under Cloudflare's 100MB single-request limit!
-  const targetSampleRate = duration > 2400 ? 12000 : 16000;
-  const srcSampleRate = audioBuffer.sampleRate;
-
-  let finalSamples;
-  if (srcSampleRate === targetSampleRate) {
-    finalSamples = monoChannel;
-  } else {
-    const ratio = srcSampleRate / targetSampleRate;
-    const targetLength = Math.round(length / ratio);
-    finalSamples = new Float32Array(targetLength);
-    for (let i = 0; i < targetLength; i++) {
-      const srcIdx = Math.floor(i * ratio);
-      finalSamples[i] = monoChannel[srcIdx];
-    }
-  }
-
-  const wavBlob = encodeWAV(finalSamples, targetSampleRate);
-  const stem = (file.name || 'audio').replace(/\.[^/.]+$/, '');
-  const cleanStem = stem.replace(/[^\w\.-]/g, '_');
-  const audioFile = new File([wavBlob], `${cleanStem}_audio.wav`, { type: 'audio/wav' });
-
-  if (onProgress) onProgress({ stage: 'done', percent: 100, detail: 'Audio extraction complete!' });
+  if (onProgress) onProgress({ stage: 'done', percent: 100, detail: 'Audio extracted successfully!' });
 
   return {
-    audioBlob: wavBlob,
+    audioBlob: audioBlob,
     audioFile: audioFile,
-    peaks: peaks,
-    duration: duration,
-    sampleRate: targetSampleRate
+    peaks: data.peaks || [],
+    duration: data.duration || 0,
+    sampleRate: data.sample_rate || 16000,
+    audioUrl: `${base}${data.audio_url}`
   };
 }

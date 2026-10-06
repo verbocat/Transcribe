@@ -2,7 +2,7 @@ import math
 import re
 from typing import List, Optional, Any, Dict
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 def format_timestamp(seconds: float) -> str:
@@ -85,12 +85,31 @@ class SubtitleEvent(BaseModel):
     lines: Optional[List[str]] = Field(default_factory=list)
     speaker_count: Optional[int] = 1
     speakers: Optional[List[str]] = Field(default_factory=list)
+    speaker: Optional[str] = "Speaker 1"
+    speaker_id: Optional[str] = "speaker_0"
+    primary_speaker: Optional[str] = "Speaker 1"
     is_italic: Optional[bool] = False
     is_forced_narrative: Optional[bool] = False
     cps: Optional[float] = 0.0
     cpl: Optional[List[int]] = Field(default_factory=list)
     qc_errors: Optional[List[Any]] = Field(default_factory=list)
     is_valid: Optional[bool] = True
+
+    @model_validator(mode="after")
+    def sync_speaker_and_time_fields(self):
+        if not self.primary_speaker and self.speaker:
+            self.primary_speaker = self.speaker
+        elif not self.speaker and self.primary_speaker:
+            self.speaker = self.primary_speaker
+        elif not self.speaker and not self.primary_speaker:
+            spk = self.speakers[0] if (self.speakers and len(self.speakers) > 0) else "Speaker 1"
+            self.speaker = spk
+            self.primary_speaker = spk
+        if self.start is None:
+            self.start = self.start_time
+        if self.end is None:
+            self.end = self.end_time
+        return self
 
 
 class CPSStats(BaseModel):

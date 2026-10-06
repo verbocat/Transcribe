@@ -1360,11 +1360,25 @@ def split_multi_speaker_subtitles(
                 if len(sent_parts) >= 2:
                     lines = sent_parts
                 else:
-                    # Split words equally among speakers
+                    # Split words at best linguistic clause boundary instead of blind mid = len(w) // 2
                     w = single.split()
                     if len(w) >= 2:
-                        mid = len(w) // 2
-                        lines = [' '.join(w[:mid]), ' '.join(w[mid:])]
+                        try:
+                            from app.dialogue_harmonizer import score_split_candidate
+                            best_s = len(w) // 2
+                            best_p = 999999
+                            total_chars = sum(len(x) for x in w)
+                            cum_c = 0
+                            for s_idx in range(1, len(w)):
+                                cum_c += len(w[s_idx - 1])
+                                s_pen = score_split_candidate(w[s_idx - 1], w[s_idx], cum_c, total_chars / 2.0, 0.0)
+                                if s_pen < best_p:
+                                    best_p = s_pen
+                                    best_s = s_idx
+                            lines = [' '.join(w[:best_s]), ' '.join(w[best_s:])]
+                        except Exception:
+                            mid = len(w) // 2
+                            lines = [' '.join(w[:mid]), ' '.join(w[mid:])]
 
         # Condition A: 2 or more lines starting with hyphen / dash (e.g. '- Speaker 1\n- Speaker 2')
         hyphen_lines = [l for l in lines if l.startswith(("-", "—", "–"))]

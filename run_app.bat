@@ -22,7 +22,7 @@ if not exist "frontend\node_modules" (
 
 echo.
 echo Starting FastAPI Backend Server on http://localhost:8000 ...
-start "Karya Backend" cmd /k "cd /d %~dp0\backend && venv\Scripts\python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload"
+start "Karya Backend" cmd /k "cd /d %~dp0\backend && venv\Scripts\python -m uvicorn app.main:app --host 127.0.0.1 --port 8000"
 
 echo Starting Vite React Frontend on http://localhost:5173 ...
 start "Karya Frontend" cmd /k "cd /d %~dp0\frontend && npm run dev"

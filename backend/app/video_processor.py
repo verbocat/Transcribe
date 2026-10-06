@@ -4,20 +4,26 @@ import logging
 import subprocess
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Set
-import imageio_ffmpeg
+try:
+    import imageio_ffmpeg
+except ImportError:
+    imageio_ffmpeg = None
 
 logger = logging.getLogger(__name__)
 
 def get_ffmpeg_path() -> str:
-    """Get FFmpeg binary path using imageio-ffmpeg.
-    Fall back to system 'ffmpeg' if imageio-ffmpeg is not available.
-    """
-    try:
-        ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
-        if ffmpeg_exe and Path(ffmpeg_exe).exists():
-            return str(ffmpeg_exe)
-    except Exception as e:
-        logger.warning(f"imageio_ffmpeg failed to get ffmpeg: {e}")
+    """Get FFmpeg binary path checking local bin, imageio-ffmpeg, or system PATH."""
+    local_bin = Path(__file__).resolve().parent.parent / "bin" / ("ffmpeg.exe" if os.name == "nt" else "ffmpeg")
+    if local_bin.exists():
+        return str(local_bin)
+
+    if imageio_ffmpeg is not None:
+        try:
+            ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+            if ffmpeg_exe and Path(ffmpeg_exe).exists():
+                return str(ffmpeg_exe)
+        except Exception as e:
+            logger.warning(f"imageio_ffmpeg failed to get ffmpeg: {e}")
     
     # Fallback to system ffmpeg
     return "ffmpeg"
@@ -240,9 +246,9 @@ def detect_shot_changes(video_path: str, threshold: float = 0.3) -> List[float]:
         return []
 
     meta = get_video_metadata(video_path)
-    duration = meta.get("duration", 0.0)
-    if duration > 300.0 and is_cloud:
-        logger.info(f"Video is long ({duration:.1f}s) — skipping shot detection to conserve server resources.")
+    duration = float(meta.get("duration", 0.0))
+    if duration > 300.0:
+        logger.info(f"Video is long ({duration:.1f}s) — skipping blocking shot detection to guarantee immediate stream start.")
         return []
 
     if meta.get("width", 0) == 0 or meta.get("codec") in ["unknown", "none"]:

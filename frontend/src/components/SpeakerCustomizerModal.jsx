@@ -1,10 +1,18 @@
 import React, { useState, useMemo } from 'react';
 import { X, Users, Check, ArrowLeftRight, UserCheck } from 'lucide-react';
 
-export default function SpeakerCustomizerModal({ isOpen, onClose, segments, onUpdateSegments }) {
+const defaultGetSpeaker = (item) => item.speaker;
+const defaultSetSpeaker = (item, name) => ({ ...item, speaker: name });
+
+// Shared by Transcription (segments) and Subtitle Studio (events). Callers with a different
+// item shape pass getSpeaker / setSpeaker so a rename touches every field that stores the label.
+export default function SpeakerCustomizerModal({
+  isOpen, onClose, segments, onUpdateSegments,
+  getSpeaker = defaultGetSpeaker, setSpeaker = defaultSetSpeaker
+}) {
   const uniqueSpeakers = useMemo(() => {
     if (!segments) return [];
-    const names = new Set(segments.map(s => s.speaker).filter(Boolean));
+    const names = new Set(segments.map(getSpeaker).filter(Boolean));
     return Array.from(names).sort();
   }, [segments]);
 
@@ -48,8 +56,8 @@ export default function SpeakerCustomizerModal({ isOpen, onClose, segments, onUp
     if (!newName || newName === oldName) return;
 
     const updated = segments.map(seg => {
-      if (seg.speaker === oldName) {
-        return { ...seg, speaker: newName };
+      if (getSpeaker(seg) === oldName) {
+        return setSpeaker(seg, newName);
       }
       return seg;
     });
@@ -63,10 +71,10 @@ export default function SpeakerCustomizerModal({ isOpen, onClose, segments, onUp
     if (!swapFrom || !swapTo || swapFrom === swapTo) return;
 
     const updated = segments.map(seg => {
-      if (seg.speaker === swapFrom) {
-        return { ...seg, speaker: swapTo };
-      } else if (seg.speaker === swapTo) {
-        return { ...seg, speaker: swapFrom };
+      if (getSpeaker(seg) === swapFrom) {
+        return setSpeaker(seg, swapTo);
+      } else if (getSpeaker(seg) === swapTo) {
+        return setSpeaker(seg, swapFrom);
       }
       return seg;
     });
@@ -76,7 +84,7 @@ export default function SpeakerCustomizerModal({ isOpen, onClose, segments, onUp
   };
 
   const getSpeakerThemeDot = (speakerName) => {
-    const colors = ['bg-[#00e5be]', 'bg-[#00e5ff]', 'bg-[#a855f7]', 'bg-[#ec4899]', 'bg-[#f59e0b]', 'bg-[#10b981]'];
+    const colors = ['bg-[var(--kt-accent)]', 'bg-[var(--kt-info)]', 'bg-[#a855f7]', 'bg-[#ec4899]', 'bg-[#f59e0b]', 'bg-[#10b981]'];
     let hash = 0;
     for (let i = 0; i < (speakerName || '').length; i++) hash = speakerName.charCodeAt(i) + ((hash << 5) - hash);
     return colors[Math.abs(hash) % colors.length];
@@ -93,13 +101,13 @@ export default function SpeakerCustomizerModal({ isOpen, onClose, segments, onUp
         if (e.target === e.currentTarget) handleDismiss();
       }}
     >
-      <div className={`bg-[#14151a] border border-[#262734] rounded-2xl w-full max-w-xl p-6 shadow-2xl flex flex-col max-h-[90vh] overflow-y-auto text-slate-200 custom-scrollbar ${
+      <div className={`bg-[var(--kt-s1)] border border-[var(--kt-s4)] rounded-2xl w-full max-w-xl p-6 shadow-2xl flex flex-col max-h-[90vh] overflow-y-auto text-slate-200 custom-scrollbar ${
         isClosing ? 'animate-mac-squish-exit' : 'animate-mac-squish'
       }`}>
         {/* Header */}
-        <div className="flex items-center justify-between pb-4 border-b border-[#262734] mb-5">
+        <div className="flex items-center justify-between pb-4 border-b border-[var(--kt-s4)] mb-5">
           <div className="flex items-center gap-3">
-            <div className="p-2.5 bg-[#00e5be]/15 text-[#00e5be] border border-[#00e5be]/30 rounded-xl">
+            <div className="p-2.5 bg-[var(--kt-accent)]/15 text-[var(--kt-accent)] border border-[var(--kt-accent)]/30 rounded-xl">
               <Users className="w-5 h-5" />
             </div>
             <div>
@@ -109,7 +117,7 @@ export default function SpeakerCustomizerModal({ isOpen, onClose, segments, onUp
           </div>
           <button
             onClick={handleDismiss}
-            className="p-2 text-slate-400 hover:text-white rounded-xl bg-[#181920] hover:bg-[#22232c] border border-[#262734] transition-colors cursor-pointer"
+            className="p-2 text-slate-400 hover:text-white rounded-xl bg-[var(--kt-s2)] hover:bg-[var(--kt-s3)] border border-[var(--kt-s4)] transition-colors cursor-pointer"
           >
             <X className="w-4 h-4" />
           </button>
@@ -117,8 +125,8 @@ export default function SpeakerCustomizerModal({ isOpen, onClose, segments, onUp
 
         {/* Toast Alert */}
         {toastMsg && (
-          <div className="mb-4 p-2.5 bg-[#00e5be]/15 text-[#00e5be] border border-[#00e5be]/30 rounded-xl text-xs font-bold flex items-center gap-2 animate-in fade-in">
-            <Check className="w-4 h-4 text-[#00e5be]" />
+          <div className="mb-4 p-2.5 bg-[var(--kt-accent)]/15 text-[var(--kt-accent)] border border-[var(--kt-accent)]/30 rounded-xl text-xs font-bold flex items-center gap-2 animate-in fade-in">
+            <Check className="w-4 h-4 text-[var(--kt-accent)]" />
             <span>{toastMsg}</span>
           </div>
         )}
@@ -127,15 +135,15 @@ export default function SpeakerCustomizerModal({ isOpen, onClose, segments, onUp
           {/* Section 1: Rename Individual Speakers */}
           <div className="space-y-3">
             <h3 className="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-1.5">
-              <UserCheck className="w-3.5 h-3.5 text-[#00e5be]" />
+              <UserCheck className="w-3.5 h-3.5 text-[var(--kt-accent)]" />
               <span>Rename Speakers & Themes</span>
             </h3>
 
             <div className="space-y-2">
               {uniqueSpeakers.map((spk) => {
-                const count = segments.filter(s => s.speaker === spk).length;
+                const count = segments.filter(s => getSpeaker(s) === spk).length;
                 return (
-                  <div key={spk} className="flex items-center gap-2 p-2.5 bg-[#181920] border border-[#262734] rounded-xl">
+                  <div key={spk} className="flex items-center gap-2 p-2.5 bg-[var(--kt-s2)] border border-[var(--kt-s4)] rounded-xl">
                     <div className="min-w-[125px] flex items-center gap-1.5 text-xs font-bold text-slate-200 truncate">
                       <span className={`w-2.5 h-2.5 rounded-full ${getSpeakerThemeDot(spk)} shrink-0`} title="Waveform Theme Color" />
                       <span className="truncate">{spk}</span>
@@ -150,12 +158,12 @@ export default function SpeakerCustomizerModal({ isOpen, onClose, segments, onUp
                       onKeyDown={(e) => {
                         if (e.key === 'Enter') handleRename(spk);
                       }}
-                      className="flex-1 bg-[#0e0f12] border border-[#262734] rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-[#00e5be] font-medium"
+                      className="flex-1 bg-[var(--kt-s0)] border border-[var(--kt-s4)] rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-[var(--kt-accent)] font-medium"
                     />
                     <button
                       onClick={() => handleRename(spk)}
                       disabled={!(renameMap[spk] || '').trim()}
-                      className="px-3 py-1.5 bg-[#00e5be] hover:bg-[#00c9a7] disabled:opacity-40 text-black rounded-xl text-xs font-bold transition-all cursor-pointer shadow-xs"
+                      className="px-3 py-1.5 bg-[var(--kt-accent)] hover:bg-[var(--kt-accent-strong)] disabled:opacity-40 text-black rounded-xl text-xs font-bold transition-all cursor-pointer shadow-xs"
                     >
                       Rename
                     </button>
@@ -167,28 +175,28 @@ export default function SpeakerCustomizerModal({ isOpen, onClose, segments, onUp
 
           {/* Section 2: Swap Two Speakers */}
           {uniqueSpeakers.length >= 2 && (
-            <div className="space-y-3 pt-3 border-t border-[#262734]">
+            <div className="space-y-3 pt-3 border-t border-[var(--kt-s4)]">
               <h3 className="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-1.5">
-                <ArrowLeftRight className="w-3.5 h-3.5 text-[#00e5be]" />
+                <ArrowLeftRight className="w-3.5 h-3.5 text-[var(--kt-accent)]" />
                 <span>Bulk Swap Speaker Labels</span>
               </h3>
 
-              <div className="flex flex-wrap items-center gap-2 p-3 bg-[#181920] border border-[#262734] rounded-xl">
+              <div className="flex flex-wrap items-center gap-2 p-3 bg-[var(--kt-s2)] border border-[var(--kt-s4)] rounded-xl">
                 <select
                   value={swapFrom}
                   onChange={(e) => setSwapFrom(e.target.value)}
-                  className="flex-1 bg-[#0e0f12] border border-[#262734] rounded-xl px-3 py-2 text-xs font-semibold text-slate-200 cursor-pointer focus:outline-none focus:border-[#00e5be]"
+                  className="flex-1 bg-[var(--kt-s0)] border border-[var(--kt-s4)] rounded-xl px-3 py-2 text-xs font-semibold text-slate-200 cursor-pointer focus:outline-none focus:border-[var(--kt-accent)]"
                 >
                   <option value="">Select Speaker A...</option>
                   {uniqueSpeakers.map(s => <option key={s} value={s}>{s}</option>)}
                 </select>
 
-                <ArrowLeftRight className="w-4 h-4 text-[#00e5be] shrink-0" />
+                <ArrowLeftRight className="w-4 h-4 text-[var(--kt-accent)] shrink-0" />
 
                 <select
                   value={swapTo}
                   onChange={(e) => setSwapTo(e.target.value)}
-                  className="flex-1 bg-[#0e0f12] border border-[#262734] rounded-xl px-3 py-2 text-xs font-semibold text-slate-200 cursor-pointer focus:outline-none focus:border-[#00e5be]"
+                  className="flex-1 bg-[var(--kt-s0)] border border-[var(--kt-s4)] rounded-xl px-3 py-2 text-xs font-semibold text-slate-200 cursor-pointer focus:outline-none focus:border-[var(--kt-accent)]"
                 >
                   <option value="">Select Speaker B...</option>
                   {uniqueSpeakers.map(s => <option key={s} value={s}>{s}</option>)}
@@ -197,7 +205,7 @@ export default function SpeakerCustomizerModal({ isOpen, onClose, segments, onUp
                 <button
                   onClick={handleSwapSpeakers}
                   disabled={!swapFrom || !swapTo || swapFrom === swapTo}
-                  className="px-4 py-2 bg-[#00e5be] hover:bg-[#00c9a7] disabled:opacity-40 text-black rounded-xl text-xs font-bold transition-all shadow-[0_0_12px_rgba(0,229,190,0.25)] cursor-pointer"
+                  className="px-4 py-2 bg-[var(--kt-accent)] hover:bg-[var(--kt-accent-strong)] disabled:opacity-40 text-black rounded-xl text-xs font-bold transition-all shadow-[0_0_12px_rgba(var(--kt-accent-rgb),0.25)] cursor-pointer"
                 >
                   Swap All
                 </button>
@@ -207,10 +215,10 @@ export default function SpeakerCustomizerModal({ isOpen, onClose, segments, onUp
         </div>
 
         {/* Footer */}
-        <div className="mt-5 pt-3 border-t border-[#262734] flex justify-end">
+        <div className="mt-5 pt-3 border-t border-[var(--kt-s4)] flex justify-end">
           <button
             onClick={handleDismiss}
-            className="px-4 py-2 bg-[#181920] hover:bg-[#22232c] text-slate-300 rounded-xl text-xs font-semibold border border-[#262734] transition-colors cursor-pointer"
+            className="px-4 py-2 bg-[var(--kt-s2)] hover:bg-[var(--kt-s3)] text-slate-300 rounded-xl text-xs font-semibold border border-[var(--kt-s4)] transition-colors cursor-pointer"
           >
             Done
           </button>

@@ -1,5 +1,7 @@
 import os
 import re
+import sys
+import logging
 import urllib.parse
 import asyncio
 import shutil
@@ -17,19 +19,29 @@ from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Response, Re
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 
-from app.config import UPLOAD_DIR, EXPORTS_DIR, GEMINI_API_KEY, GEMINI_MODEL, DEFAULT_LANGUAGE, DEFAULT_SCRIPT
+# Configure root stdout logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="[%(asctime)s] [%(levelname)s] [%(name)s]: %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
+logger = logging.getLogger("backend")
+
+from app.terminal_logger import log_terminal
+from app.config import UPLOAD_DIR, EXPORTS_DIR, GEMINI_API_KEY, GEMINI_MODEL, DEFAULT_LANGUAGE, DEFAULT_SCRIPT, ELEVENLABS_API_KEY
 from app.models import (
     TranscriptionResult, Segment, LintRequest, AutoFixRequest, ExportRequest, BatchTask, AudioAnalysis, WordConfidence, QCError
 )
-from app.gemini_transcriber import process_audio_file
+from app.scribe_transcriber import process_audio_file
+from app.audio_processor import inspect_audio
 from app.linter_engine import lint_dataset, apply_auto_fixes
 from app.rejection_engine import evaluate_audio_quality
 from app.export_service import (
     export_to_csv, export_to_tsv, export_to_txt,
     export_to_docx, export_to_xlsx, export_to_json, export_to_srt, export_to_vtt,
+    export_to_dubbing_script,
     export_rejection_csv
 )
-from app.batch_runner import batch_manager
 from app.db import init_db, get_db_session, DBProject, DBSegment
 
 from app.video_processor import (
@@ -42,7 +54,13 @@ from app.netflix_models import (
     SubtitleEvent, NetflixQCResult, SubtitleGenerationRequest,
     SubtitleLintRequest, SubtitleAutoFixRequest, SubtitleExportRequest
 )
-from app.gemini_subtitle_generator import generate_subtitles, generate_subtitles_stream
+from app.scribe_subtitle_generator import generate_subtitles, generate_subtitles_stream
+from app.netflix_engine import (
+    build_netflix_subtitles_from_words,
+    audit_netflix_compliance,
+    auto_fix_events_netflix,
+    align_subtitles_to_words
+)
 from app.export_service import export_netflix_srt, export_netflix_vtt, export_netflix_ttml
 from app.db import DBSubtitleProject, DBSubtitleEvent
 
@@ -200,7 +218,50 @@ def purge_media_files_for_stem(
 
 
 from app.auth_module import auth_router
-from app.auth_module.database import init_auth_db
+from app.auth_module.database import init_auth_db, SessionLocal
+from app.auth_module.models import SystemHardwareSnapshot
+from app.admin_routes import (
+    admin_router, get_live_hardware_stats,
+    increment_active_stream, decrement_active_stream
+)
+
+
+async def _hardware_monitor_loop():
+    """Background sampler recording system hardware snapshots every 60s."""
+    from sqlalchemy import func
+    from datetime import datetime, timezone, timedelta
+    while True:
+        try:
+            await asyncio.sleep(60)
+            stats = get_live_hardware_stats()
+            db = SessionLocal()
+            try:
+                snap = SystemHardwareSnapshot(
+                    cpu_percent=stats["cpu_percent"],
+                    memory_used_mb=stats["memory_used_mb"],
+                    memory_total_mb=stats["memory_total_mb"],
+                    memory_percent=stats["memory_percent"],
+                    disk_used_gb=stats["disk_used_gb"],
+                    disk_free_gb=stats["disk_free_gb"],
+                    disk_percent=stats["disk_percent"],
+                    active_sse_streams=stats["active_sse_streams"],
+                )
+                db.add(snap)
+                # Keep maximum last 1440 snapshots (24 hours)
+                total_snaps = db.query(func.count(SystemHardwareSnapshot.id)).scalar() or 0
+                if total_snaps > 1440:
+                    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+                    db.query(SystemHardwareSnapshot).filter(SystemHardwareSnapshot.recorded_at < cutoff).delete()
+                db.commit()
+            except Exception as e:
+                db.rollback()
+            finally:
+                db.close()
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            pass
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -209,7 +270,9 @@ async def lifespan(app: FastAPI):
     _evict_expired_sessions()
     init_db()
     init_auth_db()
+    monitor_task = asyncio.create_task(_hardware_monitor_loop())
     yield
+    monitor_task.cancel()
 
 
 app = FastAPI(
@@ -219,6 +282,7 @@ app = FastAPI(
     lifespan=lifespan
 )
 app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
+app.include_router(admin_router)
 
 # CORS configuration with explicit Vercel and local dev support
 DEFAULT_ALLOWED_ORIGINS = [
@@ -264,10 +328,14 @@ async def custom_http_exception_handler(request: Request, exc: HTTPException):
 @app.exception_handler(Exception)
 async def custom_general_exception_handler(request: Request, exc: Exception):
     """Ensure unhandled 500 exceptions always include CORS headers so browsers see the real error."""
+    import traceback
+    tb = traceback.format_exc()
+    print("=== UNHANDLED 500 EXCEPTION ===", flush=True)
+    print(tb, flush=True)
     origin = request.headers.get("origin") or "*"
     return JSONResponse(
         status_code=500,
-        content={"detail": f"Internal server error: {str(exc)}"},
+        content={"detail": f"Internal server error: {str(exc)}", "traceback": tb},
         headers={
             "Access-Control-Allow-Origin": origin,
             "Access-Control-Allow-Credentials": "true",
@@ -291,8 +359,7 @@ async def add_security_headers(request, call_next):
     return response
 
 
-# In-memory storage for active sessions
-active_sessions = {}
+
 
 
 @app.get("/")
@@ -313,10 +380,12 @@ def root_endpoint():
 @app.get("/api/health")
 @app.head("/api/health")
 async def health_check():
-    has_api_key = bool(GEMINI_API_KEY and len(GEMINI_API_KEY.strip()) > 5)
+    has_gemini = bool(GEMINI_API_KEY and len(GEMINI_API_KEY.strip()) > 5)
+    has_elevenlabs = bool(ELEVENLABS_API_KEY and len(ELEVENLABS_API_KEY.strip()) > 5)
     return {
         "status": "healthy",
-        "has_gemini_api_key": has_api_key,
+        "has_gemini_api_key": has_gemini,
+        "has_elevenlabs_api_key": has_elevenlabs,
         "default_model": GEMINI_MODEL,
         "default_language": DEFAULT_LANGUAGE,
         "default_script": DEFAULT_SCRIPT,
@@ -435,10 +504,9 @@ async def transcribe_audio(
     audio_id: Optional[str] = Form(None),
     language: str = Form("Auto-Detect"),
     script: str = Form("Auto-Detect"),
-    api_key: Optional[str] = Form(None),
-    model_name: Optional[str] = Form(None)
+    elevenlabs_api_key: Optional[str] = Form(None)
 ):
-    """Transcribe single audio file using Gemini pipeline + Karya linting."""
+    """Transcribe single audio file using ElevenLabs Scribe v2 pipeline + Karya linting."""
     client_ip = request.client.host if request.client else "127.0.0.1"
     _check_rate_limit(client_ip)
     if file:
@@ -453,13 +521,27 @@ async def transcribe_audio(
     else:
         raise HTTPException(status_code=400, detail="Audio file or valid audio_id is required.")
 
+    original_media_path = target_path  # kept so gender detection can watch the video
+
+    # Auto-extract 16kHz mono audio WAV if input is a video file or container or format needing conversion like .wma
+    ext = Path(target_path).suffix.lower()
+    from app.video_processor import get_supported_video_extensions, extract_audio_from_video
+    if ext in get_supported_video_extensions() or ext == ".wma" or ext not in [".wav", ".mp3", ".m4a", ".aac", ".flac", ".ogg", ".opus"]:
+        try:
+            audio_info = await asyncio.to_thread(extract_audio_from_video, target_path)
+            extracted_path = audio_info.get("audio_path")
+            if extracted_path and os.path.exists(extracted_path):
+                target_path = extracted_path
+        except Exception as extract_err:
+            print(f"Video audio extraction fallback note: {extract_err}")
+
     try:
-        result = process_audio_file(
+        result = await process_audio_file(
             audio_path=target_path,
             language=language,
             script=script,
-            api_key=api_key,
-            model_name=model_name or GEMINI_MODEL
+            elevenlabs_api_key=elevenlabs_api_key,
+            video_path=original_media_path if Path(original_media_path).suffix.lower() in get_supported_video_extensions() else None
         )
     except Exception as trans_err:
         import traceback
@@ -468,6 +550,9 @@ async def transcribe_audio(
             status_code=500,
             detail=f"Transcription failed: {str(trans_err)}"
         )
+
+    # Ensure result filename points to the accessible audio file in uploads
+    result.filename = Path(target_path).name
 
     active_sessions[result.audio_id] = {
         "filename": result.filename,
@@ -712,6 +797,67 @@ async def get_audio_stream(filename: str):
     return FileResponse(file_path, media_type=media_type)
 
 
+@app.post("/api/audio/extract")
+async def extract_audio_endpoint(request: Request, file: UploadFile = File(...)):
+    """Extract 16kHz mono WAV audio track and waveform peaks from any uploaded video or audio file."""
+    client_ip = get_client_ip(request)
+    _check_rate_limit(client_ip)
+
+    unique_prefix = uuid.uuid4().hex[:8]
+    raw_stem = Path(file.filename).stem
+    ext = Path(file.filename).suffix.lower()
+    clean_stem = re.sub(r'[^\w\.-]', '_', raw_stem).strip()
+    clean_stem = re.sub(r'_+', '_', clean_stem)
+    safe_filename = f"{unique_prefix}_{clean_stem}{ext}"
+    file_path = UPLOAD_DIR / safe_filename
+
+    try:
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+    except Exception as e:
+        if file_path.exists():
+            file_path.unlink()
+        raise HTTPException(status_code=500, detail=f"Error saving file: {e}")
+
+    try:
+        from app.video_processor import extract_audio_from_video, get_video_metadata
+        from app.audio_processor import compute_acoustic_waveform_peaks
+
+        audio_info = await asyncio.to_thread(extract_audio_from_video, str(file_path))
+        audio_path = audio_info.get("audio_path")
+        if not audio_path or not os.path.exists(audio_path):
+            raise HTTPException(status_code=500, detail="Failed to extract audio track from video.")
+
+        audio_name = Path(audio_path).name
+        meta = await asyncio.to_thread(get_video_metadata, str(file_path))
+
+        wdata = await asyncio.to_thread(compute_acoustic_waveform_peaks, str(audio_path), 50)
+        peaks = wdata.get("peaks", [])
+        duration = float(audio_info.get("duration") or meta.get("duration") or wdata.get("duration", 0.0))
+
+        # Cache peaks
+        cache_path = UPLOAD_DIR / f"{Path(audio_name).stem}.peaks.json"
+        with open(cache_path, "w", encoding="utf-8") as f:
+            json.dump({"peaks": peaks, "duration": duration, "points_per_sec": 50}, f)
+
+        return {
+            "status": "success",
+            "original_filename": file.filename,
+            "audio_filename": audio_name,
+            "audio_url": f"/api/audio/{audio_name}",
+            "duration": round(duration, 3),
+            "sample_rate": 16000,
+            "channels": 1,
+            "peaks": peaks
+        }
+    except HTTPException:
+        raise
+    except Exception as err:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Audio extraction failed: {str(err)}")
+
+
 @app.post("/api/lint")
 async def lint_segments_endpoint(payload: dict):
     """REL-06: Re-lint segment list after manual edits with resilient schema validation."""
@@ -863,6 +1009,19 @@ def sanitize_transcription_result(data: dict) -> TranscriptionResult:
     )
 
 
+def attachment_disposition(filename: str) -> str:
+    """Content-Disposition value that survives non-ASCII names (e.g. Hindi audio filenames)."""
+    try:
+        filename.encode("ascii")
+        if '"' not in filename and "\\" not in filename:
+            return f'attachment; filename="{filename}"'
+        raise UnicodeEncodeError("ascii", filename, 0, 1, "quote characters")
+    except UnicodeEncodeError:
+        fallback = filename.encode("ascii", "replace").decode("ascii")
+        fallback = re.sub(r'["\\?]', "_", fallback)
+        return f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{urllib.parse.quote(filename)}"
+
+
 @app.post("/api/export")
 async def export_deliverable(
     result_data: dict,
@@ -877,42 +1036,42 @@ async def export_deliverable(
         return Response(
             content=content,
             media_type="text/csv",
-            headers={"Content-Disposition": f'attachment; filename="{base_name}_karya.csv"'}
+            headers={"Content-Disposition": attachment_disposition(f"{base_name}_karya.csv")}
         )
     elif format == "tsv":
         content = export_to_tsv(result, delimiter="\t")
         return Response(
             content=content,
             media_type="text/tab-separated-values",
-            headers={"Content-Disposition": f'attachment; filename="{base_name}_karya.tsv"'}
+            headers={"Content-Disposition": attachment_disposition(f"{base_name}_karya.tsv")}
         )
     elif format == "txt":
         content = export_to_txt(result)
         return Response(
             content=content,
             media_type="text/plain; charset=utf-8",
-            headers={"Content-Disposition": f'attachment; filename="{base_name}_transcript.txt"'}
+            headers={"Content-Disposition": attachment_disposition(f"{base_name}_transcript.txt")}
         )
     elif format == "json":
         content = export_to_json(result)
         return Response(
             content=content,
             media_type="application/json",
-            headers={"Content-Disposition": f'attachment; filename="{base_name}_deliverable.json"'}
+            headers={"Content-Disposition": attachment_disposition(f"{base_name}_deliverable.json")}
         )
     elif format == "srt":
         content = export_to_srt(result)
         return Response(
             content=content,
             media_type="text/plain; charset=utf-8",
-            headers={"Content-Disposition": f'attachment; filename="{base_name}.srt"'}
+            headers={"Content-Disposition": attachment_disposition(f"{base_name}.srt")}
         )
     elif format == "vtt":
         content = export_to_vtt(result)
         return Response(
             content=content,
             media_type="text/vtt; charset=utf-8",
-            headers={"Content-Disposition": f'attachment; filename="{base_name}.vtt"'}
+            headers={"Content-Disposition": attachment_disposition(f"{base_name}.vtt")}
         )
     elif format == "docx":
         docx_path = str(EXPORTS_DIR / f"{base_name}_karya.docx")
@@ -943,10 +1102,28 @@ async def export_deliverable(
         return Response(
             content=content,
             media_type="text/csv",
-            headers={"Content-Disposition": f'attachment; filename="{base_name}_rejection.csv"'}
+            headers={"Content-Disposition": attachment_disposition(f"{base_name}_rejection.csv")}
         )
     else:
         raise HTTPException(status_code=400, detail=f"Unsupported format '{format}'.")
+
+
+@app.post("/api/export/dubbing")
+async def export_dubbing_script(payload: dict):
+    """Generate the Dubbing Script workbook, applying optional speaker -> character renames."""
+    result = sanitize_transcription_result(payload.get("result", {}))
+    speaker_map = payload.get("speaker_map") or {}
+    if not isinstance(speaker_map, dict):
+        raise HTTPException(status_code=400, detail="speaker_map must be an object.")
+    base_name = Path(result.filename).stem
+    out_name = f"{base_name}_dubbing_script.xlsx"
+    out_path = str(EXPORTS_DIR / out_name)
+    export_to_dubbing_script(result, out_path, speaker_map)
+    return FileResponse(
+        out_path,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": attachment_disposition(out_name)},
+    )
 
 
 @app.post("/api/export/multi")
@@ -966,7 +1143,7 @@ async def export_multi_deliverables(payload: dict):
         fmt = formats[0].lower()
         if fmt == "csv":
             content = export_to_csv(result)
-            return Response(content=content, media_type="text/csv", headers={"Content-Disposition": f'attachment; filename="{base_name}_karya.csv"'})
+            return Response(content=content, media_type="text/csv", headers={"Content-Disposition": attachment_disposition(f"{base_name}_karya.csv")})
         elif fmt == "docx":
             docx_path = str(EXPORTS_DIR / f"{base_name}_karya.docx")
             export_to_docx(result, docx_path)
@@ -977,16 +1154,16 @@ async def export_multi_deliverables(payload: dict):
             return FileResponse(xlsx_path, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", filename=f"{base_name}_karya.xlsx")
         elif fmt == "srt":
             content = export_to_srt(result)
-            return Response(content=content, media_type="text/plain; charset=utf-8", headers={"Content-Disposition": f'attachment; filename="{base_name}.srt"'})
+            return Response(content=content, media_type="text/plain; charset=utf-8", headers={"Content-Disposition": attachment_disposition(f"{base_name}.srt")})
         elif fmt == "vtt":
             content = export_to_vtt(result)
-            return Response(content=content, media_type="text/vtt; charset=utf-8", headers={"Content-Disposition": f'attachment; filename="{base_name}.vtt"'})
+            return Response(content=content, media_type="text/vtt; charset=utf-8", headers={"Content-Disposition": attachment_disposition(f"{base_name}.vtt")})
         elif fmt == "txt":
             content = export_to_txt(result)
-            return Response(content=content, media_type="text/plain; charset=utf-8", headers={"Content-Disposition": f'attachment; filename="{base_name}_transcript.txt"'})
+            return Response(content=content, media_type="text/plain; charset=utf-8", headers={"Content-Disposition": attachment_disposition(f"{base_name}_transcript.txt")})
         elif fmt == "json":
             content = export_to_json(result)
-            return Response(content=content, media_type="application/json", headers={"Content-Disposition": f'attachment; filename="{base_name}_deliverable.json"'})
+            return Response(content=content, media_type="application/json", headers={"Content-Disposition": attachment_disposition(f"{base_name}_deliverable.json")})
 
     # Bundle multiple formats into a single ZIP archive
     zip_buffer = io.BytesIO()
@@ -1020,67 +1197,8 @@ async def export_multi_deliverables(payload: dict):
     return Response(
         content=zip_buffer.getvalue(),
         media_type="application/zip",
-        headers={"Content-Disposition": f'attachment; filename="{base_name}_deliverables.zip"'}
+        headers={"Content-Disposition": attachment_disposition(f"{base_name}_deliverables.zip")}
     )
-
-
-# Batch Processing Endpoints
-@app.post("/api/batch/upload")
-async def batch_upload(
-    files: List[UploadFile] = File(...),
-    language: str = Form("Auto-Detect"),
-    script: str = Form("Auto-Detect")
-):
-    """Upload multiple files and queue them for batch processing."""
-    tasks = []
-    for file in files:
-        file_path = UPLOAD_DIR / file.filename
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-        
-        task = batch_manager.add_task(
-            filename=file.filename,
-            file_path=str(file_path),
-            language=language,
-            script=script
-        )
-        tasks.append(task)
-
-    return {"tasks": tasks, "total_queued": len(tasks)}
-
-
-@app.get("/api/batch/tasks")
-async def get_batch_tasks():
-    """Get all current batch tasks."""
-    return {"tasks": batch_manager.get_all_tasks()}
-
-
-@app.get("/api/batch/export/zip")
-async def export_batch_zip(format: str = "all"):
-    """Export all completed batch deliverables in a single ZIP."""
-    zip_bytes = batch_manager.create_batch_zip(export_format=format)
-    return StreamingResponse(
-        io.BytesIO(zip_bytes),
-        media_type="application/zip",
-        headers={"Content-Disposition": 'attachment; filename="karya_batch_deliverables.zip"'}
-    )
-
-
-@app.post("/api/batch/clear")
-async def clear_batch_tasks():
-    """Clear completed tasks."""
-    batch_manager.clear_completed()
-    return {"status": "cleared"}
-
-
-@app.post("/api/batch/cancel/{task_id}")
-async def cancel_batch_task(task_id: str):
-    """Cancel a queued (not yet started) batch task."""
-    success = batch_manager.cancel_task(task_id)
-    if success:
-        return {"status": "cancelled", "task_id": task_id}
-    return {"status": "not_cancellable", "task_id": task_id,
-            "detail": "Task already started or does not exist."}
 
 
 # --- NETFLIX SUBTITLE ENDPOINTS ---
@@ -1125,11 +1243,11 @@ async def upload_video(request: Request, file: UploadFile = File(...)):
             file_path.unlink()
         raise HTTPException(status_code=500, detail=f"Error writing media upload: {str(e)}")
 
-    return await _process_saved_media(file_path, safe_filename, clean_stem, raw_stem, ext)
+    return await _process_saved_media(file_path, safe_filename, clean_stem, raw_stem, ext, request=request)
 
 
-async def _process_saved_media(file_path: Path, safe_filename: str, clean_stem: str, raw_stem: str, ext: str):
-    """Validate media, resolve audio, precalculate waveform and register active session."""
+async def _process_saved_media(file_path: Path, safe_filename: str, clean_stem: str, raw_stem: str, ext: str, request: Optional[Request] = None):
+    """Validate media, resolve audio, precalculate waveform, register active session, and audit UserMediaAsset."""
     try:
         val = validate_media_file(str(file_path))
         if not val["is_valid"]:
@@ -1151,8 +1269,9 @@ async def _process_saved_media(file_path: Path, safe_filename: str, clean_stem: 
     video_id = Path(safe_filename).stem
 
     # Pre-extract or resolve audio path for instant waveform rendering
+    # .wma files are converted to WAV via FFmpeg because browsers & soundfile cannot decode them natively
     audio_path = None
-    if ext in [".wav", ".mp3", ".m4a", ".aac", ".flac", ".ogg", ".opus", ".wma"]:
+    if ext in [".wav", ".mp3", ".m4a", ".aac", ".flac", ".ogg", ".opus"]:
         audio_path = str(file_path)
     else:
         try:
@@ -1209,11 +1328,71 @@ async def _process_saved_media(file_path: Path, safe_filename: str, clean_stem: 
         "created_at": time.time()
     }
 
+    # Record UserMediaAsset for admin observability
+    try:
+        from app.auth_module.database import SessionLocal
+        from app.auth_module.models import UserMediaAsset, User, AuthSession
+        import hashlib
+
+        file_hash = None
+        try:
+            with open(file_path, "rb") as f:
+                head_bytes = f.read(4 * 1024 * 1024)
+                file_hash = hashlib.sha256(head_bytes).hexdigest()
+        except Exception:
+            pass
+
+        db_aud = SessionLocal()
+        try:
+            detected_user_id = None
+            if request:
+                auth_hdr = request.headers.get("authorization")
+                if auth_hdr and auth_hdr.startswith("Bearer "):
+                    tok = auth_hdr.split(" ")[1].strip()
+                    sess = db_aud.query(AuthSession).filter(AuthSession.session_token == tok, AuthSession.is_active == True).first()
+                    if sess:
+                        detected_user_id = sess.user_id
+
+            if not detected_user_id:
+                first_u = db_aud.query(User).first()
+                if first_u:
+                    detected_user_id = first_u.id
+
+            if detected_user_id:
+                asset = UserMediaAsset(
+                    user_id=detected_user_id,
+                    video_id=video_id,
+                    filename=safe_filename,
+                    file_size_bytes=file_path.stat().st_size if file_path.exists() else 0,
+                    duration_seconds=float(metadata.get("duration", 0.0)) if metadata else 0.0,
+                    video_resolution=f"{metadata.get('width', '')}x{metadata.get('height', '')}" if metadata and metadata.get("width") else "",
+                    frame_rate=float(metadata.get("frame_rate", 24.0)) if metadata else 24.0,
+                    audio_sample_rate=int(metadata.get("sample_rate", 16000)) if metadata else 16000,
+                    audio_channels=int(metadata.get("channels", 1)) if metadata else 1,
+                    file_hash=file_hash,
+                    storage_path=str(file_path)
+                )
+                db_aud.add(asset)
+                db_aud.commit()
+                active_sessions[video_id]["user_id"] = detected_user_id
+                active_sessions[video_id]["media_asset_id"] = asset.id
+        except Exception as aud_err:
+            db_aud.rollback()
+            print(f"Non-fatal media asset audit note: {aud_err}")
+        finally:
+            db_aud.close()
+    except Exception:
+        pass
+
     fps = round(float(metadata.get("frame_rate", 24.0)), 3) if metadata else 24.0
+    audio_filename = Path(audio_path).name if (audio_path and os.path.exists(str(audio_path))) else None
+    audio_url = f"/api/audio/{audio_filename}" if audio_filename else None
 
     return {
         "video_id": video_id,
         "filename": safe_filename,
+        "audio_filename": audio_filename,
+        "audio_url": audio_url,
         "frame_rate": fps,
         "metadata": metadata,
         "peaks": peaks_payload,
@@ -1276,7 +1455,7 @@ async def upload_video_chunk(
         final_file_path.unlink()
     shutil.move(str(part_path), str(final_file_path))
 
-    return await _process_saved_media(final_file_path, safe_filename, clean_stem, raw_stem, ext)
+    return await _process_saved_media(final_file_path, safe_filename, clean_stem, raw_stem, ext, request=request)
 
 
 def resolve_active_session_video(video_id: str) -> Optional[str]:
@@ -1325,8 +1504,23 @@ def resolve_active_session_video(video_id: str) -> Optional[str]:
 
 
 @app.get("/api/subtitle/waveform/{video_id}")
-async def get_subtitle_waveform_endpoint(video_id: str, points_per_sec: int = 50):
+async def get_subtitle_waveform_endpoint(video_id: str, request: Request, points_per_sec: int = 50):
     """Return high-precision acoustic waveform peaks for video_id with instant disk cache lookup."""
+    auth_header = request.headers.get("authorization")
+    if auth_header and auth_header.startswith("Bearer "):
+        try:
+            token = auth_header.split(" ")[1].strip()
+            from app.auth_module.models import AuthSession
+            from app.auth_module.database import SessionLocal
+            db_s = SessionLocal()
+            sess = db_s.query(AuthSession).filter(AuthSession.session_token == token, AuthSession.is_active == True).first()
+            if sess and sess.user and not getattr(sess.user, "can_audio_peaks", True):
+                db_s.close()
+                return {"video_id": video_id, "duration": 0.0, "points_per_sec": points_per_sec, "peaks": [], "disabled": True}
+            db_s.close()
+        except Exception:
+            pass
+
     video_id = urllib.parse.unquote(str(video_id)).strip()
 
     # 1. Instant Disk Cache Lookup (< 20ms response time, Subtitle Edit level instant loading)
@@ -1498,10 +1692,10 @@ async def discard_media_endpoint(payload: DiscardMediaRequest):
 
 
 @app.post("/api/subtitle/generate")
-async def generate_subtitles_endpoint(payload: dict):
-    """Generate Netflix QC compliant subtitles from video with dynamic settings."""
+async def generate_subtitles_endpoint(request: Request, payload: dict):
+    """Generate Netflix QC compliant subtitles from video using ElevenLabs Scribe v2 and local Netflix engine."""
     video_id = payload.get("video_id")
-    language = payload.get("language", "en")
+    language = payload.get("language", "auto")
     content_type = payload.get("content_type", "adult")
     sdh_mode = payload.get("sdh_mode", False)
     cpl_limit = int(payload.get("cpl_limit", 42))
@@ -1509,9 +1703,9 @@ async def generate_subtitles_endpoint(payload: dict):
     max_lines = int(payload.get("max_lines", 2))
     min_duration = float(payload.get("min_duration", 0.833))
     max_duration = float(payload.get("max_duration", 7.0))
-    gemini_auto_fix = bool(payload.get("gemini_auto_fix", True))
     raw_frame_rate = payload.get("frame_rate")
     custom_frame_rate = float(raw_frame_rate) if raw_frame_rate is not None and float(raw_frame_rate) > 0 else None
+    elevenlabs_api_key = payload.get("elevenlabs_api_key") or request.headers.get("x-elevenlabs-api-key")
     
     if not video_id:
         raise HTTPException(status_code=400, detail="video_id is required")
@@ -1519,6 +1713,11 @@ async def generate_subtitles_endpoint(payload: dict):
     video_path = resolve_active_session_video(video_id)
     if not video_path or not os.path.exists(video_path):
         raise HTTPException(status_code=404, detail="Video session not found or expired. Please re-upload the video.")
+    
+    file_size_mb = round(os.path.getsize(video_path) / (1024 * 1024), 2) if os.path.exists(video_path) else 0.0
+    log_terminal("SUBTITLE-API", f"===> Direct Subtitle Generation Request: video_id={video_id} ({file_size_mb} MB)")
+    log_terminal("SUBTITLE-API", f"     Params -> Language: {language} | Content: {content_type} | SDH: {sdh_mode}")
+    log_terminal("SUBTITLE-API", f"     Limits -> CPL: {cpl_limit} | Max CPS: {max_cps} | Min Dur: {min_duration}s | Max Dur: {max_duration}s")
     
     try:
         result = await asyncio.to_thread(
@@ -1532,33 +1731,66 @@ async def generate_subtitles_endpoint(payload: dict):
             max_lines=max_lines,
             min_duration=min_duration,
             max_duration=max_duration,
-            gemini_auto_fix=gemini_auto_fix,
             custom_frame_rate=custom_frame_rate,
+            api_key=elevenlabs_api_key,
         )
         active_sessions[video_id]["result"] = result
+        log_terminal("SUBTITLE-API", f"[OK] Subtitles generated: {result.get('total_events', 0)} events (Score: {result.get('compliance_score', 0)}%)")
         return result
     except Exception as e:
         import traceback
         traceback.print_exc()
+        log_terminal("SUBTITLE-API", f"[ERROR] Subtitle generation failed: {str(e)}", level="ERROR")
         raise HTTPException(status_code=500, detail=f"Subtitle generation failed: {str(e)}")
 
 
 @app.post("/api/subtitle/generate_stream")
-async def generate_subtitles_stream_endpoint(payload: dict):
+async def generate_subtitles_stream_endpoint(request: Request, payload: dict):
     """Progressively stream subtitle batches using Server-Sent Events (SSE) with dynamic settings."""
     video_id = payload.get("video_id")
     language = payload.get("language", "auto")
     script = payload.get("script", "auto")
     content_type = payload.get("content_type", "adult")
     sdh_mode = payload.get("sdh_mode", False)
-    cpl_limit = int(payload.get("cpl_limit", 42))
-    max_cps = float(payload.get("max_cps", 20.0 if content_type == "adult" else 17.0))
-    max_lines = int(payload.get("max_lines", 2))
-    min_duration = float(payload.get("min_duration", 0.833))
-    max_duration = float(payload.get("max_duration", 7.0))
-    gemini_auto_fix = bool(payload.get("gemini_auto_fix", True))
+    include_speaker_tags = bool(payload.get("include_speaker_tags", False))
+    snap_to_shot_changes = bool(payload.get("snap_to_shot_changes", True))
+    # Robust numeric extraction in case frontend sends string representations like "42", "20.0", "0.833s", "24 fps"
+    try:
+        cpl_limit = int(str(payload.get("cpl_limit", 42)).replace("cpl", "").strip())
+    except Exception:
+        cpl_limit = 42
+
+    try:
+        max_cps = float(str(payload.get("max_cps", 20.0 if content_type == "adult" else 17.0)).replace("cps", "").strip())
+    except Exception:
+        max_cps = 20.0 if content_type == "adult" else 17.0
+
+    try:
+        max_lines = int(str(payload.get("max_lines", 2)).replace("lines", "").strip())
+    except Exception:
+        max_lines = 2
+
+    try:
+        min_duration = float(str(payload.get("min_duration", 0.833)).replace("s", "").strip())
+    except Exception:
+        min_duration = 0.833
+
+    try:
+        max_duration = float(str(payload.get("max_duration", 7.0)).replace("s", "").strip())
+    except Exception:
+        max_duration = 7.0
+
+    raw_num_speakers = payload.get("num_speakers")
+    num_speakers = int(raw_num_speakers) if raw_num_speakers is not None and str(raw_num_speakers).isdigit() and int(raw_num_speakers) > 0 else None
+    strict_native_script = bool(payload.get("strict_native_script", True))
+
     raw_frame_rate = payload.get("frame_rate")
-    custom_frame_rate = float(raw_frame_rate) if raw_frame_rate is not None and float(raw_frame_rate) > 0 else None
+    try:
+        custom_frame_rate = float(str(raw_frame_rate).replace("fps", "").strip()) if raw_frame_rate is not None else None
+    except Exception:
+        custom_frame_rate = None
+
+    elevenlabs_api_key = payload.get("elevenlabs_api_key") or request.headers.get("x-elevenlabs-api-key")
     start_chunk = int(payload.get("start_chunk", 1))
     prev_events_count = int(payload.get("prev_events_count", 0))
     prev_batch_end = float(payload.get("prev_batch_end", 0.0))
@@ -1575,30 +1807,105 @@ async def generate_subtitles_stream_endpoint(payload: dict):
     video_path = resolve_active_session_video(video_id)
     if not video_path or not os.path.exists(video_path):
         raise HTTPException(status_code=404, detail="Video session not found or expired. Please re-upload the video.")
-    
+
+    file_size_mb = round(os.path.getsize(video_path) / (1024 * 1024), 2) if os.path.exists(video_path) else 0.0
+    log_terminal("SUBTITLE-API", f"===> Subtitle Stream Request: video_id={video_id} ({file_size_mb} MB)")
+    log_terminal("SUBTITLE-API", f"     Target -> Language: {language} | Script: {script} | ContentType: {content_type} | SDH: {sdh_mode}")
+    log_terminal("SUBTITLE-API", f"     Constraints -> CPL: {cpl_limit} | Max CPS: {max_cps} | Lines: {max_lines} | Min: {min_duration}s | Max: {max_duration}s")
+    log_terminal("SUBTITLE-API", f"     Diarization -> Speakers: {num_speakers or 'Auto-Detect'} | Speaker Tags: {include_speaker_tags}")
+    log_terminal("SUBTITLE-API", f"     Advanced -> Strict Script: {strict_native_script} | Snap Shot Cuts: {snap_to_shot_changes} | FPS: {custom_frame_rate or 'Auto'}")
+
+    user_id = None
+    auth_header = request.headers.get("authorization")
+    if auth_header and auth_header.startswith("Bearer "):
+        try:
+            token = auth_header.split(" ")[1].strip()
+            from app.auth_module.models import AuthSession, User, SubtitleGenerationRun
+            from app.auth_module.database import SessionLocal
+            db_s = SessionLocal()
+            sess = db_s.query(AuthSession).filter(AuthSession.session_token == token, AuthSession.is_active == True).first()
+            if sess and sess.user:
+                usr = sess.user
+                user_id = usr.id
+                if usr.is_blocked:
+                    db_s.close()
+                    raise HTTPException(status_code=403, detail="Your account has been suspended by an administrator.")
+                
+                # Check video quota limit
+                if usr.max_videos_quota is not None and usr.max_videos_quota >= 0:
+                    runs = db_s.query(SubtitleGenerationRun.video_id).filter(SubtitleGenerationRun.user_id == user_id).all()
+                    distinct_video_ids = {r[0] for r in runs if r[0]}
+                    if video_id not in distinct_video_ids and len(distinct_video_ids) >= usr.max_videos_quota:
+                        db_s.close()
+                        raise HTTPException(
+                            status_code=403,
+                            detail=f"Video generation quota exceeded: Your account limit is {usr.max_videos_quota} videos. Please contact your administrator."
+                        )
+                # Check AI optimize toggle
+                if not getattr(usr, "can_ai_optimize", True):
+                    gemini_auto_fix = False
+            db_s.close()
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.debug(f"User quota validation note: {e}")
+
+    if not user_id and video_id in active_sessions and active_sessions[video_id].get("user_id"):
+        user_id = active_sessions[video_id]["user_id"]
+
+    generator = generate_subtitles_stream(
+        video_path=video_path,
+        language=language,
+        script=script,
+        content_type=content_type,
+        sdh_mode=sdh_mode,
+        cpl_limit=cpl_limit,
+        max_cps=max_cps,
+        max_lines=max_lines,
+        min_duration=min_duration,
+        max_duration=max_duration,
+        custom_frame_rate=custom_frame_rate,
+        api_key=elevenlabs_api_key,
+        include_speaker_tags=include_speaker_tags,
+        snap_to_shot_changes=snap_to_shot_changes,
+        num_speakers=num_speakers,
+        strict_native_script=strict_native_script,
+        user_id=user_id,
+        video_id=video_id
+    )
+
+    async def sse_stream_wrapper():
+        increment_active_stream()
+        log_terminal("SSE-STREAM", f"Client connected to SSE stream for video_id={video_id}")
+        chunk_count = 0
+        try:
+            async for chunk in generator:
+                chunk_count += 1
+                if "data:" in chunk:
+                    try:
+                        clean_data = chunk.strip().replace("data:", "").strip()
+                        parsed = json.loads(clean_data)
+                        p_type = parsed.get("type")
+                        if p_type == "progress":
+                            log_terminal("SSE-STREAM", f"[Progress {parsed.get('progress', 0)}%] {parsed.get('stage')}")
+                        elif p_type == "complete":
+                            log_terminal("SSE-STREAM", f"[Complete] Subtitle stream generated {parsed.get('total_events', 0)} events (Score: {parsed.get('compliance_score', 0)}%)")
+                        elif p_type in ("error", "stream_error"):
+                            log_terminal("SSE-STREAM", f"[Error] {parsed.get('message') or parsed.get('error')}", level="ERROR")
+                    except Exception:
+                        pass
+                yield chunk
+        except Exception as exc:
+            logger.exception(f"Unhandled exception in sse_stream_wrapper: {exc}")
+            log_terminal("SSE-STREAM", f"[FATAL STREAM ERROR] {exc}", level="ERROR")
+            err_data = json.dumps({"type": "error", "message": str(exc), "error": str(exc)})
+            yield f"data: {err_data}\n\n"
+        finally:
+            decrement_active_stream()
+            log_terminal("SSE-STREAM", f"Client disconnected from SSE stream for video_id={video_id} (Emitted {chunk_count} chunks)")
+
     return StreamingResponse(
-        generate_subtitles_stream(
-            video_path=video_path,
-            language=language,
-            script=script,
-            content_type=content_type,
-            sdh_mode=sdh_mode,
-            cpl_limit=cpl_limit,
-            max_cps=max_cps,
-            max_lines=max_lines,
-            min_duration=min_duration,
-            max_duration=max_duration,
-            gemini_auto_fix=gemini_auto_fix,
-            start_chunk=start_chunk,
-            prev_events_count=prev_events_count,
-            prev_batch_end=prev_batch_end,
-            prev_context=prev_context,
-            start_time=start_time,
-            batch_mode=batch_mode,
-            user_feedback=user_feedback,
-            custom_frame_rate=custom_frame_rate,
-            project_glossary=project_glossary,
-        ),
+        sse_stream_wrapper(),
         media_type="text/event-stream; charset=utf-8",
         headers={
             "Cache-Control": "no-cache, no-transform",
@@ -1675,6 +1982,46 @@ async def extract_glossary_file_endpoint(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=f"Failed to extract glossary from file: {str(e)}")
 
 
+# ── Centroid: AI subtitle translation + linguistic QC ──────────────────────────
+@app.get("/api/centroid/status")
+async def centroid_status():
+    from app import centroid_client
+    return await centroid_client.status()
+
+
+@app.post("/api/centroid/translate")
+async def centroid_translate(payload: dict):
+    """Send SRT/events to Centroid and return translated SRT(s) per target language."""
+    from app import centroid_client
+    if not (payload.get("srt") or payload.get("cues") or payload.get("events")):
+        raise HTTPException(status_code=400, detail="Provide 'srt' or 'events'.")
+    if not (payload.get("target_langs") or payload.get("target_lang")):
+        raise HTTPException(status_code=400, detail="Choose at least one target language.")
+    body = {k: payload[k] for k in ("srt", "source_lang", "target_langs", "target_lang", "context", "glossary", "constraints") if payload.get(k)}
+    cues = payload.get("cues") or payload.get("events")
+    if cues and not body.get("srt"):
+        body["cues"] = [
+            {"start": e.get("start_time", e.get("start")), "end": e.get("end_time", e.get("end")), "text": e.get("text", "")}
+            for e in cues
+        ]
+    return await centroid_client.post("/subtitles/translate", body)
+
+
+@app.post("/api/centroid/qc")
+async def centroid_qc(payload: dict):
+    """Run Centroid linguistic QC on source/target cue pairs; returns issues with suggested fixes."""
+    from app import centroid_client
+    cues = payload.get("cues") or []
+    if not cues or not payload.get("target_lang"):
+        raise HTTPException(status_code=400, detail="Provide 'cues' (source + target) and 'target_lang'.")
+    body = {k: payload[k] for k in ("source_lang", "target_lang", "context", "glossary", "constraints", "include_technical") if payload.get(k) is not None}
+    body["cues"] = [
+        {"start": c.get("start"), "end": c.get("end"), "source": c.get("source", ""), "target": c.get("target", "")}
+        for c in cues
+    ]
+    return await centroid_client.post("/subtitles/qc", body)
+
+
 @app.post("/api/subtitle/lint")
 async def lint_subtitles_endpoint(payload: SubtitleLintRequest):
     """Lint subtitles for Netflix QC compliance with dynamic custom settings."""
@@ -1718,27 +2065,12 @@ async def gemini_fix_subtitles_endpoint(payload: dict):
     max_duration = float(payload.get("max_duration", 7.0))
     shot_changes = payload.get("shot_changes", [])
 
-    whisper_words = None
-    is_cloud = bool(os.getenv("RENDER") or os.getenv("PORT"))
-    enable_whisper = os.getenv("ENABLE_WHISPER", "true").lower() == "true"
-    whisper_model = os.getenv("WHISPER_MODEL", "tiny" if is_cloud else "base")
-    language = payload.get("language") or (active_sessions.get(video_id, {}).get("language") if video_id else None)
-    if enable_whisper and video_id:
-        video_path = resolve_active_session_video(video_id) or ""
-        audio_path = os.path.splitext(video_path)[0] + ".wav" if video_path else ""
-        if os.path.exists(audio_path):
-            try:
-                from app.whisper_aligner import get_whisper_word_timestamps
-                whisper_words = await asyncio.to_thread(get_whisper_word_timestamps, audio_path, language, whisper_model)
-            except Exception:
-                pass
-
     try:
         from app.gemini_qc_fixer import coordinate_gemini_qc_fix
         result = await asyncio.to_thread(
             coordinate_gemini_qc_fix,
             events=events,
-            whisper_words=whisper_words,
+            whisper_words=None,
             shot_changes=shot_changes,
             content_type=content_type,
             frame_rate=frame_rate,
@@ -1747,7 +2079,6 @@ async def gemini_fix_subtitles_endpoint(payload: dict):
             max_lines=max_lines,
             min_duration=min_duration,
             max_duration=max_duration,
-            audio_path=audio_path,
         )
         return result
     except Exception as e:
@@ -1757,14 +2088,14 @@ async def gemini_fix_subtitles_endpoint(payload: dict):
 
 
 @app.post("/api/subtitle/acoustic_sync")
-async def acoustic_sync_subtitles_endpoint(payload: dict):
+async def acoustic_sync_subtitles_endpoint(request: Request, payload: dict):
     """
-    Closed-loop acoustic synchronization:
-    Locks all subtitle events to exact audio speech timestamps using Whisper and VAD acoustic energy.
+    Acoustic synchronization:
+    Locks subtitle events to exact speech timestamps using ElevenLabs Scribe v2 word timing and local Netflix engine.
     """
     video_id = payload.get("video_id")
-    events = payload.get("events", [])
-    language = payload.get("language")
+    raw_events = payload.get("events", [])
+    language = payload.get("language", "auto")
     content_type = payload.get("content_type", "adult")
     frame_rate = float(payload.get("frame_rate", 24.0))
     cpl_limit = int(payload.get("cpl_limit", 42))
@@ -1773,6 +2104,7 @@ async def acoustic_sync_subtitles_endpoint(payload: dict):
     min_duration = float(payload.get("min_duration", 0.833))
     max_duration = float(payload.get("max_duration", 7.0))
     shot_changes = payload.get("shot_changes", [])
+    elevenlabs_api_key = payload.get("elevenlabs_api_key") or request.headers.get("x-elevenlabs-api-key")
 
     if not video_id:
         raise HTTPException(status_code=400, detail="video_id is required")
@@ -1781,92 +2113,75 @@ async def acoustic_sync_subtitles_endpoint(payload: dict):
     if not video_path or not os.path.exists(video_path):
         raise HTTPException(status_code=404, detail="Video session not found or expired.")
 
-    # Determine audio path (prioritize active session audio, then existing .wav, then extract)
-    audio_path = None
-    if video_id in active_sessions and active_sessions[video_id].get("audio_path"):
-        cand = active_sessions[video_id]["audio_path"]
-        if os.path.exists(cand):
-            audio_path = cand
+    # Convert event dicts to SubtitleEvent objects
+    events = [
+        SubtitleEvent(**e) if isinstance(e, dict) else e
+        for e in raw_events
+    ]
 
-    if not audio_path:
-        audio_cand = os.path.splitext(video_path)[0] + ".wav"
-        if os.path.exists(audio_cand):
-            audio_path = audio_cand
-        else:
-            try:
-                audio_info = extract_audio_from_video(video_path)
-                audio_path = audio_info.get("audio_path", "")
-            except Exception as ex:
-                raise HTTPException(status_code=500, detail=f"Failed to extract audio: {ex}")
+    # Check cached scribe words or transcribe
+    session_data = active_sessions.get(video_id, {})
+    words = session_data.get("scribe_words")
 
-    is_cloud = bool(os.getenv("RENDER") or os.getenv("PORT"))
-    whisper_model = payload.get("whisper_model") or os.getenv("WHISPER_MODEL", "tiny" if is_cloud else "base")
+    if not words:
+        # Determine audio path
+        audio_path = session_data.get("audio_path")
+        if not audio_path or not os.path.exists(audio_path):
+            audio_cand = os.path.splitext(video_path)[0] + ".wav"
+            if os.path.exists(audio_cand):
+                audio_path = audio_cand
+            else:
+                try:
+                    audio_info = extract_audio_from_video(video_path)
+                    audio_path = audio_info.get("audio_path", "")
+                except Exception as ex:
+                    raise HTTPException(status_code=500, detail=f"Failed to extract audio: {ex}")
 
-    try:
-        from app.whisper_aligner import get_whisper_word_timestamps, align_subtitle_timestamps
-        from app.gemini_subtitle_generator import polish_subtitle_events_netflix
-
-        # 1. Run Whisper to get acoustic words
-        whisper_words = await asyncio.to_thread(
-            get_whisper_word_timestamps,
-            audio_path,
-            language if language and language.lower() not in ["auto", "auto-detect"] else None,
-            whisper_model
+        from app.elevenlabs_service import transcribe_with_scribe_v2
+        stt_res = await transcribe_with_scribe_v2(
+            audio_path=audio_path,
+            language=language,
+            diarize=True,
+            tag_audio_events=False,
+            api_key=elevenlabs_api_key
         )
+        words = stt_res.get("words", [])
+        if video_id in active_sessions:
+            active_sessions[video_id]["scribe_words"] = words
 
-        if not whisper_words:
-            raise HTTPException(status_code=500, detail="Whisper could not detect speech or failed to transcribe.")
+    # Align with local Netflix Engine
+    aligned = align_subtitles_to_words(
+        events=events,
+        words=words,
+        language=language,
+        frame_rate=frame_rate,
+        min_duration=min_duration,
+        max_duration=max_duration,
+        cpl_limit=cpl_limit,
+        max_cps=max_cps
+    )
 
-        # 2. Sequential Acoustic Alignment
-        aligned = await asyncio.to_thread(
-            align_subtitle_timestamps,
-            events,
-            whisper_words,
-            12.0,
-            0.0,
-            audio_path
-        )
+    # Audit Netflix compliance
+    aligned, total_errs, total_warns, compliance_score, cps_stats = audit_netflix_compliance(
+        events=aligned,
+        language=language,
+        content_type=content_type,
+        frame_rate=frame_rate,
+        shot_changes=shot_changes
+    )
 
-        # 3. Netflix Polish
-        polished = await asyncio.to_thread(
-            polish_subtitle_events_netflix,
-            events=aligned,
-            cpl_limit=cpl_limit,
-            max_cps=max_cps,
-            max_lines=max_lines,
-            min_duration=min_duration,
-            max_duration=max_duration,
-            frame_rate=frame_rate,
-            shot_changes=shot_changes,
-            prev_batch_end=0.0
-        )
-
-        # 4. Lint result
-        lint_result = lint_all_subtitles(
-            events=polished,
-            shot_changes=shot_changes,
-            content_type=content_type,
-            frame_rate=frame_rate,
-            custom_cpl=cpl_limit,
-            custom_cps=max_cps,
-            custom_max_lines=max_lines,
-            custom_min_duration=min_duration,
-            custom_max_duration=max_duration
-        )
-
-        return {
-            "events": polished,
-            "lint_result": lint_result,
-            "matched_words_count": len(whisper_words),
-            "whisper_model": whisper_model,
-            "message": f"Successfully synchronized {len(polished)} subtitles with audio acoustics."
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Acoustic synchronization failed: {str(e)}")
+    return {
+        "events": [e.model_dump() for e in aligned],
+        "lint_result": {
+            "total_errors": total_errs,
+            "total_warnings": total_warns,
+            "compliance_score": compliance_score,
+            "cps_stats": cps_stats.model_dump() if cps_stats else {}
+        },
+        "matched_words_count": len(words),
+        "engine": "ElevenLabs Scribe v2 + Netflix Timed Text Engine",
+        "message": f"Successfully synchronized {len(aligned)} subtitles to ElevenLabs acoustic words."
+    }
 
 
 @app.post("/api/subtitle/autofix")
@@ -1896,8 +2211,28 @@ async def autofix_subtitles_endpoint(payload: SubtitleAutoFixRequest):
 
 
 @app.post("/api/subtitle/export")
-async def export_subtitles_endpoint(payload: SubtitleExportRequest):
+async def export_subtitles_endpoint(payload: SubtitleExportRequest, request: Request):
     """Export subtitles to requested format."""
+    auth_header = request.headers.get("authorization")
+    if auth_header and auth_header.startswith("Bearer "):
+        try:
+            token = auth_header.split(" ")[1].strip()
+            from app.auth_module.models import AuthSession
+            from app.auth_module.database import SessionLocal
+            db_s = SessionLocal()
+            sess = db_s.query(AuthSession).filter(AuthSession.session_token == token, AuthSession.is_active == True).first()
+            if sess and sess.user and not getattr(sess.user, "can_export", True):
+                db_s.close()
+                raise HTTPException(
+                    status_code=403,
+                    detail="Subtitle export feature is currently disabled for your account by the administrator."
+                )
+            db_s.close()
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+
     try:
         events_dicts = [
             e.model_dump() if hasattr(e, "model_dump") else (dict(e) if isinstance(e, dict) else e.__dict__)

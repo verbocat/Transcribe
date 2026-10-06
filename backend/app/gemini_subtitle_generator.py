@@ -414,9 +414,18 @@ Your task is to generate millimeter-precise, timed subtitles following strict Ne
      * Postpositions must ALWAYS remain on the same line as the preceding noun (e.g. 'राहुल ने' together, 'घर में' together).
    - NEVER break across: title + name ('श्री' / 'श्रीमती' / 'डॉ.' + name, 'Mr.' / 'Mrs.' + name), article + noun, pronoun + verb, or split compound verb phrases.
 
-7. MULTI-SPEAKER & OVERLAPPING SPEECH (DUAL-SPEAKER HYPHENS):
+7. MULTI-SPEAKER & OVERLAPPING SPEECH (STRICT SPEAKER ISOLATION & NO CROSS-BLEED):
    - Identify speaker changes accurately from voice acoustics, timbre, pitch, gender, and conversational turns.
-   - When two speakers speak simultaneously, interrupt, or talk over one another:
+   - ABSOLUTE PROHIBITION ON CROSS-SPEAKER SENTENCE BLEED:
+     * NEVER attach the ending word(s) of Speaker 1's thought to the beginning of Speaker 2's line.
+     * When Speaker 1 says "I want to go there and enjoy" and Speaker 2 replies "Yeah it's a great place":
+       CLOSE Speaker 1's dialogue completely with "enjoy":
+       - Event 1 (Speaker 1): "I want to go there and enjoy."
+       - Event 2 (Speaker 2): "Yeah, it's a great place."
+       NEVER output: "I want to go there and" followed by "enjoy yeah it's a great place"!
+     * In Hindi: Never sever the verbal ending (e.g. 'चाहता हूँ', 'गया था', 'कर रहा था') and glue it to the next speaker's affirmation ('हाँ', 'सही बात है').
+     * If a speaker sighs or pauses mid-thought (e.g. "मैं वहाँ गया था पर…"): keep that thought together and append "…" to indicate the pause.
+   - When two speakers speak simultaneously or interrupt mid-sentence:
      * Format BOTH speakers in ONE subtitle event using hyphens:
        - [Speaker 1]: <dialogue 1>
        - [Speaker 2]: <dialogue 2>
@@ -661,7 +670,9 @@ def balance_text_to_lines(text: str, cpl_limit: int = 42, max_lines: int = 2) ->
         'ne', 'ko', 'se', 'ka', 'ke', 'ki', 'mein', 'me', 'par', 'pe', 'tak', 'liye', 'saath', 'dwara', 'wala', 'wale', 'wali',
         # Hindi auxiliaries when severed
         'है', 'हैं', 'था', 'थी', 'थे', 'होगा', 'होगी', 'होंगे', 'रहा', 'रही', 'रहे', 'सकता', 'सकती', 'सकते',
-        'hai', 'hain', 'tha', 'thi', 'the', 'hoga', 'hogi', 'honge', 'raha', 'rahi', 'rahe', 'sakta', 'sakti', 'sakte'
+        'चाहता', 'चाहती', 'चाहते', 'हूँ',
+        'hai', 'hain', 'tha', 'thi', 'the', 'hoga', 'hogi', 'honge', 'raha', 'rahi', 'rahe', 'sakta', 'sakti', 'sakte',
+        'chahta', 'chahti', 'chahte', 'hoon', 'hun', 'thaa'
     }
 
     # If already 2 lines provided by AI/editor that fit CPL and don't violate grammar, preserve them!
@@ -932,39 +943,56 @@ def split_and_balance_event(
     if not words:
         return []
     
+    total_len = sum(len(w) for w in words)
+    target_mid = total_len / 2.0
+    st = float(ev.get('start_time', 0.0))
+    et = float(ev.get('end_time', st + 2.0))
+    dur = max(1.0, et - st)
+
     # Check if can fit directly in <= max_lines
+    from app.dialogue_harmonizer import score_split_candidate, get_acoustic_gap_after_word
     lines = balance_text_to_lines(text, cpl_limit=cpl_limit, max_lines=max_lines)
-    if lines:
+
+    # However, if there is a distinct acoustic pause / sigh (>= 0.450s) within this sentence,
+    # it must be split across the pause so the viewer sees the subtitle break at the sigh!
+    has_significant_pause = False
+    if whisper_words and len(words) >= 4:
+        for i in range(1, len(words)):
+            approx_time = st + (sum(len(w) for w in words[:i]) / max(1, total_len)) * dur
+            gap = get_acoustic_gap_after_word(words[i - 1], words[i], approx_time, whisper_words=whisper_words)
+            if gap >= 0.450:
+                has_significant_pause = True
+                break
+
+    if lines and not has_significant_pause:
         ev['text'] = '\n'.join(lines)
         ev['lines'] = lines
         ev['cpl'] = max(len(l) for l in lines)
         return [ev]
         
-    # Cannot fit in 2 lines <= cpl_limit! Split into 2 sequential events at best midpoint
-    total_len = sum(len(w) for w in words)
-    target_mid = total_len / 2.0
+    # Cannot fit in 2 lines <= cpl_limit or has a distinct acoustic pause! Split into 2 sequential events
+
     cum = 0
     best_split = len(words) // 2
     best_pen = 999999
     for i in range(1, len(words)):
         cum += len(words[i - 1])
-        pen = abs(cum - target_mid)
         prev_w = words[i - 1]
-        next_w = words[i].lower().rstrip('.,!?:;--…।॥')
-        prev_w_clean = prev_w.lower().rstrip('.,!?:;--…।॥')
-        if prev_w.endswith((',', ';', '.', '!', '?', '--', '…', ':', '।', '॥')):
-            pen -= 80  # Dominant preference for natural sentence/clause punctuation!
-        elif next_w in ['and', 'but', 'or', 'so', 'that', 'who', 'which', 'because', 'when', 'if',
-                        'और', 'या', 'अथवा', 'लेकिन', 'मगर', 'किंतु', 'परंतु', 'क्योंकि', 'इसलिए', 'ताकि', 'कि', 'तो', 'जब', 'तब', 'अगर', 'यदि',
-                        'aur', 'ya', 'lekin', 'kyunki', 'isliye', 'taaki', 'agar']:
-            pen -= 45
-        elif next_w in {'ने', 'को', 'से', 'का', 'के', 'की', 'में', 'पर', 'पे', 'तक', 'लिए', 'साथ',
-                        'ne', 'ko', 'se', 'ka', 'ke', 'ki', 'mein', 'me', 'par', 'pe', 'tak'}:
-            pen += 2500  # Strictly avoid severing noun and postposition across events!
+        next_w = words[i]
 
-        bad_ends = {'a', 'an', 'the', 'mr.', 'mrs.', 'ms.', 'dr.', 'prof.', 'श्री', 'श्रीमती', 'डॉ.', 'wrong'}
-        if prev_w_clean in bad_ends or prev_w.lower() in bad_ends:
-            pen += 2500
+        # Calculate acoustic pause gap between prev_w and next_w using whisper_words
+        approx_time = st + (cum / max(1, total_len)) * dur
+        acoustic_gap = get_acoustic_gap_after_word(prev_w, next_w, approx_time, whisper_words=whisper_words)
+        is_trailing = prev_w.endswith(('…', '...', '--'))
+
+        pen = score_split_candidate(
+            prev_w=prev_w,
+            next_w=next_w,
+            cum_chars=cum,
+            target_mid=target_mid,
+            acoustic_gap=acoustic_gap,
+            is_trailing_hesitation=is_trailing
+        )
 
         if pen < best_pen:
             best_pen = pen
@@ -973,9 +1001,6 @@ def split_and_balance_event(
     words_a = words[:best_split]
     words_b = words[best_split:]
     
-    st = float(ev.get('start_time', 0.0))
-    et = float(ev.get('end_time', st + 2.0))
-    dur = max(1.0, et - st)
     ratio_a = max(0.2, min(0.8, sum(len(w) for w in words_a) / max(1, total_len)))
     
     dur_a = max(min_duration, round(dur * ratio_a, 3))
@@ -983,16 +1008,19 @@ def split_and_balance_event(
 
     # If Whisper words are available, anchor split_time to exact acoustic start of boundary word
     acoustic_split_found = False
+    prev_w_end = None
     if whisper_words and words_b:
         from app.whisper_aligner import _normalize_text
         target_b_word = _normalize_text(words_b[0])
         if target_b_word:
-            for w in whisper_words:
+            for idx_w, w in enumerate(whisper_words):
                 w_start = float(w.get("start", 0.0))
-                if (st + 0.3) <= w_start <= (et - 0.3):
+                if (st - 0.2) <= w_start <= (et + 0.2):
                     if _normalize_text(w.get("word", "")) == target_b_word:
                         split_time = round(w_start, 3)
                         acoustic_split_found = True
+                        if idx_w > 0:
+                            prev_w_end = float(whisper_words[idx_w - 1].get("end", 0.0))
                         break
 
     # Snap split point to natural acoustic pause between words if not already anchored
@@ -1006,7 +1034,11 @@ def split_and_balance_event(
     ev_a = dict(ev)
     ev_a['text'] = ' '.join(words_a)
     ev_a['start_time'] = st
-    ev_a['end_time'] = round(split_time - min_gap_sec, 3)
+    # If a natural acoustic pause exists before words_b (>= 250ms), snap ev_a end_time to the end of words_a!
+    if prev_w_end and (split_time - prev_w_end >= 0.25):
+        ev_a['end_time'] = round(prev_w_end, 3)
+    else:
+        ev_a['end_time'] = round(split_time - min_gap_sec, 3)
     
     ev_b = dict(ev)
     ev_b['text'] = ' '.join(words_b)
@@ -1764,6 +1796,10 @@ def generate_subtitles(
     from app.netflix_linter import split_multi_speaker_subtitles
     raw_subtitles = split_multi_speaker_subtitles(raw_subtitles, frame_rate=frame_rate, min_duration=min_duration)
 
+    # Stage 0B: Harmonize dialogue turns across speaker seams (prevent tail words bleeding into next speaker)
+    from app.dialogue_harmonizer import harmonize_dialogue_turns
+    raw_subtitles = harmonize_dialogue_turns(raw_subtitles, whisper_words=whisper_words, language=resolved_language)
+
     # Stage 1A: Heal any cross-event dangling phrases (e.g. 'the wrong' | 'bedroom' or 'Mrs.' | 'Rutherford')
     raw_subtitles = heal_cross_event_dangling_phrases(raw_subtitles, cpl_limit=cpl_limit, max_lines=max_lines)
 
@@ -1885,7 +1921,9 @@ async def generate_subtitles_stream(
     batch_mode: str = "all",
     user_feedback: Optional[str] = None,
     custom_frame_rate: Optional[float] = None,
-    project_glossary: Optional[List[str]] = None
+    project_glossary: Optional[List[str]] = None,
+    user_id: Optional[str] = None,
+    video_id: Optional[str] = None
 ) -> AsyncGenerator[str, None]:
     """Progressive Batch-wise SSE Stream generator with resume capability, single-batch review pause, and user feedback injection."""
     resolved_language, resolved_script = normalize_language_and_script(language, script)
@@ -1913,7 +1951,7 @@ async def generate_subtitles_stream(
     
     all_raw_subtitles = []
     all_aligned_subtitles = []
-    video_id = str(uuid.uuid4())[:8]
+    video_id = video_id or str(uuid.uuid4())[:8]
     total_duration = 0.0
     shot_changes = []
     frame_rate = 24.0
@@ -1924,14 +1962,18 @@ async def generate_subtitles_stream(
         yield f"data: {json.dumps({'type': 'init_start', 'stage': 'Initializing media pipeline...'})}\n\n"
 
         # 1. Extract audio
+        yield ": keepalive\n\n"
         audio_info = await asyncio.to_thread(extract_audio_from_video, video_path)
+        yield ": keepalive\n\n"
         audio_path_out = audio_info.get("audio_path")
         if not audio_path_out or not os.path.exists(audio_path_out):
             yield f"data: {json.dumps({'type': 'stream_error', 'error': 'Failed to extract audio from video'})}\n\n"
             return
             
         # 2. Detect shot changes & metadata
+        yield ": keepalive\n\n"
         shot_changes = await asyncio.to_thread(detect_shot_changes, video_path)
+        yield ": keepalive\n\n"
         video_meta = await asyncio.to_thread(get_video_metadata, video_path)
         detected_fps = float(video_meta.get("frame_rate", 24.0))
         if custom_frame_rate is not None and float(custom_frame_rate) > 0:
@@ -1967,13 +2009,15 @@ async def generate_subtitles_stream(
         if (start_time_sec is None or start_time_sec <= 0.0) and prev_batch_end > 0.0 and prev_batch_end < total_duration:
             start_time_sec = prev_batch_end
 
+        yield ": keepalive\n\n"
         if start_time_sec is not None and start_time_sec > 0.0:
             effective_start = max(0.0, min(start_time_sec, max(0.0, total_duration - 0.5)))
             if prev_batch_end < effective_start or prev_batch_end > effective_start + 5.0:
                 prev_batch_end = effective_start
             remaining_dur = total_duration - effective_start
             if remaining_dur > 60.0:
-                chunks = find_dialogue_split_points(
+                chunks = await asyncio.to_thread(
+                    find_dialogue_split_points,
                     audio_path_out,
                     target_chunk_sec=90.0,
                     min_chunk_sec=60.0,
@@ -1983,7 +2027,8 @@ async def generate_subtitles_stream(
             else:
                 chunks = [(round(effective_start, 3), round(total_duration, 3))]
         elif total_duration > 60.0:
-            chunks = find_dialogue_split_points(
+            chunks = await asyncio.to_thread(
+                find_dialogue_split_points,
                 audio_path_out,
                 target_chunk_sec=90.0,
                 min_chunk_sec=60.0,
@@ -2022,6 +2067,51 @@ async def generate_subtitles_stream(
         # consistent across all batches even when Gemini resets each chunk.
         speaker_registry = {}    # e.g. {'Speaker 1': {'count': 12, 'first_seen': 1}}
         speaker_lock_clause = ""  # Injected into prompt from batch 2 onwards
+
+        # Telemetry initialization for Admin Observability
+        telemetry_run_id = str(uuid.uuid4())
+        telemetry_start_time = time.time()
+        gemini_input_tokens_total = 0
+        gemini_output_tokens_total = 0
+        whisper_audio_seconds_total = 0.0
+        batches_completed_count = 0
+
+        if user_id and video_id:
+            try:
+                from app.auth_module.database import SessionLocal
+                from app.auth_module.models import SubtitleGenerationRun, UserMediaAsset
+                from sqlalchemy import func
+                db_tel = SessionLocal()
+                try:
+                    prev_runs = db_tel.query(func.count(SubtitleGenerationRun.id)).filter(
+                        SubtitleGenerationRun.video_id == video_id
+                    ).scalar() or 0
+                    run_idx = prev_runs + 1
+
+                    media_asset = db_tel.query(UserMediaAsset).filter(UserMediaAsset.video_id == video_id).first()
+                    asset_id = media_asset.id if media_asset else None
+
+                    sub_run = SubtitleGenerationRun(
+                        id=telemetry_run_id,
+                        user_id=user_id,
+                        media_asset_id=asset_id,
+                        video_id=video_id,
+                        run_index_for_video=run_idx,
+                        target_language=resolved_language,
+                        mode=content_type,
+                        total_batches=total_chunks,
+                        batches_completed=0,
+                        status="in_progress"
+                    )
+                    db_tel.add(sub_run)
+                    db_tel.commit()
+                except Exception as tel_e:
+                    db_tel.rollback()
+                    log_terminal(f"Non-fatal run creation telemetry warning: {tel_e}")
+                finally:
+                    db_tel.close()
+            except Exception:
+                pass
 
         # Process each batch from start_chunk onwards
         for chunk_idx, (chunk_s, chunk_e) in enumerate(chunks, 1):
@@ -2224,6 +2314,9 @@ async def generate_subtitles_stream(
 
                             if response is not None:
                                 succeeded_candidate = candidate
+                                if hasattr(response, "usage_metadata") and response.usage_metadata:
+                                    gemini_input_tokens_total += getattr(response.usage_metadata, "prompt_token_count", 0) or 0
+                                    gemini_output_tokens_total += getattr(response.usage_metadata, "candidates_token_count", 0) or 0
                                 break
                         except Exception as e:
                             last_error = e
@@ -2471,12 +2564,18 @@ async def generate_subtitles_stream(
                     log_terminal(f"Batch {chunk_idx}: Speaker registry locked: {list(speaker_registry.keys())}")
 
                 all_aligned_subtitles.extend(processed_batch)
+                whisper_audio_seconds_total += (slice_e - slice_s)
+                batches_completed_count += 1
                 
                 # 6. Yield this batch AND notification for manual QC
                 fallback_tag = " (Whisper fallback)" if is_whisper_fallback else ""
+                batch_msg = f"Part {chunk_idx}{fallback_tag} complete: No spoken dialogue detected in this section (background score/silence)." if len(processed_batch) == 0 else f"Part {chunk_idx}{fallback_tag} is complete! You can do manual QC on it now."
                 yield f"data: {json.dumps({'type': 'batch', 'chunk_index': chunk_idx, 'total_chunks': total_chunks, 'events': processed_batch, 'fallback': is_whisper_fallback})}\n\n"
-                yield f"data: {json.dumps({'type': 'batch_ready', 'chunk_index': chunk_idx, 'total_chunks': total_chunks, 'message': f'Part {chunk_idx}{fallback_tag} is complete! You can do manual QC on it now.'})}\n\n"
-                log_terminal(f"Yielded Batch {chunk_idx}/{total_chunks} with {len(processed_batch)} events{fallback_tag}. User notified: ready for manual QC!")
+                yield f"data: {json.dumps({'type': 'batch_ready', 'chunk_index': chunk_idx, 'total_chunks': total_chunks, 'message': batch_msg})}\n\n"
+                if len(processed_batch) == 0:
+                    log_terminal(f"Yielded Batch {chunk_idx}/{total_chunks} (0 dialogue events — background score/silence). Continuing to next batch...")
+                else:
+                    log_terminal(f"Yielded Batch {chunk_idx}/{total_chunks} with {len(processed_batch)} events{fallback_tag}. User notified: ready for manual QC!")
                 
             except Exception as chunk_err:
                 import traceback
@@ -2547,10 +2646,73 @@ async def generate_subtitles_stream(
         yield f"data: {json.dumps({'type': 'complete', 'result': final_res})}\n\n"
         log_terminal(f"Stream Complete! Total Events: {len(final_res.get('events', []))} | QC Score: {final_res.get('compliance_score', 100)}%")
 
+        # Finalize telemetry run as completed
+        if user_id and video_id:
+            try:
+                from app.auth_module.database import SessionLocal
+                from app.auth_module.models import SubtitleGenerationRun, User
+                from datetime import timezone
+                db_tel = SessionLocal()
+                try:
+                    run_rec = db_tel.query(SubtitleGenerationRun).filter(SubtitleGenerationRun.id == telemetry_run_id).first()
+                    if run_rec:
+                        dur_wall = time.time() - telemetry_start_time
+                        gemini_cost = (gemini_input_tokens_total / 1_000_000) * 0.075 + (gemini_output_tokens_total / 1_000_000) * 0.30
+                        whisper_cost = (whisper_audio_seconds_total / 60.0) * 0.002
+                        total_cost = gemini_cost + whisper_cost
+
+                        run_rec.gemini_input_tokens = gemini_input_tokens_total
+                        run_rec.gemini_output_tokens = gemini_output_tokens_total
+                        run_rec.whisper_audio_seconds = round(whisper_audio_seconds_total, 2)
+                        run_rec.batches_completed = batches_completed_count
+                        run_rec.total_duration_seconds = round(dur_wall, 2)
+                        run_rec.gemini_cost_usd = round(gemini_cost, 5)
+                        run_rec.whisper_cost_usd = round(whisper_cost, 5)
+                        run_rec.total_run_cost_usd = round(total_cost, 5)
+                        run_rec.status = "completed"
+                        run_rec.completed_at = datetime.now(timezone.utc)
+
+                        user_rec = db_tel.query(User).filter(User.id == user_id).first()
+                        if user_rec:
+                            user_rec.total_spend_usd = round((user_rec.total_spend_usd or 0.0) + total_cost, 5)
+
+                        db_tel.commit()
+                except Exception as tel_e:
+                    db_tel.rollback()
+                    log_terminal(f"Non-fatal completion telemetry warning: {tel_e}")
+                finally:
+                    db_tel.close()
+            except Exception:
+                pass
+
     except Exception as fatal_stream_err:
         import traceback
         traceback.print_exc()
         log_terminal(f"FATAL STREAM ERROR: {fatal_stream_err}")
+
+        # Mark telemetry run as failed
+        if user_id and video_id:
+            try:
+                from app.auth_module.database import SessionLocal
+                from app.auth_module.models import SubtitleGenerationRun
+                from datetime import timezone
+                db_tel = SessionLocal()
+                try:
+                    run_rec = db_tel.query(SubtitleGenerationRun).filter(SubtitleGenerationRun.id == telemetry_run_id).first()
+                    if run_rec:
+                        dur_wall = time.time() - telemetry_start_time
+                        run_rec.status = "failed"
+                        run_rec.error_message = str(fatal_stream_err)
+                        run_rec.total_duration_seconds = round(dur_wall, 2)
+                        run_rec.completed_at = datetime.now(timezone.utc)
+                        db_tel.commit()
+                except Exception:
+                    db_tel.rollback()
+                finally:
+                    db_tel.close()
+            except Exception:
+                pass
+
         yield f"data: {json.dumps({'type': 'stream_error', 'error': str(fatal_stream_err)})}\n\n"
         if all_aligned_subtitles:
             # Yield partial completion with all subtitles generated so far

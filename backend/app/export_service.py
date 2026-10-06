@@ -397,3 +397,94 @@ def export_netflix_ttml(events: list, language: str = "en") -> str:
     xml.append('</tt>')
     
     return "\n".join(xml)
+
+
+# --- DUBBING SCRIPT ---
+
+DUBBING_FPS = 25  # reference dubbing scripts use HH:MM:SS:FF with frames 00-24
+
+
+def _dubbing_timecode(seconds: float, fps: int = DUBBING_FPS) -> str:
+    """Seconds -> HH:MM:SS:FF timecode (frame-accurate, rounded to nearest frame)."""
+    total_frames = max(0, int(round(float(seconds or 0.0) * fps)))
+    frames = total_frames % fps
+    total_secs = total_frames // fps
+    return f"{total_secs // 3600:02d}:{(total_secs % 3600) // 60:02d}:{total_secs % 60:02d}:{frames:02d}"
+
+
+def export_to_dubbing_script(
+    result: TranscriptionResult,
+    output_path: str,
+    speaker_map: Optional[Dict[str, str]] = None,
+) -> str:
+    """Generate the Dubbing Script workbook: a dialogue sheet plus a character list sheet.
+
+    speaker_map renames speakers (original label -> new character name); every segment
+    carrying the original label gets the new name, and speakers mapped to the same name merge.
+    """
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+
+    speaker_map = {k: v.strip() for k, v in (speaker_map or {}).items() if isinstance(v, str) and v.strip()}
+
+    def char_name(seg: Segment) -> str:
+        raw = (seg.speaker or "").strip()
+        return speaker_map.get(raw, raw)
+
+    header_fill = PatternFill("solid", fgColor="00B0F0")
+    header_font = Font(bold=True)
+    side = Side(style="thin")
+    border = Border(left=side, right=side, top=side, bottom=side)
+    center = Alignment(horizontal="center", vertical="center")
+    wrap = Alignment(vertical="center", wrap_text=True)
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = (Path(result.filename).stem or "Dubbing Script")[:31]
+
+    headers = ["Sr. No.", "Time In", "Time Out", "Dialogue", "Character"]
+    for col, title in enumerate(headers, start=2):
+        c = ws.cell(row=2, column=col, value=title)
+        c.fill, c.font, c.border, c.alignment = header_fill, header_font, border, center
+
+    characters: Dict[str, Dict[str, int]] = {}
+    prev_char = None
+    row = 3
+    for seg in sorted(result.segments, key=lambda s: s.start_time):
+        text = (seg.transcript or "").strip()
+        if not text:
+            continue
+        name = char_name(seg)
+        if name:
+            characters.setdefault(name, {})
+            characters[name][seg.gender or "Unknown"] = characters[name].get(seg.gender or "Unknown", 0) + 1
+        # Character is written only when the speaker changes from the previous line.
+        show_char = name if name and name != prev_char else None
+        prev_char = name or prev_char
+
+        values = [row - 2, _dubbing_timecode(seg.start_time), _dubbing_timecode(seg.end_time), text, show_char]
+        for col, val in enumerate(values, start=2):
+            c = ws.cell(row=row, column=col, value=val)
+            c.border = border
+            c.alignment = wrap if col == 5 else center
+        row += 1
+
+    for col, width in {"A": 3, "B": 7, "C": 13, "D": 13, "E": 76, "F": 18}.items():
+        ws.column_dimensions[col].width = width
+    ws.freeze_panes = "B3"
+
+    ws2 = wb.create_sheet("Character List")
+    for col, title in enumerate(["Sr. No.", "Character", "Gender"], start=2):
+        c = ws2.cell(row=2, column=col, value=title)
+        c.fill, c.font, c.border, c.alignment = header_fill, header_font, border, center
+    for i, name in enumerate(sorted(characters, key=str.casefold), start=1):
+        genders = characters[name]
+        gender = max(genders, key=genders.get)  # most frequent gender label for that character
+        for col, val in enumerate([i, name, gender], start=2):
+            c = ws2.cell(row=i + 2, column=col, value=val)
+            c.border, c.alignment = border, center
+    for col, width in {"A": 3, "B": 7, "C": 22, "D": 10}.items():
+        ws2.column_dimensions[col].width = width
+
+    wb.save(output_path)
+    return output_path

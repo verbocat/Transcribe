@@ -42,3 +42,13 @@ Thumbs.db
 # Local Plan Documents
 Plan 1*
 Plan 2*
+
+# Downloaded ML models (fetched on first use)
+backend/models/
+
+# Local databases, bundled binaries and scratch material
+*.db
+*.sqlite3
+backend/bin/
+scratch/
+screenshotfiles/

@@ -1,4 +1,4 @@
-import { API_BASE } from '../config';
+import { API_BASE, getApiBase } from '../config';
 
 async function fetchWithTimeout(url, options = {}, timeoutMs = 12000) {
   const controller = new AbortController();
@@ -11,7 +11,8 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 12000) {
     return res;
   } catch (err) {
     if (err.name === 'AbortError') {
-      throw new Error(`Connection timed out after ${timeoutMs / 1000}s. Please verify the backend server is running on localhost:8000.`);
+      const activeTarget = getApiBase() || 'http://localhost:8001';
+      throw new Error(`Connection timed out after ${timeoutMs / 1000}s. Please verify the backend server is running and reachable at ${activeTarget}.`);
     }
     throw err;
   } finally {
@@ -23,7 +24,8 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 12000) {
  * Authentication API Client for VerboLabs Auth
  */
 export async function signupUser({ name, email, password, confirm_password, employee_id }) {
-  const res = await fetchWithTimeout(`${API_BASE}/api/auth/signup`, {
+  const base = getApiBase();
+  const res = await fetchWithTimeout(`${base}/api/auth/signup`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -43,7 +45,8 @@ export async function signupUser({ name, email, password, confirm_password, empl
 }
 
 export async function loginUser({ name, email, password, operating_location, bot_challenge_token }) {
-  const res = await fetchWithTimeout(`${API_BASE}/api/auth/login`, {
+  const base = getApiBase();
+  const res = await fetchWithTimeout(`${base}/api/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -66,7 +69,8 @@ export async function loginUser({ name, email, password, operating_location, bot
 }
 
 export async function getBotChallenge() {
-  const res = await fetchWithTimeout(`${API_BASE}/api/auth/bot-challenge`, {}, 8000);
+  const base = getApiBase();
+  const res = await fetchWithTimeout(`${base}/api/auth/bot-challenge`, {}, 8000);
   const data = await res.json();
   if (!res.ok) {
     throw new Error(data.detail || 'Failed to fetch verification challenge.');
@@ -75,7 +79,8 @@ export async function getBotChallenge() {
 }
 
 export async function getTakeoverStatus(takeover_id) {
-  const res = await fetchWithTimeout(`${API_BASE}/api/auth/takeover/status?takeover_id=${encodeURIComponent(takeover_id)}`, {}, 8000);
+  const base = getApiBase();
+  const res = await fetchWithTimeout(`${base}/api/auth/takeover/status?takeover_id=${encodeURIComponent(takeover_id)}`, {}, 8000);
   const data = await res.json();
   if (!res.ok) {
     throw new Error(data.detail || 'Failed to check takeover status.');
@@ -88,7 +93,8 @@ export async function submitTakeoverDecision({ takeover_id, decision, token }) {
   if (token) {
     headers['Authorization'] = `Bearer ${token}`;
   }
-  const res = await fetchWithTimeout(`${API_BASE}/api/auth/takeover/decision`, {
+  const base = getApiBase();
+  const res = await fetchWithTimeout(`${base}/api/auth/takeover/decision`, {
     method: 'POST',
     headers,
     body: JSON.stringify({
@@ -104,7 +110,8 @@ export async function submitTakeoverDecision({ takeover_id, decision, token }) {
 }
 
 export async function verifyLoginOtp({ challenge_id, otp }) {
-  const res = await fetchWithTimeout(`${API_BASE}/api/auth/verify-otp`, {
+  const base = getApiBase();
+  const res = await fetchWithTimeout(`${base}/api/auth/verify-otp`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -121,7 +128,8 @@ export async function verifyLoginOtp({ challenge_id, otp }) {
 }
 
 export async function resendLoginOtp({ challenge_id }) {
-  const res = await fetchWithTimeout(`${API_BASE}/api/auth/resend-otp`, {
+  const base = getApiBase();
+  const res = await fetchWithTimeout(`${base}/api/auth/resend-otp`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ challenge_id })
@@ -135,7 +143,8 @@ export async function resendLoginOtp({ challenge_id }) {
 }
 
 export async function verifyEmailToken(token) {
-  const res = await fetchWithTimeout(`${API_BASE}/api/auth/verify-email?token=${encodeURIComponent(token)}`, {}, 10000);
+  const base = getApiBase();
+  const res = await fetchWithTimeout(`${base}/api/auth/verify-email?token=${encodeURIComponent(token)}`, {}, 10000);
   const data = await res.json();
   if (!res.ok) {
     throw new Error(data.detail || 'Verification failed or link expired.');
@@ -144,7 +153,8 @@ export async function verifyEmailToken(token) {
 }
 
 export async function resendVerification(email) {
-  const res = await fetchWithTimeout(`${API_BASE}/api/auth/resend-verification`, {
+  const base = getApiBase();
+  const res = await fetchWithTimeout(`${base}/api/auth/resend-verification`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email })
@@ -158,7 +168,8 @@ export async function resendVerification(email) {
 }
 
 export async function requestPasswordReset(email) {
-  const res = await fetchWithTimeout(`${API_BASE}/api/auth/forgot-password`, {
+  const base = getApiBase();
+  const res = await fetchWithTimeout(`${base}/api/auth/forgot-password`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email })
@@ -172,7 +183,8 @@ export async function requestPasswordReset(email) {
 }
 
 export async function resetPassword({ token, password, confirm_password }) {
-  const res = await fetchWithTimeout(`${API_BASE}/api/auth/reset-password`, {
+  const base = getApiBase();
+  const res = await fetchWithTimeout(`${base}/api/auth/reset-password`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -190,22 +202,26 @@ export async function resetPassword({ token, password, confirm_password }) {
 }
 
 export async function fetchCurrentUser(token) {
-  const res = await fetchWithTimeout(`${API_BASE}/api/auth/me`, {
+  const base = getApiBase();
+  const res = await fetchWithTimeout(`${base}/api/auth/me`, {
     headers: {
       'Authorization': `Bearer ${token}`
     }
   }, 8000);
 
-  const data = await res.json();
+  const data = await res.json().catch(() => ({ detail: res.statusText || 'Response error' }));
   if (!res.ok) {
-    throw new Error(data.detail || 'Session expired.');
+    const error = new Error(data.detail || 'Session expired.');
+    error.status = res.status;
+    throw error;
   }
   return data.user;
 }
 
 export async function logoutUser(token) {
   try {
-    await fetchWithTimeout(`${API_BASE}/api/auth/logout`, {
+    const base = getApiBase();
+    await fetchWithTimeout(`${base}/api/auth/logout`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${token}`

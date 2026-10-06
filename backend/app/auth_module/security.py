@@ -3,32 +3,23 @@ import secrets
 import hashlib
 from typing import Tuple, List, Dict, Any
 
-# Domain constraint
-ALLOWED_DOMAIN_SUFFIX = ".verbolabs.com"
-ALLOWED_PRIMARY_DOMAIN = "@verbolabs.com"
+EMAIL_REGEX = re.compile(r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$")
 
 def validate_verbolabs_email(email: str) -> Tuple[bool, str]:
     """
-    Validates that the email belongs to verbolabs.com domain.
-    Accepts e.g. name@verbolabs.com or name@dept.verbolabs.com
+    Validates email format. Global email addresses from any valid domain are permitted worldwide.
     """
     if not email or not isinstance(email, str):
         return False, "Email is required."
     
     clean_email = email.strip().lower()
     
-    # Must contain @
-    if "@" not in clean_email:
-        return False, "Invalid email format."
-    
-    local_part, domain_part = clean_email.split("@", 1)
-    if not local_part:
-        return False, "Invalid email username."
-        
-    if not (domain_part == "verbolabs.com" or domain_part.endswith(ALLOWED_DOMAIN_SUFFIX)):
-        return False, "Access restricted: Only official @verbolabs.com email addresses are permitted to register or log in."
+    if "@" not in clean_email or not EMAIL_REGEX.match(clean_email):
+        return False, "Please enter a valid email address."
         
     return True, ""
+
+validate_user_email = validate_verbolabs_email
 
 
 def check_password_policy(password: str) -> Dict[str, Any]:

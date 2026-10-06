@@ -47,7 +47,7 @@ export default function LogoutConfirmModal({ isOpen, onClose, onConfirm, user })
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className={`w-full max-w-md bg-[#14151a] border border-[#262734] rounded-2xl p-6 shadow-[0_25px_60px_-15px_rgba(0,0,0,0.9),0_0_20px_rgba(0,229,190,0.06)] relative overflow-hidden ${
+        className={`w-full max-w-md bg-[var(--kt-s1)] border border-[var(--kt-s4)] rounded-2xl p-6 shadow-[0_25px_60px_-15px_rgba(0,0,0,0.9),0_0_20px_rgba(var(--kt-accent-rgb),0.06)] relative overflow-hidden ${
           isClosing ? 'animate-mac-squish-exit' : 'animate-mac-squish'
         }`}
       >
@@ -58,7 +58,7 @@ export default function LogoutConfirmModal({ isOpen, onClose, onConfirm, user })
         <button
           type="button"
           onClick={handleDismiss}
-          className="absolute top-4 right-4 p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-[#22232c] border border-transparent hover:border-[#2f3142] transition-colors cursor-pointer"
+          className="absolute top-4 right-4 p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-[var(--kt-s3)] border border-transparent hover:border-[var(--kt-s5)] transition-colors cursor-pointer"
           title="Close dialog (Esc)"
         >
           <X size={16} />
@@ -77,7 +77,7 @@ export default function LogoutConfirmModal({ isOpen, onClose, onConfirm, user })
 
         {/* User Card Summary */}
         {user && (
-          <div className="mb-4 p-3 rounded-xl bg-[#0e0f12] border border-[#262734] flex items-center justify-between gap-3">
+          <div className="mb-4 p-3 rounded-xl bg-[var(--kt-s0)] border border-[var(--kt-s4)] flex items-center justify-between gap-3">
             <div className="flex items-center gap-2.5 min-w-0">
               <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#0284c7] to-[#2563eb] flex items-center justify-center text-white font-bold text-xs shrink-0 shadow-inner">
                 {user.name ? user.name.charAt(0).toUpperCase() : 'U'}
@@ -88,7 +88,7 @@ export default function LogoutConfirmModal({ isOpen, onClose, onConfirm, user })
               </div>
             </div>
             {user.operating_location && (
-              <span className="shrink-0 px-2 py-0.5 rounded text-[10px] font-medium bg-[#1a1b24] text-[#00e5be] border border-[#262734]">
+              <span className="shrink-0 px-2 py-0.5 rounded text-[10px] font-medium bg-[var(--kt-s3)] text-[var(--kt-accent)] border border-[var(--kt-s4)]">
                 {user.operating_location === 'In Office' ? '🏢 Office' : '🏠 Remote'}
               </span>
             )}
@@ -101,11 +101,11 @@ export default function LogoutConfirmModal({ isOpen, onClose, onConfirm, user })
         </p>
 
         {/* Action Buttons */}
-        <div className="flex items-center justify-end gap-3 pt-2 border-t border-[#22232c]">
+        <div className="flex items-center justify-end gap-3 pt-2 border-t border-[var(--kt-s3)]">
           <button
             type="button"
             onClick={handleDismiss}
-            className="px-4 py-2 rounded-xl text-xs font-semibold bg-[#181920] hover:bg-[#22232c] text-slate-300 hover:text-white border border-[#262734] transition-colors cursor-pointer"
+            className="px-4 py-2 rounded-xl text-xs font-semibold bg-[var(--kt-s2)] hover:bg-[var(--kt-s3)] text-slate-300 hover:text-white border border-[var(--kt-s4)] transition-colors cursor-pointer"
           >
             Stay Signed In
           </button>

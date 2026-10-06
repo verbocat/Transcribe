@@ -23,7 +23,8 @@ export default function NetflixQCPanel({
   onExport = () => {},
   onRebreakAll = () => {},
   onJumpToEvent = () => {},
-  onClose = null
+  onClose = null,
+  qcUnavailable = false
 }) {
   const isPassing = complianceScore >= 98;
   const isAmber = complianceScore >= 80 && complianceScore < 98;
@@ -111,19 +112,19 @@ export default function NetflixQCPanel({
   };
 
   return (
-    <div className="bg-[#14151a] border border-[#262734] rounded-2xl p-4 shadow-2xl flex flex-col gap-3.5 h-full overflow-y-auto custom-scrollbar text-slate-200">
+    <div className="bg-[var(--ss-panel)] border border-[var(--ss-line)] rounded-none p-4 shadow-2xl flex flex-col gap-3.5 h-full overflow-y-auto custom-scrollbar text-slate-200">
       {/* Header with Close Button */}
-      <div className="flex items-center justify-between pb-2 border-b border-[#262734]">
+      <div className="flex items-center justify-between pb-2 border-b border-[var(--ss-line)]">
         <div className="flex items-center gap-2">
-          <ShieldCheck className="w-4 h-4 text-[#00e5be]" />
-          <h3 className="font-bold text-xs uppercase tracking-wider text-slate-200">Netflix QC Audit Panel</h3>
+          <ShieldCheck className="w-4 h-4 text-[var(--ss-accent)]" />
+          <h3 className="font-semibold text-sm text-slate-200">Quality check</h3>
         </div>
         <div className="flex items-center gap-2">
-          <span className="text-[10px] font-semibold text-slate-400">Target ≥ 98%</span>
+          <span className="text-[11px] text-slate-400">Netflix rules · target 98%</span>
           {onClose && (
             <button
               onClick={onClose}
-              className="p-1 rounded-lg hover:bg-[#22232c] text-slate-400 hover:text-white transition-colors cursor-pointer"
+              className="p-1 rounded-none hover:bg-[var(--ss-hover)] text-slate-400 hover:text-white transition-colors cursor-pointer"
               title="Close Panel"
             >
               <X className="w-4 h-4" />
@@ -133,9 +134,20 @@ export default function NetflixQCPanel({
       </div>
 
       {/* Compliance Scorecard */}
-      <div className={`p-3.5 rounded-xl border transition-all ${
+      {qcUnavailable ? (
+        <div className="p-3.5 border border-[var(--ss-line)] bg-[var(--ss-raised)] text-slate-200">
+          <div className="flex items-center gap-2 font-semibold text-sm">
+            <AlertTriangle className="w-4 h-4 text-amber-400" />
+            Quality check couldn't run
+          </div>
+          <p className="text-[11px] text-slate-400 mt-1.5 leading-relaxed">
+            The backend is offline, so these results are not up to date. Start the backend, then edit any subtitle to check again.
+          </p>
+        </div>
+      ) : (
+      <div className={`p-3.5 rounded-none border transition-all ${
         isPassing
-          ? 'bg-[#00e5be]/10 border-[#00e5be]/40 text-slate-200'
+          ? 'bg-[var(--ss-accent)]/10 border-[var(--ss-accent)]/40 text-slate-200'
           : isAmber
           ? 'bg-amber-950/30 border-amber-800/60 text-amber-200'
           : 'bg-rose-950/40 border-rose-800/60 text-rose-200'
@@ -143,135 +155,131 @@ export default function NetflixQCPanel({
         <div className="flex items-center justify-between">
           <div>
             <div className="flex items-baseline gap-2">
-              <span className={`text-2xl font-black font-mono ${
-                isPassing ? 'text-[#00e5be]' : isAmber ? 'text-amber-400' : 'text-rose-400'
+              <span className={`text-2xl font-semibold font-mono ${
+                isPassing ? 'text-[var(--ss-accent)]' : isAmber ? 'text-amber-400' : 'text-rose-400'
               }`}>
                 {complianceScore}%
               </span>
-              <span className={`text-[9px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded ${
+              <span className={`text-[9px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded-none ${
                 isPassing
-                  ? 'bg-[#00e5be]/20 text-[#00e5be] border border-[#00e5be]/40'
+                  ? 'bg-[var(--ss-accent)]/20 text-[var(--ss-accent)] border border-[var(--ss-accent)]/40'
                   : isAmber
                   ? 'bg-amber-900/60 text-amber-300 border border-amber-700'
                   : 'bg-rose-900/60 text-rose-300 border border-rose-700'
               }`}>
-                {isPassing ? 'PASSED' : isAmber ? 'NEEDS FIX' : 'VIOLATIONS'}
+                {isPassing ? 'Passing' : isAmber ? 'Needs fixes' : 'Failing'}
               </span>
             </div>
             <p className="text-[11px] text-slate-300 mt-1 font-medium">
-              {totalErrors} Errors · {totalWarnings} Warnings
+              {totalErrors} {totalErrors === 1 ? 'error' : 'errors'}, {totalWarnings} {totalWarnings === 1 ? 'warning' : 'warnings'}
             </p>
           </div>
 
           {isPassing ? (
-            <div className="h-9 w-9 rounded-xl bg-[#00e5be]/20 text-[#00e5be] flex items-center justify-center border border-[#00e5be]/40 shadow-[0_0_10px_rgba(0,229,190,0.2)]">
+            <div className="h-9 w-9 rounded-none bg-[var(--ss-accent)]/20 text-[var(--ss-accent)] flex items-center justify-center border border-[var(--ss-accent)]/40 shadow-[0_0_10px_rgba(var(--kt-accent-rgb),0.2)]">
               <CheckCircle2 className="w-5 h-5" />
             </div>
           ) : isAmber ? (
-            <div className="h-9 w-9 rounded-xl bg-amber-900/50 text-amber-400 flex items-center justify-center border border-amber-700">
+            <div className="h-9 w-9 rounded-none bg-amber-900/50 text-amber-400 flex items-center justify-center border border-amber-700">
               <AlertTriangle className="w-5 h-5" />
             </div>
           ) : (
-            <div className="h-9 w-9 rounded-xl bg-rose-900/50 text-rose-400 flex items-center justify-center border border-rose-700">
+            <div className="h-9 w-9 rounded-none bg-rose-900/50 text-rose-400 flex items-center justify-center border border-rose-700">
               <AlertCircle className="w-5 h-5" />
             </div>
           )}
         </div>
       </div>
-
-      {/* Action Buttons */}
-      <div className="flex flex-col gap-2">
-        {onAcousticSync && (
-          <button
-            onClick={onAcousticSync}
-            disabled={!events.length || isSyncingAudio}
-            className="w-full py-2 px-3 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 disabled:opacity-40 text-black font-bold rounded-xl shadow-[0_0_15px_rgba(16,185,129,0.25)] flex items-center justify-center gap-2 transition-all text-xs cursor-pointer border-none"
-            title="Re-synchronize all subtitle timestamps to exact speech audio acoustics via Whisper and VAD"
-          >
-            <Volume2 className={`w-4 h-4 ${isSyncingAudio ? 'animate-bounce text-black' : 'text-black'}`} />
-            {isSyncingAudio ? 'Acoustically Syncing Audio...' : 'Acoustic Audio Re-Sync (Whisper)'}
-          </button>
-        )}
-
-        {onGeminiFix && (
-          <button
-            onClick={onGeminiFix}
-            disabled={!events.length || isFixingWithGemini}
-            className="w-full py-2 px-3 bg-gradient-to-r from-[#00e5be] to-[#00b4d8] hover:from-[#00c9a7] hover:to-[#0096c7] disabled:opacity-40 text-black font-bold rounded-xl shadow-[0_0_15px_rgba(0,229,190,0.25)] flex items-center justify-center gap-2 transition-all text-xs cursor-pointer border-none"
-            title="Coordinate with Gemini AI to rewrite, split, and re-time violating subtitles"
-          >
-            <Sparkles className={`w-4 h-4 ${isFixingWithGemini ? 'animate-spin' : 'text-black'}`} />
-            {isFixingWithGemini ? 'Gemini AI Fixing Violations...' : 'AI Auto-Fix with Gemini'}
-          </button>
-        )}
-
-        <div className="grid grid-cols-2 gap-2">
-          <button
-            onClick={onAutoFix}
-            disabled={!events.length}
-            className="py-2 px-2.5 bg-[#181920] hover:bg-[#22232c] active:scale-95 disabled:opacity-40 text-[#00e5be] font-bold rounded-xl shadow-xs flex items-center justify-center gap-1.5 transition-all text-xs cursor-pointer border border-[#262734]"
-          >
-            <Wand2 className="w-3.5 h-3.5" />
-            Rule Auto-Fix
-          </button>
-          <button
-            onClick={onExport}
-            disabled={!events.length}
-            className="py-2 px-2.5 bg-[#00e5be] hover:bg-[#00c9a7] active:scale-95 disabled:opacity-40 text-black font-bold rounded-xl shadow-[0_0_12px_rgba(0,229,190,0.25)] flex items-center justify-center gap-1.5 transition-all text-xs cursor-pointer border-none"
-          >
-            <Download className="w-3.5 h-3.5" />
-            Export
-          </button>
-        </div>
-      </div>
-
-      {onRebreakAll && (
-        <button
-          onClick={onRebreakAll}
-          disabled={!events.length}
-          className="w-full py-1.5 px-2.5 bg-[#181920] hover:bg-[#22232c] text-cyan-400 font-semibold rounded-xl text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer border border-[#262734]"
-        >
-          <Layers className="w-3.5 h-3.5 text-cyan-400" />
-          Re-Break Lines (Netflix Rules)
-        </button>
       )}
 
+      {/* Actions: rule-based fix is the primary, free action; AI/audio tools are secondary */}
+      <div className="flex flex-col gap-2">
+        <button
+          onClick={onAutoFix}
+          disabled={!events.length || qcUnavailable}
+          className="w-full py-2 px-3 bg-[var(--ss-accent)] hover:bg-[var(--ss-accent-hover)] disabled:opacity-40 disabled:cursor-not-allowed text-[var(--ss-accent-ink)] font-semibold rounded-md flex items-center justify-center gap-2 transition-colors text-xs cursor-pointer"
+          title="Fix timing, gaps, reading speed and line length using the Netflix rules (you review every change before it's kept)"
+        >
+          <Wand2 className="w-4 h-4" />
+          Auto-fix rule issues
+        </button>
+        {onRebreakAll && (
+          <button
+            onClick={onRebreakAll}
+            disabled={!events.length || qcUnavailable}
+            className="w-full py-1.5 px-3 bg-[var(--ss-raised)] hover:bg-[var(--ss-hover)] disabled:opacity-40 disabled:cursor-not-allowed text-slate-200 font-medium rounded-md text-xs flex items-center justify-center gap-2 transition-colors cursor-pointer border border-[var(--ss-line)]"
+            title={`Re-break every subtitle's lines to fit ${cplLimit} characters`}
+          >
+            <Layers className="w-3.5 h-3.5" />
+            Re-break all lines
+          </button>
+        )}
+        {(onGeminiFix || onAcousticSync) && (
+          <div className="grid grid-cols-2 gap-2">
+            {onGeminiFix && (
+              <button
+                onClick={onGeminiFix}
+                disabled={!events.length || isFixingWithGemini || qcUnavailable}
+                className="py-1.5 px-2 bg-[var(--ss-raised)] hover:bg-[var(--ss-hover)] disabled:opacity-40 disabled:cursor-not-allowed text-slate-200 font-medium rounded-md text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer border border-[var(--ss-line)]"
+                title="Ask Gemini AI to rewrite, split and re-time subtitles that break the rules (uses Gemini credits)"
+              >
+                <Sparkles className={`w-3.5 h-3.5 ${isFixingWithGemini ? 'animate-spin' : ''}`} />
+                {isFixingWithGemini ? 'Fixing with Gemini…' : 'Fix with Gemini AI'}
+              </button>
+            )}
+            {onAcousticSync && (
+              <button
+                onClick={onAcousticSync}
+                disabled={!events.length || isSyncingAudio || qcUnavailable}
+                className="py-1.5 px-2 bg-[var(--ss-raised)] hover:bg-[var(--ss-hover)] disabled:opacity-40 disabled:cursor-not-allowed text-slate-200 font-medium rounded-md text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer border border-[var(--ss-line)]"
+                title="Move each subtitle's start and end to where speech actually starts and stops in the audio"
+              >
+                <Volume2 className="w-3.5 h-3.5" />
+                {isSyncingAudio ? 'Re-syncing…' : 'Re-sync to speech'}
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+
       {/* CPS Statistics Card */}
-      <div className="bg-[#181920] p-3 rounded-xl border border-[#262734] space-y-2">
+      {!qcUnavailable && (
+      <div className="bg-[var(--ss-raised)] p-3 rounded-none border border-[var(--ss-line)] space-y-2">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-1.5 text-[11px] font-bold text-slate-200">
-            <Activity className="w-3.5 h-3.5 text-[#00e5be]" />
-            CPS Speedometer
+            <Activity className="w-3.5 h-3.5 text-[var(--ss-accent)]" />
+            Reading speed
           </div>
-          <span className="text-[10px] font-mono px-1.5 py-0.5 bg-[#14151a] border border-[#262734] rounded text-slate-300">
-            Max {cpsLimit} CPS
+          <span className="text-[10px] font-mono px-1.5 py-0.5 bg-[var(--ss-panel)] border border-[var(--ss-line)] rounded-none text-slate-300">
+            Limit {cpsLimit} chars/sec
           </span>
         </div>
         
         <div className="grid grid-cols-4 gap-1.5 text-center text-xs">
-          <div className="p-1 rounded-lg bg-[#14151a] border border-[#262734]">
+          <div className="p-1 rounded-none bg-[var(--ss-panel)] border border-[var(--ss-line)]">
             <span className="text-[9px] text-slate-500 block font-medium">Min</span>
             <span className="font-mono font-bold text-slate-300">{safeCpsStats.min_cps.toFixed(1)}</span>
           </div>
-          <div className="p-1 rounded-lg bg-[#14151a] border border-[#262734]">
+          <div className="p-1 rounded-none bg-[var(--ss-panel)] border border-[var(--ss-line)]">
             <span className="text-[9px] text-slate-500 block font-medium">Avg</span>
             <span className="font-mono font-bold text-slate-300">{safeCpsStats.avg_cps.toFixed(1)}</span>
           </div>
-          <div className="p-1 rounded-lg bg-[#14151a] border border-[#262734]">
+          <div className="p-1 rounded-none bg-[var(--ss-panel)] border border-[var(--ss-line)]">
             <span className="text-[9px] text-slate-500 block font-medium">P95</span>
             <span className="font-mono font-bold text-slate-300">{safeCpsStats.p95_cps.toFixed(1)}</span>
           </div>
-          <div className="p-1 rounded-lg bg-rose-950/40 border border-rose-800">
+          <div className="p-1 rounded-none bg-rose-950/40 border border-rose-800">
             <span className="text-[9px] text-rose-400 block font-medium">Violations</span>
             <span className="font-mono font-bold text-rose-300">{safeCpsStats.events_over_limit}</span>
           </div>
         </div>
       </div>
+      )}
 
       {/* Error Breakdown */}
       <div className="flex-1 space-y-2">
-        <h4 className="text-[11px] font-bold text-slate-300 border-b border-[#262734] pb-1 uppercase tracking-wider">
-          QC Rule Violations
+        <h4 className="text-[11px] font-bold text-slate-300 border-b border-[var(--ss-line)] pb-1 uppercase tracking-wider">
+          Issues by rule
         </h4>
         
         {Object.entries(errorGroups).map(([category, catErrors]) => {
@@ -280,19 +288,19 @@ export default function NetflixQCPanel({
           const isExpanded = expandedCategories[category];
           
           return (
-            <div key={category} className="bg-[#181920] border border-[#262734] rounded-xl overflow-hidden shadow-xs">
+            <div key={category} className="bg-[var(--ss-raised)] border border-[var(--ss-line)] rounded-none overflow-hidden shadow-xs">
               <button 
                 onClick={() => toggleCategory(category)}
-                className="w-full flex items-center justify-between p-2 bg-[#181920] hover:bg-[#22232c] transition-colors cursor-pointer"
+                className="w-full flex items-center justify-between p-2 bg-[var(--ss-raised)] hover:bg-[var(--ss-hover)] transition-colors cursor-pointer"
               >
                 <div className="flex items-center gap-2">
-                  <div className="text-[#00e5be]">
+                  <div className="text-[var(--ss-accent)]">
                     {categoryIcons[category]}
                   </div>
                   <span className="text-xs font-bold text-slate-200">{category}</span>
                 </div>
                 <div className="flex items-center gap-1.5">
-                  <span className="text-[9px] font-bold font-mono bg-rose-950 text-rose-300 border border-rose-800 px-1.5 py-0.2 rounded-full">
+                  <span className="text-[9px] font-bold font-mono bg-rose-950 text-rose-300 border border-rose-800 px-1.5 py-0.2 rounded-none">
                     {catErrors.length}
                   </span>
                   {isExpanded ? <ChevronUp className="w-3 h-3 text-slate-400" /> : <ChevronDown className="w-3 h-3 text-slate-400" />}
@@ -300,16 +308,16 @@ export default function NetflixQCPanel({
               </button>
               
               {isExpanded && (
-                <div className="p-1.5 space-y-1 max-h-40 overflow-y-auto bg-[#14151a] custom-scrollbar">
+                <div className="p-1.5 space-y-1 max-h-40 overflow-y-auto bg-[var(--ss-panel)] custom-scrollbar">
                   {catErrors.map((err, idx) => (
                     <div 
                       key={idx} 
                       onClick={() => onJumpToEvent(err.eventId)}
-                      className={`p-2 rounded-lg border text-left cursor-pointer hover:brightness-125 transition-all flex items-start gap-1.5 ${
+                      className={`p-2 rounded-none border text-left cursor-pointer hover:brightness-125 transition-all flex items-start gap-1.5 ${
                         err.severity === 'warning' ? 'bg-amber-950/40 border-amber-800 text-amber-200' : 'bg-rose-950/40 border-rose-800 text-rose-200'
                       }`}
                     >
-                      <span className="font-mono font-bold text-[9px] bg-black/60 px-1.5 py-0.5 rounded border border-[#262734] shrink-0 text-white">
+                      <span className="font-mono font-bold text-[9px] bg-black/60 px-1.5 py-0.5 rounded-none border border-[var(--ss-line)] shrink-0 text-white">
                         #{err.eventId}
                       </span>
                       <div className="flex-1 min-w-0">
@@ -317,7 +325,7 @@ export default function NetflixQCPanel({
                           {err.message}
                         </span>
                         {err.suggestedFix && (
-                          <span className="text-[9px] text-[#00e5be] block mt-0.5 font-semibold">
+                          <span className="text-[9px] text-[var(--ss-accent)] block mt-0.5 font-semibold">
                             💡 Fix: {err.suggestedFix}
                           </span>
                         )}
@@ -330,30 +338,30 @@ export default function NetflixQCPanel({
           );
         })}
 
-        {totalErrors === 0 && totalWarnings === 0 && events.length > 0 && (
-          <div className="p-3.5 rounded-xl bg-[#00e5be]/10 border border-[#00e5be]/30 text-center text-[#00e5be] text-xs">
-            <CheckCircle2 className="w-5 h-5 mx-auto mb-1 text-[#00e5be]" />
-            <p className="font-bold">100% Netflix Certified</p>
-            <p className="text-[10px] text-slate-300 mt-0.5">Zero CPL, CPS, duration, or gap violations detected.</p>
+        {!qcUnavailable && totalErrors === 0 && totalWarnings === 0 && events.length > 0 && (
+          <div className="p-3.5 rounded-none bg-[var(--ss-accent)]/10 border border-[var(--ss-accent)]/30 text-center text-[var(--ss-accent)] text-xs">
+            <CheckCircle2 className="w-5 h-5 mx-auto mb-1 text-[var(--ss-accent)]" />
+            <p className="font-semibold">No issues found</p>
+            <p className="text-[11px] text-slate-300 mt-0.5">Line length, reading speed, durations and gaps all meet the rules.</p>
           </div>
         )}
       </div>
 
       {/* Netflix Guidelines Quick Reference */}
-      <div className="mt-auto pt-2 border-t border-[#262734]">
+      <div className="mt-auto pt-2 border-t border-[var(--ss-line)]">
         <button 
           onClick={() => setShowGuidelines(!showGuidelines)}
           className="flex items-center justify-between w-full text-xs font-semibold text-slate-400 hover:text-white cursor-pointer p-1"
         >
           <div className="flex items-center gap-1.5">
-            <BookOpen className="w-3.5 h-3.5 text-[#00e5be]" />
+            <BookOpen className="w-3.5 h-3.5 text-[var(--ss-accent)]" />
             Netflix Timed Text Guide
           </div>
           {showGuidelines ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
         </button>
         
         {showGuidelines && (
-          <div className="mt-2 p-2.5 bg-[#0e0f12] text-slate-300 rounded-xl text-[10px] space-y-1.5 border border-[#262734]">
+          <div className="mt-2 p-2.5 bg-[var(--ss-bg)] text-slate-300 rounded-none text-[10px] space-y-1.5 border border-[var(--ss-line)]">
             <div className="grid grid-cols-2 gap-x-2 gap-y-1 font-sans">
               <span className="text-slate-400">Min Duration:</span>
               <span className="font-mono text-slate-200">5/6 sec (~0.833s)</span>
@@ -378,3 +386,4 @@ export default function NetflixQCPanel({
     </div>
   );
 }
+

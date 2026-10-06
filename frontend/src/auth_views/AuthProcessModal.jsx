@@ -11,15 +11,15 @@ export default function AuthProcessModal({ isOpen, type = 'login', stage, errorM
 
   // Stages definition
   const loginStages = [
-    { key: 'connecting', label: 'Connecting to sovereign server...', sub: 'Validating @verbolabs.com gateway' },
+    { key: 'connecting', label: 'Connecting to sovereign server...', sub: 'Establishing secure gateway handshake' },
     { key: 'authenticating', label: 'Authenticating credentials & location...', sub: 'Verifying enterprise security token' },
     { key: 'initializing', label: 'Configuring workstation environment...', sub: 'Loading speech & subtitle models' },
     { key: 'success', label: 'Authentication Complete!', sub: `Welcome back${userName ? ', ' + userName : ''}!` },
   ];
 
   const signupStages = [
-    { key: 'connecting', label: 'Connecting to sovereign server...', sub: 'Validating corporate domain' },
-    { key: 'registering', label: 'Creating enterprise account...', sub: 'Registering employee identity' },
+    { key: 'connecting', label: 'Connecting to sovereign server...', sub: 'Validating security handshake' },
+    { key: 'registering', label: 'Creating enterprise account...', sub: 'Registering account identity' },
     { key: 'tokenizing', label: 'Generating activation token...', sub: 'Preparing verification email' },
     { key: 'success', label: 'Account Created Successfully!', sub: 'Check your inbox to activate.' },
   ];
@@ -43,10 +43,10 @@ export default function AuthProcessModal({ isOpen, type = 'login', stage, errorM
       role="dialog"
       aria-modal="true"
     >
-      <div className="w-full max-w-md bg-[#14151a] border border-[#262734] rounded-2xl p-6 shadow-[0_25px_60px_-15px_rgba(0,0,0,0.95),0_0_30px_rgba(0,229,190,0.1)] relative overflow-hidden animate-mac-squish">
+      <div className="w-full max-w-md bg-[var(--kt-s1)] border border-[var(--kt-s4)] rounded-2xl p-6 shadow-[0_25px_60px_-15px_rgba(0,0,0,0.95),0_0_30px_rgba(var(--kt-accent-rgb),0.1)] relative overflow-hidden animate-mac-squish">
         {/* Ambient Top Glow */}
         <div className={`absolute top-0 left-1/2 -translate-x-1/2 w-48 h-12 blur-2xl pointer-events-none rounded-full ${
-          isError ? 'bg-rose-500/20' : isSuccess ? 'bg-emerald-500/25' : 'bg-[#00e5be]/20'
+          isError ? 'bg-rose-500/20' : isSuccess ? 'bg-emerald-500/25' : 'bg-[var(--kt-accent)]/20'
         }`} />
 
         {/* Header Icon */}
@@ -55,15 +55,15 @@ export default function AuthProcessModal({ isOpen, type = 'login', stage, errorM
             isError
               ? 'bg-rose-500/15 border border-rose-500/40 text-rose-400 shadow-[0_0_20px_rgba(244,63,94,0.3)]'
               : isSuccess
-              ? 'bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 shadow-[0_0_25px_rgba(16,185,129,0.4)] scale-105'
-              : 'bg-[#00e5be]/10 border border-[#00e5be]/30 text-[#00e5be] shadow-[0_0_20px_rgba(0,229,190,0.25)]'
+              ? 'bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 shadow-[0_0_25px_rgba(var(--kt-accent-rgb),0.4)] scale-105'
+              : 'bg-[var(--kt-accent)]/10 border border-[var(--kt-accent)]/30 text-[var(--kt-accent)] shadow-[0_0_20px_rgba(var(--kt-accent-rgb),0.25)]'
           }`}>
             {isError ? (
               <AlertCircle size={28} className="animate-shake" />
             ) : isSuccess ? (
               <CheckCircle2 size={30} className="stroke-[2.5]" />
             ) : (
-              <Loader2 size={28} className="animate-spin text-[#00e5be]" />
+              <Loader2 size={28} className="animate-spin text-[var(--kt-accent)]" />
             )}
           </div>
 
@@ -85,7 +85,7 @@ export default function AuthProcessModal({ isOpen, type = 'login', stage, errorM
 
         {/* Stepped Progress Stages (Only when not in error) */}
         {!isError && (
-          <div className="space-y-3 mb-6 bg-[#0e0f12] border border-[#262734] rounded-xl p-4">
+          <div className="space-y-3 mb-6 bg-[var(--kt-s0)] border border-[var(--kt-s4)] rounded-xl p-4">
             {stages.map((stg, idx) => {
               const isPast = currentIndex > idx;
               const isCurrent = currentIndex === idx;
@@ -97,7 +97,7 @@ export default function AuthProcessModal({ isOpen, type = 'login', stage, errorM
                         <CheckCircle2 size={11} className="stroke-[3]" />
                       </div>
                     ) : isCurrent ? (
-                      <div className="w-4 h-4 rounded-full bg-[#00e5be]/20 border border-[#00e5be] text-[#00e5be] flex items-center justify-center">
+                      <div className="w-4 h-4 rounded-full bg-[var(--kt-accent)]/20 border border-[var(--kt-accent)] text-[var(--kt-accent)] flex items-center justify-center">
                         {isSuccess ? (
                           <CheckCircle2 size={11} className="stroke-[3]" />
                         ) : (
@@ -105,7 +105,7 @@ export default function AuthProcessModal({ isOpen, type = 'login', stage, errorM
                         )}
                       </div>
                     ) : (
-                      <div className="w-4 h-4 rounded-full border border-[#2f3142] bg-[#14151a]" />
+                      <div className="w-4 h-4 rounded-full border border-[var(--kt-s5)] bg-[var(--kt-s1)]" />
                     )}
                   </div>
                   <div className="min-w-0">
@@ -113,7 +113,7 @@ export default function AuthProcessModal({ isOpen, type = 'login', stage, errorM
                       isPast || (isCurrent && isSuccess)
                         ? 'text-emerald-300'
                         : isCurrent
-                        ? 'text-[#00e5be]'
+                        ? 'text-[var(--kt-accent)]'
                         : 'text-slate-500'
                     }`}>
                       {stg.label}
@@ -134,7 +134,7 @@ export default function AuthProcessModal({ isOpen, type = 'login', stage, errorM
             <button
               type="button"
               onClick={onCloseError}
-              className="w-full px-4 py-2.5 rounded-xl text-xs font-bold bg-[#1e202a] hover:bg-[#252836] text-white border border-[#2f3142] transition-colors cursor-pointer"
+              className="w-full px-4 py-2.5 rounded-xl text-xs font-bold bg-[var(--kt-s3)] hover:bg-[var(--kt-s4)] text-white border border-[var(--kt-s5)] transition-colors cursor-pointer"
             >
               Close & Try Again
             </button>

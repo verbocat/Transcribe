@@ -104,6 +104,11 @@ def init_db():
     db_url = DATABASE_URL or os.getenv("DATABASE_URL", "")
     if not db_url:
         return None
+    # SQLAlchemy 2.1 maps a bare postgresql:// URL to psycopg (v3); requirements ship psycopg2-binary
+    if db_url.startswith("postgres://"):
+        db_url = "postgresql+psycopg2://" + db_url[len("postgres://"):]
+    elif db_url.startswith("postgresql://"):
+        db_url = "postgresql+psycopg2://" + db_url[len("postgresql://"):]
     try:
         engine = create_engine(db_url, pool_pre_ping=True, pool_size=5, max_overflow=10)
         Base.metadata.create_all(bind=engine)

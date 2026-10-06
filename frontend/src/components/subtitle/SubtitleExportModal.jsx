@@ -11,8 +11,8 @@ const EXPORT_FORMATS = [
     ext: '.ttml',
     icon: FileCode,
     description: 'Netflix primary delivery format with styling cues, regions, and XML namespace.',
-    badge: 'Netflix Standard',
-    badgeColor: 'bg-red-950 text-red-400 border-red-800',
+    badge: 'For Netflix delivery',
+    badgeColor: 'bg-[var(--ss-raised)] text-slate-300 border-[var(--ss-line)]',
   },
   {
     key: 'srt',
@@ -20,8 +20,8 @@ const EXPORT_FORMATS = [
     ext: '.srt',
     icon: FileText,
     description: 'Universal standard subtitle format with millisecond timecodes and styling.',
-    badge: 'Universal',
-    badgeColor: 'bg-[#1c1d25] text-[#00e5ff] border-[#00e5ff]/40',
+    badge: 'Most common',
+    badgeColor: 'bg-[var(--ss-raised)] text-slate-300 border-[var(--ss-line)]',
   },
   {
     key: 'vtt',
@@ -29,8 +29,8 @@ const EXPORT_FORMATS = [
     ext: '.vtt',
     icon: Globe,
     description: 'Web-native format with HTML5 video player integration and line positioning.',
-    badge: 'Web Native',
-    badgeColor: 'bg-emerald-950 text-emerald-300 border-emerald-800',
+    badge: 'For web players',
+    badgeColor: 'bg-[var(--ss-raised)] text-slate-300 border-[var(--ss-line)]',
   },
   {
     key: 'txt',
@@ -38,8 +38,8 @@ const EXPORT_FORMATS = [
     ext: '.txt',
     icon: File,
     description: 'Clean dialogue text without timecodes for review and print deliverables.',
-    badge: 'Dialogue Text',
-    badgeColor: 'bg-slate-800 text-slate-300 border-slate-700',
+    badge: 'No timecodes',
+    badgeColor: 'bg-[var(--ss-raised)] text-slate-300 border-[var(--ss-line)]',
   },
 ];
 
@@ -160,25 +160,25 @@ export default function SubtitleExportModal({ isOpen, onClose, events = [], file
       }}
     >
       <div
-        className={`bg-[#14151a] border border-[#262734] rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden text-slate-200 ${
+        className={`bg-[var(--ss-panel)] border border-[var(--ss-line)] rounded-none shadow-2xl w-full max-w-lg overflow-hidden text-slate-200 ${
           isClosing ? 'animate-mac-squish-exit' : 'animate-mac-squish'
         }`}
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-[#262734]">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--ss-line)]">
           <div>
-            <h2 className="text-base font-bold text-white uppercase tracking-wider">Export Timed Text Deliverables</h2>
-            <p className="text-xs text-slate-400 mt-0.5">{events.length} subtitle events · {exportFilename}{selectedFormatInfo?.ext}</p>
+            <h2 className="text-base font-semibold text-white">Export subtitles</h2>
+            <p className="text-xs text-slate-400 mt-0.5">{events.length} {events.length === 1 ? 'subtitle' : 'subtitles'} → {exportFilename}{selectedFormatInfo?.ext}</p>
           </div>
-          <button onClick={handleDismiss} className="p-1.5 rounded-lg hover:bg-[#22232c] text-slate-400 hover:text-white transition-colors cursor-pointer">
+          <button onClick={handleDismiss} className="p-1.5 rounded-none hover:bg-[var(--ss-hover)] text-slate-400 hover:text-white transition-colors cursor-pointer">
             <X className="w-5 h-5" />
           </button>
         </div>
 
         {/* Compliance Alert */}
         {!isPassing && (
-          <div className="mx-6 mt-4 p-3 rounded-xl bg-amber-950/30 border border-amber-800/60 flex items-start gap-3">
+          <div className="mx-6 mt-4 p-3 rounded-none bg-amber-950/30 border border-amber-800/60 flex items-start gap-3">
             <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
             <div>
               <p className="text-xs font-bold text-amber-300">Netflix QC Compliance: {complianceScore}%</p>
@@ -189,19 +189,19 @@ export default function SubtitleExportModal({ isOpen, onClose, events = [], file
 
         {/* Filename Input */}
         <div className="px-6 pt-4">
-          <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Output Filename</label>
+          <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">File name</label>
           <input
             type="text"
             value={customFilename}
             onChange={e => setCustomFilename(e.target.value)}
             placeholder={filename.replace(/\.[^/.]+$/, '')}
-            className="w-full mt-1 px-3 py-2 rounded-xl bg-[#0e0f12] border border-[#262734] text-xs text-white focus:outline-none focus:border-[#00e5be] font-mono"
+            className="w-full mt-1 px-3 py-2 rounded-none bg-[var(--ss-bg)] border border-[var(--ss-line)] text-xs text-white focus:outline-none focus:border-[var(--ss-accent)] font-mono"
           />
         </div>
 
         {/* Format Selector */}
         <div className="px-6 pt-4 space-y-2">
-          <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Deliverable Format</label>
+          <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Format</label>
           {EXPORT_FORMATS.map(fmt => {
             const Icon = fmt.icon;
             const isSelected = selectedFormat === fmt.key;
@@ -209,24 +209,24 @@ export default function SubtitleExportModal({ isOpen, onClose, events = [], file
               <button
                 key={fmt.key}
                 onClick={() => setSelectedFormat(fmt.key)}
-                className={`w-full flex items-center gap-3 p-3 rounded-xl border-2 transition-all text-left cursor-pointer ${
+                className={`w-full flex items-center gap-3 p-3 rounded-none border-2 transition-all text-left cursor-pointer ${
                   isSelected
-                    ? 'border-[#00e5be] bg-[#00e5be]/10 shadow-[0_0_12px_rgba(0,229,190,0.15)]'
-                    : 'border-[#262734] bg-[#181920] hover:border-[#383a4c] hover:bg-[#22232c]'
+                    ? 'border-[var(--ss-accent)] bg-[var(--ss-accent)]/10 shadow-[0_0_12px_rgba(var(--kt-accent-rgb),0.15)]'
+                    : 'border-[var(--ss-line)] bg-[var(--ss-raised)] hover:border-[var(--ss-line)] hover:bg-[var(--ss-hover)]'
                 }`}
               >
-                <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${isSelected ? 'bg-[#00e5be] text-black shadow-xs' : 'bg-[#14151a] text-slate-400'}`}>
+                <div className={`w-9 h-9 rounded-none flex items-center justify-center shrink-0 ${isSelected ? 'bg-[var(--ss-accent)] text-black shadow-xs' : 'bg-[var(--ss-panel)] text-slate-400'}`}>
                   <Icon className="w-4 h-4" />
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
                     <span className={`text-xs font-bold ${isSelected ? 'text-white' : 'text-slate-300'}`}>{fmt.name}</span>
-                    <span className={`text-[9px] font-bold uppercase px-1.5 py-0.2 rounded border ${fmt.badgeColor}`}>{fmt.badge}</span>
+                    <span className={`text-[11px] font-medium px-1.5 py-0.5 rounded border ${fmt.badgeColor}`}>{fmt.badge}</span>
                   </div>
                   <p className="text-[10px] text-slate-400 mt-0.5 truncate">{fmt.description}</p>
                 </div>
                 {isSelected && (
-                  <div className="w-5 h-5 rounded-full bg-[#00e5be] text-black flex items-center justify-center shrink-0">
+                  <div className="w-5 h-5 rounded-none bg-[var(--ss-accent)] text-black flex items-center justify-center shrink-0">
                     <Check className="w-3 h-3 text-black font-bold" />
                   </div>
                 )}
@@ -238,29 +238,29 @@ export default function SubtitleExportModal({ isOpen, onClose, events = [], file
         {/* SRT Preview */}
         {srtPreview && (
           <div className="px-6 pt-3">
-            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Sample Preview</label>
-            <pre className="mt-1 p-2.5 rounded-xl bg-[#0e0f12] border border-[#262734] text-[#00e5be] text-[10px] font-mono max-h-20 overflow-auto custom-scrollbar">
+            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Preview</label>
+            <pre className="mt-1 p-2.5 rounded-none bg-[var(--ss-bg)] border border-[var(--ss-line)] text-[var(--ss-accent)] text-[10px] font-mono max-h-20 overflow-auto custom-scrollbar">
               {srtPreview}
             </pre>
           </div>
         )}
 
         {/* Footer */}
-        <div className="flex items-center justify-end gap-2.5 px-6 py-4 mt-3 border-t border-[#262734]">
+        <div className="flex items-center justify-end gap-2.5 px-6 py-4 mt-3 border-t border-[var(--ss-line)]">
           <button
             onClick={handleDismiss}
-            className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-300 bg-[#181920] hover:bg-[#22232c] border border-[#262734] transition-colors cursor-pointer"
+            className="px-4 py-2 rounded-none text-xs font-semibold text-slate-300 bg-[var(--ss-raised)] hover:bg-[var(--ss-hover)] border border-[var(--ss-line)] transition-colors cursor-pointer"
           >
             Cancel
           </button>
           <button
             onClick={handleExport}
             disabled={isExporting || !events || events.length === 0}
-            className="px-5 py-2 rounded-xl text-xs font-bold text-black bg-[#00e5be] hover:bg-[#00c9a7] active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-[0_0_12px_rgba(0,229,190,0.25)] flex items-center gap-1.5 cursor-pointer"
+            className="px-5 py-2 rounded-none text-xs font-bold text-black bg-[var(--ss-accent)] hover:bg-[var(--ss-accent-hover)] active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-[0_0_12px_rgba(var(--kt-accent-rgb),0.25)] flex items-center gap-1.5 cursor-pointer"
           >
             {isExporting ? (
               <>
-                <div className="w-3.5 h-3.5 border-2 border-black/30 border-t-black rounded-full animate-spin" />
+                <div className="w-3.5 h-3.5 border-2 border-black/30 border-t-black rounded-none animate-spin" />
                 Compiling...
               </>
             ) : (
@@ -284,3 +284,4 @@ function formatSrtTime(secs) {
   const ms = Math.floor((secs % 1) * 1000);
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')},${String(ms).padStart(3, '0')}`;
 }
+

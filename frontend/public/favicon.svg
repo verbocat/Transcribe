@@ -1,8 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
   <defs>
     <linearGradient id="karyaGrad" x1="0%" y1="100%" x2="100%" y2="0%">
-      <stop offset="0%" stop-color="#00e5be" />
-      <stop offset="50%" stop-color="#00c4cc" />
+      <stop offset="0%" stop-color="#4d8dff" />
+      <stop offset="50%" stop-color="#7a70ff" />
       <stop offset="100%" stop-color="#0077b6" />
     </linearGradient>
   </defs>

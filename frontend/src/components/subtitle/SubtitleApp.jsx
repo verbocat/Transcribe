@@ -5,21 +5,40 @@ import {
   SlidersHorizontal, Search, Split, Merge, Scissors, Trash2, Plus,
   ChevronDown, X, Play, Clock, Activity, FileText, Check, Settings,
   Menu, Download, Eye, AlertTriangle, Layers, Type, Sun, Moon, Loader2, Globe, Volume2,
-  MessageSquare, ChevronRight,
+  MessageSquare, ChevronRight, Music,
   Bold, Italic, Underline, Strikethrough, AlignLeft, AlignCenter, AlignRight,
-  Highlighter, Palette, RotateCcw
+  Highlighter, Palette, RotateCcw, User, Wand2, Languages, LayoutDashboard,
+  Command, Keyboard, FolderOpen, Save, Replace, ListOrdered, ArrowRightLeft, CaseSensitive,
+  Eraser, SkipBack, SkipForward, Maximize, Users, BookText, StepBack, StepForward, AlignJustify
 } from 'lucide-react';
 import { API_BASE } from '../../config';
+import Sidebar from './Sidebar';
+import SubtitleTablePanel from './SubtitleTablePanel';
+import './studio.css';
 import VideoPlayer from './VideoPlayer';
 import AudioWaveformTimeline from './AudioWaveformTimeline';
 import SubtitleGridView from './SubtitleGridView';
 import NetflixQCPanel from './NetflixQCPanel';
 import SubtitleExportModal from './SubtitleExportModal';
+import CentroidModal from './CentroidModal';
 import SubtitleDiffModal from './SubtitleDiffModal';
 import SubtitleSettingsModal from './SubtitleSettingsModal';
-import CustomTimeResumeModal from './CustomTimeResumeModal';
+import StudioStage from './layout/StudioStage';
+import { useStudioLayout, BUILTIN_PRESETS } from './layout/layoutModel';
+import StudioMenuBar from './StudioMenuBar';
+import CommandPalette from './CommandPalette';
+import { ShiftTimingsDialog, GoToDialog, FindReplaceDialog } from './ToolDialogs';
+import { Button, IconButton, Kbd } from './ui/controls';
+import { useStudioPrefs, formatTimecode } from './prefs';
+import { SETTINGS_GROUPS } from './SubtitleSettingsModal';
+import * as tools from './subtitleTools';
+import SpeakerCustomizerModal from '../SpeakerCustomizerModal';
+import ElevenLabsApiKeyModal from './ElevenLabsApiKeyModal';
 import AccountMenuDropdown from '../AccountMenuDropdown';
 import ReloadConfirmModal from '../ReloadConfirmModal';
+
+import NotificationBellDropdown from '../NotificationBellDropdown';
+import { useTheme } from '../../context/ThemeContext';
 import { extractAudioFromMedia, computeWaveformPeaks } from '../../utils/audioExtractor';
 
 function formatTime(seconds) {
@@ -150,7 +169,7 @@ async function detectVideoFrameRate(file, apiBase) {
 
       const onFrame = (now, metadata) => {
         frameTimes.push(metadata.mediaTime);
-        if (frameTimes.length >= 8) {
+        if (frameTimes.length >= 12) {
           cleanup();
           const deltas = [];
           for (let i = 1; i < frameTimes.length; i++) {
@@ -158,8 +177,9 @@ async function detectVideoFrameRate(file, apiBase) {
             if (d > 0.005 && d < 0.2) deltas.push(d);
           }
           if (deltas.length >= 4) {
-            const avgDelta = deltas.reduce((a, b) => a + b, 0) / deltas.length;
-            const rawFps = 1.0 / avgDelta;
+            // Dropped/throttled frames produce multiples of the frame interval; the shortest one is the true interval
+            const frameDelta = Math.min(...deltas);
+            const rawFps = 1.0 / frameDelta;
             const standardFps = [23.976, 24, 25, 29.97, 30, 48, 50, 59.94, 60];
             let closest = standardFps[0];
             let minDiff = Math.abs(rawFps - closest);
@@ -205,18 +225,19 @@ async function detectVideoFrameRate(file, apiBase) {
 }
 
 export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
-  // ── Theme State: Unified Dark Creative Suite ──
-  const [theme] = useState('dark');
-  const isDark = true;
+  // ── Theme State: Unified Acoustic Studio Theme ──
+  const { theme, isDark } = useTheme();
 
   // Video & File state
   const [selectedFile, setSelectedFile] = useState(null);
   const [videoUrl, setVideoUrl] = useState(null);
+  const [extractedAudioUrl, setExtractedAudioUrl] = useState(null);
   const [videoDuration, setVideoDuration] = useState(0);
   const [currentVideoId, setCurrentVideoId] = useState(null);
   const [initialWaveformPeaks, setInitialWaveformPeaks] = useState([]);
   const [audioExtractionStatus, setAudioExtractionStatus] = useState(null); // { stage, percent, detail }
   const extractedAudioFileRef = useRef(null); // Cache client-extracted audio file to avoid re-extracting
+  const audioTrackInputRef = useRef(null);
 
   const isAudioFile = useMemo(() => {
     if (!selectedFile) return false;
@@ -229,22 +250,34 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
   // Robust Client-Side Audio Extractor & Adaptive Upload Coordinator
   const processAndUploadMedia = useCallback(async (fileToProcess, isAudio) => {
     let uploadTarget = fileToProcess;
+    const isWma = Boolean(
+      fileToProcess?.type === 'audio/x-ms-wma' ||
+      fileToProcess?.type === 'audio/wma' ||
+      /\.(wma)$/i.test(fileToProcess?.name || '')
+    );
 
-    // 1. If video file, extract lightweight mono audio track in browser first (or reuse cached)
-    if (!isAudio) {
-      if (extractedAudioFileRef.current) {
+    // 1. If video file or WMA file, extract lightweight mono audio track in browser or via backend (or reuse cached)
+    if (!isAudio || isWma) {
+      if (extractedAudioFileRef.current && !isWma) {
         uploadTarget = extractedAudioFileRef.current;
       } else {
         try {
-          setAudioExtractionStatus({ stage: 'extracting', percent: 20, detail: 'Extracting audio in browser...' });
+          setAudioExtractionStatus({ stage: 'extracting', percent: 20, detail: 'Extracting clean audio stream...' });
           const extracted = await extractAudioFromMedia(fileToProcess, (p) => {
             setAudioExtractionStatus({ stage: 'extracting', ...p });
-          });
+          }, API_BASE);
           if (extracted.peaks && extracted.peaks.length > 0) {
             setInitialWaveformPeaks(extracted.peaks);
           }
-          uploadTarget = extracted.audioFile;
-          extractedAudioFileRef.current = extracted.audioFile;
+          if (extracted.audioUrl) {
+            setExtractedAudioUrl(extracted.audioUrl);
+            if (isWma) setVideoUrl(extracted.audioUrl);
+          }
+          if (extracted.duration && extracted.duration > 0) {
+            setVideoDuration(extracted.duration);
+          }
+          uploadTarget = extracted.audioFile || fileToProcess;
+          extractedAudioFileRef.current = extracted.audioFile || null;
         } catch (extErr) {
           console.warn("Client audio extraction fallback:", extErr);
           uploadTarget = fileToProcess;
@@ -279,6 +312,13 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
           if (chunkData.peaks && chunkData.peaks.length > 0) {
             setInitialWaveformPeaks(chunkData.peaks);
           }
+          if (chunkData.audio_url) {
+            const resolvedUrl = `${API_BASE}${chunkData.audio_url}`;
+            setExtractedAudioUrl(resolvedUrl);
+            if (isWma) setVideoUrl(resolvedUrl);
+          }
+          const dur = Number(chunkData?.metadata?.duration || chunkData?.duration || 0);
+          if (dur > 0) setVideoDuration(dur);
           return chunkData.video_id;
         }
       } else {
@@ -298,6 +338,13 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
               if (data.peaks && data.peaks.length > 0) {
                 setInitialWaveformPeaks(data.peaks);
               }
+              if (data.audio_url) {
+                const resolvedUrl = `${API_BASE}${data.audio_url}`;
+                setExtractedAudioUrl(resolvedUrl);
+                if (isWma) setVideoUrl(resolvedUrl);
+              }
+              const dur = Number(data?.metadata?.duration || data?.duration || 0);
+              if (dur > 0) setVideoDuration(dur);
               const fps = data.frame_rate || data.metadata?.frame_rate;
               if (fps && fps > 0) {
                 setFrameRate(fps);
@@ -323,6 +370,9 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
             if (chunkData.peaks && chunkData.peaks.length > 0) {
               setInitialWaveformPeaks(chunkData.peaks);
             }
+            if (chunkData.audio_url) {
+              setExtractedAudioUrl(`${API_BASE}${chunkData.audio_url}`);
+            }
             const fps = chunkData.frame_rate || chunkData.metadata?.frame_rate;
             if (fps && fps > 0) {
               setFrameRate(fps);
@@ -346,9 +396,9 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
   const [events, setEvents] = useState([]);
   const [originalEvents, setOriginalEvents] = useState([]);
   const [activeEventId, setActiveEventId] = useState(null);
+  const [activeSidebarTab, setActiveSidebarTab] = useState('subtitles');
+
   const editedEventIdsRef = useRef(new Set()); // Protected manual user edits across progressive batches
-  const [qcNotification, setQcNotification] = useState(null); // { message, chunkIndex, totalChunks, timestamp }
-  const [batchPauseData, setBatchPauseData] = useState(null); // { chunkIndex, totalChunks, nextChunk, prevBatchEnd, prevEventsCount, prevContext, message }
   const [userFeedbackText, setUserFeedbackText] = useState('');
 
   // Video playback sync state
@@ -370,6 +420,20 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
   });
   const [contentType, setContentType] = useState('adult'); // 'adult' (20 CPS) | 'children' (17 CPS)
   const [sdhMode, setSdhMode] = useState(false);
+  const [includeSpeakerTags, setIncludeSpeakerTags] = useState(false);
+  const [snapToShotChanges, setSnapToShotChanges] = useState(true);
+  const [numSpeakers, setNumSpeakers] = useState(() => {
+    try {
+      const saved = localStorage.getItem('karya_num_speakers');
+      return saved ? parseInt(saved, 10) : 0;
+    } catch (_) { return 0; }
+  });
+  const [strictNativeScript, setStrictNativeScript] = useState(() => {
+    try {
+      const saved = localStorage.getItem('karya_strict_native_script');
+      return saved !== null ? saved === 'true' : true;
+    } catch (_) { return true; }
+  });
   const [frameRate, setFrameRate] = useState(() => {
     try {
       const v = localStorage.getItem('karya_sub_fps');
@@ -385,17 +449,11 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
   const [totalWarnings, setTotalWarnings] = useState(0);
   const [cpsStats, setCpsStats] = useState(null);
 
-  // Resume / Continue Generation State
-  const [resumeChunk, setResumeChunk] = useState(null); // Next batch index to resume (e.g. 34)
-  const [totalChunks, setTotalChunks] = useState(null); // Total batches (e.g. 113)
-  const [canResume, setCanResume] = useState(false);
-
   // Generation & Streaming Progress State
   const [isGenerating, setIsGenerating] = useState(false);
   const [progressPercent, setProgressPercent] = useState(0);
   const [progressStage, setProgressStage] = useState('');
   const [progressDetail, setProgressDetail] = useState('');
-  const [batchProgress, setBatchProgress] = useState(null); // { current: 1, total: 4 }
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const elapsedTimerRef = useRef(null);
 
@@ -405,24 +463,58 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
 
   // Modals & Panels UI
   const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [showSpeakerModal, setShowSpeakerModal] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
+  const [showCentroidModal, setShowCentroidModal] = useState(false);
+  const [centroidTab, setCentroidTab] = useState('translate');
+  const [centroidNonce, setCentroidNonce] = useState(0);
+  const [centroidState, setCentroidState] = useState({ hasResults: false, qcIssues: null });
+  const openCentroid = useCallback((tab = 'translate') => {
+    setCentroidTab(tab);
+    setCentroidNonce((n) => n + 1);
+    setShowCentroidModal(true);
+  }, []);
+  const [qcUnavailable, setQcUnavailable] = useState(false);
+  const diffDecisionRef = useRef(null); // 'accepted' once the user accepts auto-fix changes
   const [showDiffModal, setShowDiffModal] = useState(false);
   const [showReloadConfirmModal, setShowReloadConfirmModal] = useState(false);
+  const [showApiKeyModal, setShowApiKeyModal] = useState(false);
+  const [apiKeyModalError, setApiKeyModalError] = useState(null);
+  const [serverHasElevenLabsKey, setServerHasElevenLabsKey] = useState(false);
   const [showQcDrawer, setShowQcDrawer] = useState(false);
   const [showSettingsDropdown, setShowSettingsDropdown] = useState(false);
   const [showFileDropdown, setShowFileDropdown] = useState(false);
-  const [showCustomTimeModal, setShowCustomTimeModal] = useState(false);
-  const [customStartTime, setCustomStartTime] = useState(0);
+  const [activeMenu, setActiveMenu] = useState(null); // 'file' | 'edit' | 'subtitle' | 'tools' | 'view' | 'settings' | null
   const [autoSaveStatus, setAutoSaveStatus] = useState('');
   const [pendingDraft, setPendingDraft] = useState(null); // Previous autosaved draft detection
   const [backendConnected, setBackendConnected] = useState(null); // null = checking, true = online, false = offline
+
+  // Dismiss OOONA top desktop menu when clicking outside
+  useEffect(() => {
+    if (!activeMenu) return;
+    const handleOutsideMenuClick = (e) => {
+      if (!e.target.closest('[data-ooona-menu]')) {
+        setActiveMenu(null);
+      }
+    };
+    window.addEventListener('mousedown', handleOutsideMenuClick);
+    return () => window.removeEventListener('mousedown', handleOutsideMenuClick);
+  }, [activeMenu]);
 
   useEffect(() => {
     let isMounted = true;
     const checkConnection = async () => {
       try {
         const res = await fetch(`${API_BASE}/api/health`, { method: 'GET' });
-        if (isMounted) setBackendConnected(res.ok);
+        if (res.ok) {
+          const data = await res.json();
+          if (isMounted) {
+            setBackendConnected(true);
+            setServerHasElevenLabsKey(!!data.has_elevenlabs_api_key);
+          }
+        } else if (isMounted) {
+          setBackendConnected(false);
+        }
       } catch {
         if (isMounted) setBackendConnected(false);
       }
@@ -437,10 +529,11 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
       // ESC key dismisses active modal
       if (e.key === 'Escape') {
         if (showReloadConfirmModal) { setShowReloadConfirmModal(false); return; }
+        if (showApiKeyModal) { setShowApiKeyModal(false); return; }
         if (showSettingsModal) { setShowSettingsModal(false); return; }
+        if (showSpeakerModal) { setShowSpeakerModal(false); return; }
         if (showExportModal) { setShowExportModal(false); return; }
         if (showDiffModal) { setShowDiffModal(false); return; }
-        if (showCustomTimeModal) { setShowCustomTimeModal(false); return; }
       }
 
       // Intercept F5 or Ctrl+R / Cmd+R reload shortcuts
@@ -474,17 +567,22 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
     isGenerating,
     showReloadConfirmModal,
     showSettingsModal,
+    showSpeakerModal,
     showExportModal,
-    showDiffModal,
-    showCustomTimeModal
+    showDiffModal
   ]);
 
-  // Resizable Layout Dimensions (Default: Left 480px, Bottom 210px)
-  const [leftPanelWidth, setLeftPanelWidth] = useState(480);
-  const [bottomTimelineHeight, setBottomTimelineHeight] = useState(210);
-
-  const isResizingLeftRef = useRef(false);
-  const isResizingBottomRef = useRef(false);
+  // Workspace layout (pane positions, sizes, presets) - see ./layout/layoutModel.js
+  const studioLayout = useStudioLayout();
+  const { layout, patch: patchLayout, applyBuiltinByIndex } = studioLayout;
+  const { prefs, setPref, resetPrefs } = useStudioPrefs();
+  const [settingsPage, setSettingsPage] = useState('qc');
+  const [dialog, setDialog] = useState(null); // 'shift' | 'goto' | 'find'
+  const [showPalette, setShowPalette] = useState(false);
+  const openSettings = useCallback((page) => {
+    if (page) setSettingsPage(page);
+    setShowSettingsModal(true);
+  }, []);
 
   // File Inputs & Header Refs
   const fileInputRef = useRef(null);
@@ -530,9 +628,44 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
   const updateSubtitleStyle = useCallback((keyOrObj, val) => {
     setSubtitleStyle(prev => {
       const next = typeof keyOrObj === 'object' ? { ...prev, ...keyOrObj } : { ...prev, [keyOrObj]: val };
-      try { localStorage.setItem('karya_subtitle_style', JSON.stringify(next)); } catch (_) {}
+      try { localStorage.setItem('karya_subtitle_style', JSON.stringify(next)); } catch (_) { }
       return next;
     });
+  }, []);
+
+  // ── Subtitle Formatting Scope: 'active' (Just this subtitle) | 'all' (All subtitles in project) ──
+  const [formatScope, setFormatScope] = useState(() => {
+    try {
+      return localStorage.getItem('karya_format_scope') || 'active';
+    } catch {
+      return 'active';
+    }
+  });
+
+  const handleSetFormatScope = useCallback((scope) => {
+    setFormatScope(scope);
+    try { localStorage.setItem('karya_format_scope', scope); } catch (_) { }
+  }, []);
+
+  // Helper: Detect if color is light to enforce smart black vs white text contrast
+  const isLightColor = useCallback((color) => {
+    if (!color || color === 'transparent') return false;
+    const match = color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/i);
+    if (match) {
+      const r = parseInt(match[1], 10);
+      const g = parseInt(match[2], 10);
+      const b = parseInt(match[3], 10);
+      return (r * 299 + g * 587 + b * 114) / 1000 > 140;
+    }
+    let hex = color.replace('#', '');
+    if (hex.length === 3) hex = hex.split('').map(c => c + c).join('');
+    if (hex.length === 6) {
+      const r = parseInt(hex.slice(0, 2), 16);
+      const g = parseInt(hex.slice(2, 4), 16);
+      const b = parseInt(hex.slice(4, 6), 16);
+      return (r * 299 + g * 587 + b * 114) / 1000 > 140;
+    }
+    return false;
   }, []);
 
   // ── Dynamic Subtitle & QC Threshold Settings ──
@@ -554,6 +687,28 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
     }
   });
 
+  const handleLanguageChange = useCallback((newLang) => {
+    setLanguage(newLang);
+    try { localStorage.setItem('karya_sub_language', newLang); } catch (_) { }
+    // Automatically match Netflix specs for the selected language
+    if (newLang === 'ja') {
+      setCplLimit(16);
+      setCpsLimit(contentType === 'children' ? 5.0 : 7.5);
+    } else if (newLang === 'zh' || newLang === 'zht') {
+      setCplLimit(16);
+      setCpsLimit(contentType === 'children' ? 7.0 : 9.5);
+    } else if (newLang === 'ko') {
+      setCplLimit(16);
+      setCpsLimit(contentType === 'children' ? 7.5 : 10.5);
+    } else if (newLang === 'th') {
+      setCplLimit(35);
+      setCpsLimit(20.0);
+    } else {
+      setCplLimit(42);
+      setCpsLimit(contentType === 'children' ? 17.0 : 20.0);
+    }
+  }, [contentType]);
+
   const [glossaryTerms, setGlossaryTerms] = useState(() => {
     try {
       const saved = localStorage.getItem('karya_subtitle_glossary');
@@ -567,7 +722,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
     setGlossaryTerms(terms);
     try {
       localStorage.setItem('karya_subtitle_glossary', JSON.stringify(terms));
-    } catch (_) {}
+    } catch (_) { }
   }, []);
 
   const [maxLines, setMaxLines] = useState(() => {
@@ -719,70 +874,62 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // ── 1-Minute Interval Auto-Save to Database / localStorage ──
+  // ── Interval auto-save of a local draft (localStorage); interval is set in Settings → Editor ──
+  // One stable timer that reads the latest data, so continuous editing no longer postpones the save.
+  const [lastDraftSavedAt, setLastDraftSavedAt] = useState(null);
+  const autosaveDataRef = useRef(null);
+  autosaveDataRef.current = { events, complianceScore, totalErrors, totalWarnings, selectedFile, language, contentType, cplLimit, cpsLimit, frameRate, sdhMode };
+  const lastSavedEventsRef = useRef(null);
+  const saveDraftNow = useCallback(() => {
+    const d = autosaveDataRef.current;
+    if (!d || !d.events || d.events.length === 0) return false;
+    try {
+      const fileId = d.selectedFile?.name || 'draft_subtitle';
+      localStorage.setItem(`karya_subtitle_autosave_${fileId}`, JSON.stringify({
+        events: d.events,
+        complianceScore: d.complianceScore,
+        totalErrors: d.totalErrors,
+        totalWarnings: d.totalWarnings,
+        settings: { language: d.language, contentType: d.contentType, cplLimit: d.cplLimit, cpsLimit: d.cpsLimit, frameRate: d.frameRate, sdhMode: d.sdhMode },
+        timestamp: new Date().toISOString()
+      }));
+      lastSavedEventsRef.current = d.events;
+      setLastDraftSavedAt(new Date());
+      return true;
+    } catch (e) {
+      console.warn('Auto-save storage quota exceeded', e);
+      return false;
+    }
+  }, []);
   useEffect(() => {
-    if (!events || events.length === 0) return;
+    if (!prefs.autosaveSec) return undefined;
     const interval = setInterval(() => {
-      try {
-        const fileId = selectedFile?.name || 'draft_subtitle';
-        localStorage.setItem(`karya_subtitle_autosave_${fileId}`, JSON.stringify({
-          events,
-          complianceScore,
-          totalErrors,
-          totalWarnings,
-          resumeChunk,
-          totalChunks,
-          settings: { language, contentType, cplLimit, cpsLimit, frameRate, sdhMode },
-          timestamp: new Date().toISOString()
-        }));
-        setAutoSaveStatus('Draft Saved (1m sync) ✓');
-        setTimeout(() => setAutoSaveStatus(''), 2500);
-      } catch (e) {
-        console.warn('Auto-save storage quota exceeded', e);
-      }
-    }, 60000); // Once every 1 minute
+      const d = autosaveDataRef.current;
+      if (!d || !d.events || d.events.length === 0 || d.events === lastSavedEventsRef.current) return;
+      saveDraftNow();
+    }, prefs.autosaveSec * 1000);
     return () => clearInterval(interval);
-  }, [events, complianceScore, totalErrors, totalWarnings, selectedFile, language, contentType, cplLimit, cpsLimit, frameRate, sdhMode, resumeChunk, totalChunks]);
+  }, [prefs.autosaveSec, saveDraftNow]);
+  const hasUnsavedDraftChanges = events.length > 0 && events !== lastSavedEventsRef.current;
 
-  // ── Mouse Drag Splitter Handlers for Resizable Panes ──
-  const handleLeftSplitterDown = (e) => {
-    e.preventDefault();
-    isResizingLeftRef.current = true;
-    document.body.style.cursor = 'col-resize';
-  };
-
-  const handleBottomSplitterDown = (e) => {
-    e.preventDefault();
-    isResizingBottomRef.current = true;
-    document.body.style.cursor = 'row-resize';
-  };
-
+  // Workspace shortcuts (handlers are read from a ref so the listener is attached once)
+  const shortcutRef = useRef({});
   useEffect(() => {
-    const handleMouseMove = (e) => {
-      if (isResizingLeftRef.current) {
-        const newWidth = Math.max(260, Math.min(750, e.clientX - 12));
-        setLeftPanelWidth(newWidth);
-      } else if (isResizingBottomRef.current) {
-        const windowHeight = window.innerHeight;
-        const newHeight = Math.max(90, Math.min(450, windowHeight - e.clientY - 12));
-        setBottomTimelineHeight(newHeight);
-      }
+    const onKey = (e) => {
+      const a = shortcutRef.current;
+      const mod = e.ctrlKey || e.metaKey;
+      const k = (e.key || '').toLowerCase();
+      if (mod && e.shiftKey && e.code === 'KeyL') { e.preventDefault(); a.openLayout?.(); }
+      else if (mod && !e.shiftKey && !e.altKey && k === 'k') { e.preventDefault(); a.palette?.(); }
+      else if (mod && !e.shiftKey && !e.altKey && e.key === ',') { e.preventDefault(); a.settings?.(); }
+      else if (mod && !e.shiftKey && !e.altKey && k === 'h') { e.preventDefault(); a.find?.(); }
+      else if (mod && !e.shiftKey && !e.altKey && k === 'g') { e.preventDefault(); a.goTo?.(); }
+      else if (mod && !e.shiftKey && !e.altKey && k === 's') { e.preventDefault(); a.save?.(); }
+      else if (mod && !e.shiftKey && !e.altKey && k === 'e') { e.preventDefault(); a.exportSubs?.(); }
+      else if (e.altKey && !mod && !e.shiftKey && /^Digit[1-9]$/.test(e.code)) { e.preventDefault(); a.preset?.(Number(e.code.slice(5)) - 1); }
     };
-
-    const handleMouseUp = () => {
-      if (isResizingLeftRef.current || isResizingBottomRef.current) {
-        isResizingLeftRef.current = false;
-        isResizingBottomRef.current = false;
-        document.body.style.cursor = 'default';
-      }
-    };
-
-    window.addEventListener('mousemove', handleMouseMove);
-    window.addEventListener('mouseup', handleMouseUp);
-    return () => {
-      window.removeEventListener('mousemove', handleMouseMove);
-      window.removeEventListener('mouseup', handleMouseUp);
-    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
   }, []);
 
   // Push to undo stack
@@ -813,9 +960,10 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
           custom_max_duration: maxDuration
         })
       });
+      setQcUnavailable(!res.ok);
       if (res.ok) {
         const data = await res.json();
-        setComplianceScore(data.compliance_score || 100);
+        setComplianceScore(data.compliance_score ?? 100);
         setTotalErrors(data.total_errors || 0);
         setTotalWarnings(data.total_warnings || 0);
         setCpsStats(data.cps_stats || null);
@@ -831,6 +979,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
       }
     } catch (err) {
       console.error(err);
+      setQcUnavailable(true);
     }
   }, [shotChanges, frameRate, contentType, cplLimit, cpsLimit, maxLines, minDuration, maxDuration, sanitizeEvents]);
 
@@ -909,12 +1058,136 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
 
       editedEventIdsRef.current.add(ev.id);
       const updated = [...prev];
-      updated[idx] = { ...ev, text: newText };
+      updated[idx] = { ...ev, text: newText, bgColor: undefined };
       debouncedPushHistory(updated);
       debouncedLint(updated);
       return updated;
     });
   }, [activeEventId, debouncedPushHistory, debouncedLint]);
+
+  // ── Smart Formatting Handlers with Scope & Auto-Contrast ──
+  const handleApplyFormatTextColor = useCallback((colorHex) => {
+    if (formatScope === 'active') {
+      if (activeEventId) {
+        applyColorToActive(colorHex);
+      }
+      setSubtitleStyle(prev => ({ ...prev, textColor: colorHex }));
+    } else {
+      // Apply to all subtitles in project
+      updateSubtitleStyle('textColor', colorHex);
+      setEvents(prev => {
+        const updated = prev.map(ev => {
+          let curText = ev.text || '';
+          let clean = curText.replace(/<\/?font[^>]*>/gi, '');
+          return {
+            ...ev,
+            text: clean
+          };
+        });
+        debouncedPushHistory(updated);
+        debouncedLint(updated);
+        return updated;
+      });
+    }
+  }, [formatScope, activeEventId, applyColorToActive, updateSubtitleStyle, debouncedPushHistory, debouncedLint]);
+
+  const handleApplyFormatBgColor = useCallback((bgChoice) => {
+    const lightBg = isLightColor(bgChoice);
+    // User chose light bg -> black text; dark bg -> white text
+    const contrastTextColor = lightBg ? '#000000' : '#ffffff';
+
+    if (formatScope === 'active') {
+      if (activeEventId) {
+        setEvents(prev => {
+          const idx = prev.findIndex(e => e.id === activeEventId || e.event_id === activeEventId);
+          if (idx === -1) return prev;
+          const ev = prev[idx];
+          let curText = ev.text || '';
+          let clean = curText.replace(/<\/?font[^>]*>/gi, '');
+          const newText = bgChoice === 'transparent' ? clean : `<font color="${contrastTextColor}">${clean}</font>`;
+
+          editedEventIdsRef.current.add(ev.id);
+          const updated = [...prev];
+          updated[idx] = {
+            ...ev,
+            text: newText,
+            bgColor: bgChoice
+          };
+          debouncedPushHistory(updated);
+          debouncedLint(updated);
+          return updated;
+        });
+      }
+      // Update preview to reflect the chosen bg and auto-contrasted text
+      setSubtitleStyle(prev => ({
+        ...prev,
+        bgColor: bgChoice,
+        textColor: contrastTextColor
+      }));
+    } else {
+      // Apply to all subtitles in project
+      updateSubtitleStyle({
+        bgColor: bgChoice,
+        textColor: contrastTextColor
+      });
+      setEvents(prev => {
+        const updated = prev.map(ev => {
+          let curText = ev.text || '';
+          let clean = curText.replace(/<\/?font[^>]*>/gi, '');
+          return {
+            ...ev,
+            text: clean,
+            bgColor: undefined // clear individual overrides so all inherit global project style
+          };
+        });
+        debouncedPushHistory(updated);
+        debouncedLint(updated);
+        return updated;
+      });
+    }
+  }, [formatScope, activeEventId, isLightColor, updateSubtitleStyle, debouncedPushHistory, debouncedLint]);
+
+  const handleClearFormat = useCallback(() => {
+    if (formatScope === 'active') {
+      clearFormatFromActive();
+      if (activeEventId) {
+        setEvents(prev => {
+          const idx = prev.findIndex(e => e.id === activeEventId || e.event_id === activeEventId);
+          if (idx === -1) return prev;
+          const updated = [...prev];
+          updated[idx] = { ...updated[idx], bgColor: undefined };
+          debouncedPushHistory(updated);
+          return updated;
+        });
+      }
+    } else {
+      // Reset all subtitles to default standard
+      const defaultStyle = {
+        fontFamily: 'Netflix Sans, Roboto, Helvetica, Arial, sans-serif',
+        fontSize: 22,
+        isBold: false,
+        isItalic: false,
+        isUnderline: false,
+        isStrikethrough: false,
+        textColor: '#ffffff',
+        bgColor: 'rgba(0,0,0,0.6)',
+        textAlign: 'center',
+        textShadow: 'outline'
+      };
+      setSubtitleStyle(defaultStyle);
+      try { localStorage.setItem('karya_subtitle_style', JSON.stringify(defaultStyle)); } catch (_) { }
+      setEvents(prev => {
+        const updated = prev.map(ev => ({
+          ...ev,
+          text: (ev.text || '').replace(/<\/?(?:b|i|u|s|strike|font)(?:\s+[^>]*)?>/gi, ''),
+          bgColor: undefined
+        }));
+        debouncedPushHistory(updated);
+        debouncedLint(updated);
+        return updated;
+      });
+    }
+  }, [formatScope, activeEventId, clearFormatFromActive, debouncedPushHistory, debouncedLint]);
 
   const handleUndo = () => {
     if (historyIndex > 0) {
@@ -943,7 +1216,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
       let targetIdx = prev.findIndex(e => {
         const st = e.start_time ?? e.start ?? 0;
         const en = e.end_time ?? e.end ?? 0;
-        return timeToSplit >= st && timeToSplit <= en;
+        return timeToSplit > st && timeToSplit < en;
       });
 
       if (targetIdx === -1) {
@@ -964,8 +1237,10 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
       const text1 = text.slice(0, spaceIdx > 0 ? spaceIdx : mid).trim();
       const text2 = text.slice(spaceIdx > 0 ? spaceIdx : mid).trim();
 
-      const newEv1 = { ...ev, end_time: timeToSplit, end: timeToSplit, text: text1 };
-      const newEv2 = { ...ev, id: Math.max(...prev.map(p => p.id || 0)) + 1, start_time: timeToSplit + 0.08, start: timeToSplit + 0.08, text: text2 };
+      const splitAt = Math.round(timeToSplit * 1000) / 1000;
+      const secondStart = Math.round((splitAt + 0.08) * 1000) / 1000;
+      const newEv1 = { ...ev, end_time: splitAt, end: splitAt, duration: Math.round((splitAt - start) * 1000) / 1000, text: text1, lines: text1.split('\n') };
+      const newEv2 = { ...ev, id: Math.max(...prev.map(p => p.id || 0)) + 1, start_time: secondStart, start: secondStart, duration: Math.round((end - secondStart) * 1000) / 1000, text: text2, lines: text2.split('\n') };
 
       editedEventIdsRef.current.add(ev.id);
       editedEventIdsRef.current.add(newEv2.id);
@@ -1103,6 +1378,11 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
   const handleFileChange = (e) => {
     const file = e.target.files?.[0];
     if (file) {
+      console.log(
+        '%c[Subtitle Studio]%c Selected media file: ' + file.name + ' (' + (file.size / (1024 * 1024)).toFixed(2) + ' MB, MIME: ' + (file.type || 'unknown') + ')',
+        'background: #3b82f6; color: white; padding: 2px 6px; border-radius: 3px; font-weight: bold;',
+        'color: #2563eb; font-weight: 500;'
+      );
       setSelectedFile(file);
       setCurrentVideoId(null);
       extractedAudioFileRef.current = null;
@@ -1114,6 +1394,17 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
         file.type?.startsWith('audio/') ||
         /\.(mp3|wav|m4a|aac|flac|ogg|opus|wma)$/i.test(file.name || '')
       );
+      const isWma = Boolean(
+        file.type === 'audio/x-ms-wma' ||
+        file.type === 'audio/wma' ||
+        /\.(wma)$/i.test(file.name || '')
+      );
+
+      if (isAudio && !isWma) {
+        setExtractedAudioUrl(url);
+      } else {
+        setExtractedAudioUrl(null);
+      }
 
       const mediaElem = isAudio ? document.createElement('audio') : document.createElement('video');
       mediaElem.src = url;
@@ -1141,9 +1432,6 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
       setTotalErrors(0);
       setTotalWarnings(0);
       setActiveEventId(null);
-      setCanResume(false);
-      setResumeChunk(null);
-      setTotalChunks(null);
 
       // Check if previous autosaved draft exists
       const saved = localStorage.getItem(`karya_subtitle_autosave_${file.name}`);
@@ -1152,11 +1440,6 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
           const data = JSON.parse(saved);
           if (data.events && data.events.length > 0) {
             setPendingDraft(data);
-            if (data.resumeChunk && data.totalChunks && data.resumeChunk <= data.totalChunks) {
-              setResumeChunk(data.resumeChunk);
-              setTotalChunks(data.totalChunks);
-              setCanResume(true);
-            }
           } else {
             setPendingDraft(null);
           }
@@ -1169,6 +1452,34 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
       }
     }
   };
+
+  // Separate External Audio Track Upload (Sync with Video)
+  const handleAudioTrackChange = useCallback(async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const aUrl = URL.createObjectURL(file);
+    setExtractedAudioUrl(aUrl);
+    extractedAudioFileRef.current = file;
+
+    // Decode peaks locally for immediate waveform preview
+    try {
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      const audioCtx = new AudioContextClass();
+      const buf = await file.arrayBuffer();
+      const decoded = await audioCtx.decodeAudioData(buf);
+      audioCtx.close().catch(() => {});
+      const channel = decoded.getChannelData(0);
+      const peaks = computeWaveformPeaks(channel, decoded.duration, 50);
+      if (peaks.length > 0) setInitialWaveformPeaks(peaks);
+    } catch (err) {
+      console.warn("Audio track peak extraction fallback:", err);
+    }
+
+    // Upload audio track to server in background
+    uploadPromiseRef.current = processAndUploadMedia(file, true);
+    setAutoSaveStatus(`Loaded audio track: ${file.name} ✓`);
+    setTimeout(() => setAutoSaveStatus(''), 4000);
+  }, [processAndUploadMedia]);
 
   // Discard previous work for currently selected media: purges local drafts and deletes backend audio/peaks/chunks
   const handleDiscardPreviousWork = useCallback(async (customFileName = null, customVideoId = null) => {
@@ -1185,11 +1496,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
     setPendingDraft(null);
     setEvents([]);
     setOriginalEvents([]);
-    setCanResume(false);
-    setResumeChunk(null);
-    setTotalChunks(null);
     setActiveEventId(null);
-    setBatchPauseData(null);
     editedEventIdsRef.current.clear();
     setComplianceScore(100);
     setTotalErrors(0);
@@ -1225,11 +1532,60 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
     setTimeout(() => setAutoSaveStatus(''), 3000);
   }, [selectedFile, currentVideoId, isAudioFile, processAndUploadMedia]);
 
+  // Available speakers list derived from all current subtitle events
+  const availableSpeakers = useMemo(() => {
+    const set = new Set();
+    events.forEach(e => {
+      if (e.speaker && typeof e.speaker === 'string' && e.speaker.trim()) {
+        set.add(e.speaker.trim());
+      }
+    });
+    ['Speaker 1', 'Speaker 2', 'Speaker 3'].forEach(s => set.add(s));
+    return Array.from(set);
+  }, [events]);
+
+  // Rename or switch speaker for a specific event or across all events
+  const handleRenameSpeaker = useCallback((targetEventId, newSpeakerName, applyToAll = false) => {
+    if (!newSpeakerName || !newSpeakerName.trim()) return;
+    const trimmed = newSpeakerName.trim();
+
+    setEvents(prev => {
+      const targetEvent = prev.find(e => (e.id === targetEventId || e.event_id === targetEventId));
+      const oldSpeaker = targetEvent?.speaker;
+
+      const next = prev.map(ev => {
+        const isMatch = applyToAll
+          ? ((oldSpeaker && ev.speaker === oldSpeaker) || (ev.id === targetEventId || ev.event_id === targetEventId))
+          : (ev.id === targetEventId || ev.event_id === targetEventId);
+
+        if (isMatch) {
+          return {
+            ...ev,
+            speaker: trimmed,
+            speaker_id: trimmed.toLowerCase().replace(/\s+/g, '_')
+          };
+        }
+        return ev;
+      });
+
+      pushToHistory(next);
+      return next;
+    });
+  }, [pushToHistory]);
+
   // Single Subtitle Event Update (Instant 0ms latency typing)
   const handleUpdateEvent = useCallback((id, field, value) => {
     editedEventIdsRef.current.add(id);
     setEvents(prev => {
-      const next = prev.map(e => ((e.id === id || e.event_id === id) ? { ...e, [field]: value } : e));
+      const next = prev.map(e => {
+        if (e.id === id || e.event_id === id) {
+          if (typeof field === 'object' && field !== null) {
+            return { ...e, ...field };
+          }
+          return { ...e, [field]: value };
+        }
+        return e;
+      });
       debouncedPushHistory(next);
       debouncedLint(next);
       return next;
@@ -1260,6 +1616,10 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
     });
   }, [debouncedPushHistory, debouncedLint]);
 
+  const handlePlayerTimeUpdate = useCallback((t) => {
+    setCurrentTime(t);
+  }, []);
+
   // Seek and Play Subtitle Event
   const handlePlayEvent = useCallback((id) => {
     setEvents(currentEvents => {
@@ -1275,18 +1635,15 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
   }, []);
 
   // Split Event
-  const handleSplitEvent = useCallback((id) => {
+  // Split a subtitle in the middle (state update must not be issued from inside another updater)
+  const handleSplitEvent = (id) => {
+    const ev = events.find(e => (e.id === id || e.event_id === id));
+    if (!ev) return;
+    const st = ev.start_time ?? ev.start ?? 0;
+    const en = ev.end_time ?? ev.end ?? 0;
     editedEventIdsRef.current.add(id);
-    setEvents(prev => {
-      const ev = prev.find(e => (e.id === id || e.event_id === id));
-      if (!ev) return prev;
-      const st = ev.start_time ?? ev.start ?? 0;
-      const en = ev.end_time ?? ev.end ?? 0;
-      const midTime = Math.round(((st + en) / 2) * 1000) / 1000;
-      handleSplitAtCursor(midTime);
-      return prev;
-    });
-  }, [handleSplitAtCursor]);
+    handleSplitAtCursor(Math.round(((st + en) / 2) * 1000) / 1000);
+  };
 
   // Merge Event with Next
   const handleMergeEvents = useCallback((id) => {
@@ -1299,10 +1656,12 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
       const next = prev[idx + 1];
 
       const mergedText = `${cur.text || ''}\n${next.text || ''}`.trim();
+      const mergedEnd = next.end_time ?? next.end;
       const mergedEvent = {
         ...cur,
-        end_time: next.end_time ?? next.end,
-        end: next.end_time ?? next.end,
+        end_time: mergedEnd,
+        end: mergedEnd,
+        duration: Math.max(0.1, mergedEnd - (cur.start_time ?? cur.start ?? 0)),
         text: mergedText,
         lines: mergedText.split('\n'),
       };
@@ -1380,10 +1739,37 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
     }
   }, [cplLimit, handleUpdateEvent]);
 
+  // Re-break every subtitle's lines to the CPL limit (QC drawer "Re-break All")
+  const handleRebreakAll = async () => {
+    if (events.length === 0) return;
+    try {
+      const res = await fetch(`${API_BASE}/api/subtitle/rebreak`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ events, max_cpl: cplLimit })
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const byId = new Map((data.events || []).map(e => [e.id ?? e.event_id, e.text]));
+      const updated = events.map(e => {
+        const t = byId.get(e.id ?? e.event_id);
+        return t !== undefined && t !== e.text ? { ...e, text: t, lines: t.split('\n') } : e;
+      });
+      setEvents(updated);
+      pushToHistory(updated);
+      handleLint(updated);
+      setAutoSaveStatus('Line breaks re-balanced ✓');
+      setTimeout(() => setAutoSaveStatus(''), 2500);
+    } catch (err) {
+      console.error('Re-break all failed:', err);
+      alert(`Could not re-break lines: ${err.message || err}`);
+    }
+  };
+
   // Add Manual Subtitle
   const handleAddSubtitle = (atTime = null, customEndTime = null) => {
     const startTime = atTime !== null ? Math.max(0, atTime) : (events.length > 0 ? events[events.length - 1].end_time + 0.1 : 0);
-    const endTime = customEndTime !== null ? Math.max(startTime + 0.2, customEndTime) : startTime + 2.4;
+    const endTime = customEndTime !== null ? Math.max(startTime + 0.2, customEndTime) : startTime + prefs.newSubDuration;
     const newId = events.length > 0 ? Math.max(...events.map(e => e.id || 0)) + 1 : 1;
 
     const newEvent = {
@@ -1393,13 +1779,14 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
       start: Math.round(startTime * 1000) / 1000,
       end: Math.round(endTime * 1000) / 1000,
       duration: Math.round((endTime - startTime) * 1000) / 1000,
-      text: "New dialogue subtitle line",
-      lines: ["New dialogue subtitle line"],
+      text: prefs.newSubText || 'New subtitle',
+      lines: [prefs.newSubText || 'New subtitle'],
       speaker_count: 1,
       speakers: ["Speaker 1"],
       is_italic: false,
       qc_errors: [],
-      is_valid: true
+      is_valid: true,
+      autoFocusText: true
     };
 
     const updated = [...events, newEvent].sort((a, b) => (a.start_time ?? a.start) - (b.start_time ?? b.start));
@@ -1454,6 +1841,13 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
       return;
     }
 
+    const storedApiKey = (localStorage.getItem('elevenlabs_api_key') || '').trim();
+    if (!storedApiKey && !serverHasElevenLabsKey) {
+      setApiKeyModalError(null);
+      setShowApiKeyModal(true);
+      return;
+    }
+
     // Clear old subtitles and draft for a clean fresh AI generation
     setPendingDraft(null);
     try {
@@ -1465,18 +1859,12 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
     setTotalWarnings(0);
     setActiveEventId(null);
     editedEventIdsRef.current.clear();
-    setQcNotification(null);
-    setResumeChunk(null);
-    setTotalChunks(null);
-    setCanResume(false);
-    setBatchPauseData(null);
     setUserFeedbackText('');
 
     setIsGenerating(true);
     setProgressPercent(5);
     setProgressStage('Uploading Video & Extracting Audio');
     setProgressDetail('Demuxing audio stream via FFmpeg...');
-    setBatchProgress(null);
     setElapsedSeconds(0);
 
     const startTimer = Date.now();
@@ -1534,9 +1922,32 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
 
       setProgressPercent(20);
       setProgressStage('Starting AI Subtitle Stream');
-      setProgressDetail('Connecting to Gemini AI pipeline...');
+      setProgressDetail('Connecting to ElevenLabs Scribe v2 transcription pipeline...');
 
-      console.log(`[Subtitle Studio] Starting batch stream for Video ID: ${videoId}`);
+      console.log(
+        '%c[Subtitle Studio]%c Starting Generation Pipeline for Video ID: ' + videoId,
+        'background: #2563eb; color: #fff; padding: 3px 8px; border-radius: 4px; font-weight: bold;',
+        'color: #2563eb; font-weight: bold;'
+      );
+      console.table({
+        'Video ID': videoId,
+        'Selected File': selectedFile?.name || 'N/A',
+        'File Size': selectedFile ? `${(selectedFile.size / (1024 * 1024)).toFixed(2)} MB` : 'N/A',
+        'Target Language': language,
+        'Target Script': script,
+        'Content Type': contentType,
+        'CPL Limit': cplLimit,
+        'Max CPS': cpsLimit,
+        'Max Lines': maxLines,
+        'Min Duration': `${minDuration}s`,
+        'Max Duration': `${maxDuration}s`,
+        'Frame Rate': `${frameRate} fps`,
+        'Num Speakers': numSpeakers > 0 ? numSpeakers : 'Auto-detect',
+        'Strict Native Script': strictNativeScript ? 'Enabled' : 'Disabled',
+        'SDH Mode': sdhMode ? 'Enabled' : 'Disabled',
+        'Snap to Shot Changes': snapToShotChanges ? 'Enabled' : 'Disabled'
+      });
+
       let streamRes = await fetch(`${API_BASE}/api/subtitle/generate_stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1546,6 +1957,8 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
           script,
           content_type: contentType,
           sdh_mode: sdhMode,
+          include_speaker_tags: includeSpeakerTags,
+          snap_to_shot_changes: snapToShotChanges,
           cpl_limit: cplLimit,
           max_cps: cpsLimit,
           max_lines: maxLines,
@@ -1553,7 +1966,9 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
           max_duration: maxDuration,
           frame_rate: frameRate,
           gemini_auto_fix: geminiAutoFix,
-          batch_mode: 'all',
+          num_speakers: numSpeakers > 0 ? numSpeakers : null,
+          strict_native_script: strictNativeScript,
+          elevenlabs_api_key: localStorage.getItem('elevenlabs_api_key') || '',
           user_feedback: userFeedbackText.trim() || null,
           project_glossary: glossaryTerms
         })
@@ -1576,8 +1991,8 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
 
         setProgressPercent(22);
         setProgressStage('Starting AI Subtitle Stream');
-        setProgressDetail('Connecting to Gemini AI pipeline with active session...');
-        console.log(`[Subtitle Studio] Retrying batch stream for new Video ID: ${videoId}`);
+        setProgressDetail('Connecting to ElevenLabs Scribe v2 pipeline with active session...');
+        console.log(`[Subtitle Studio] Retrying stream for new Video ID: ${videoId}`);
 
         streamRes = await fetch(`${API_BASE}/api/subtitle/generate_stream`, {
           method: 'POST',
@@ -1588,6 +2003,8 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
             script,
             content_type: contentType,
             sdh_mode: sdhMode,
+            include_speaker_tags: includeSpeakerTags,
+            snap_to_shot_changes: snapToShotChanges,
             cpl_limit: cplLimit,
             max_cps: cpsLimit,
             max_lines: maxLines,
@@ -1595,7 +2012,9 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
             max_duration: maxDuration,
             frame_rate: frameRate,
             gemini_auto_fix: geminiAutoFix,
-            batch_mode: 'all',
+            num_speakers: numSpeakers > 0 ? numSpeakers : null,
+            strict_native_script: strictNativeScript,
+            elevenlabs_api_key: localStorage.getItem('elevenlabs_api_key') || '',
             user_feedback: userFeedbackText.trim() || null,
             project_glossary: glossaryTerms
           })
@@ -1637,125 +2056,117 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
 
             if (data.type === 'init') {
               setShotChanges(data.shot_changes || []);
-              setFrameRate(data.frame_rate || 24.0);
-              setProgressPercent(30);
-              setProgressStage('Analyzing Audio & Dialogue Splits');
-              totalExpectedChunks = data.total_chunks || 1;
-              setTotalChunks(totalExpectedChunks);
-              setProgressDetail(`Splitting recording into ${data.total_chunks} audio batches...`);
-              setBatchProgress({ current: 0, total: data.total_chunks });
-            } else if (data.type === 'heartbeat') {
-              // Live heartbeat update from server worker
-              if (data.stage) {
-                setProgressDetail(data.stage);
-              }
+              if (data.frame_rate) setFrameRate(data.frame_rate);
+              setProgressPercent(20);
+              setProgressStage('Media Audio Extracted');
+              setProgressDetail('Initializing ElevenLabs Scribe v2 transcription...');
+              console.log(
+                '%c[SSE Init]%c Video initialized -> Frame Rate: ' + (data.frame_rate || frameRate) + ' fps | Audio Duration: ' + (data.audio_duration ? data.audio_duration.toFixed(2) + 's' : 'N/A') + ' | Shot Changes: ' + (data.shot_changes?.length || 0),
+                'background: #0284c7; color: white; padding: 2px 6px; border-radius: 3px; font-weight: bold;',
+                'color: #0284c7; font-weight: 500;'
+              );
             } else if (data.type === 'progress') {
-              const pct = 30 + Math.floor((data.chunk_index / data.total_chunks) * 55);
-              setProgressPercent(pct);
-              setProgressStage(`Generating Batch ${data.chunk_index} of ${data.total_chunks}`);
-              setProgressDetail(data.stage || `Transcribing dialogue & applying Netflix rules for Batch ${data.chunk_index}...`);
-              setBatchProgress({ current: data.chunk_index, total: data.total_chunks });
-            } else if (data.type === 'batch') {
-              lastBatchIndex = data.chunk_index || lastBatchIndex;
-              if (lastBatchIndex < totalExpectedChunks) {
-                setResumeChunk(lastBatchIndex + 1);
-                setTotalChunks(totalExpectedChunks);
-              }
-              if (data.fallback) {
-                setProgressDetail(`Batch ${data.chunk_index}: Transcribed via local Whisper fallback ✓`);
-              }
-              // Append / Merge Batch Events Progressively in Real-Time!
-              const newBatchEvents = data.events || [];
-              accumulatedEvents = [...accumulatedEvents, ...newBatchEvents];
-              setEvents(prev => {
-                const prevMap = new Map(prev.map(e => [e.id, e]));
-                const merged = [...prev];
-                for (const newEv of newBatchEvents) {
-                  if (!prevMap.has(newEv.id)) {
-                    merged.push(newEv);
-                  } else if (!editedEventIdsRef.current.has(newEv.id)) {
-                    // Update only if user hasn't manually edited this event
-                    const idx = merged.findIndex(e => e.id === newEv.id);
-                    if (idx !== -1) merged[idx] = newEv;
-                  }
-                }
-                return merged;
-              });
-              if (!activeEventId && accumulatedEvents.length > 0) {
-                setActiveEventId(accumulatedEvents[0].id);
-              }
-              console.log(`[Subtitle Studio] Ingested Batch ${data.chunk_index}/${data.total_chunks} (${newBatchEvents.length} events). User edits strictly protected!`);
-            } else if (data.type === 'batch_ready') {
-              setQcNotification({
-                message: data.message || `Part ${data.chunk_index} is complete! You can do manual QC on it now.`,
-                chunkIndex: data.chunk_index,
-                totalChunks: data.total_chunks,
-                timestamp: Date.now()
-              });
-            } else if (data.type === 'batch_pause') {
-              streamCompleted = true;
-              setBatchPauseData({
-                chunkIndex: data.chunk_index,
-                totalChunks: data.total_chunks,
-                nextChunk: data.next_chunk,
-                prevBatchEnd: data.prev_batch_end,
-                prevEventsCount: data.prev_events_count,
-                prevContext: data.prev_context,
-                message: data.message
-              });
-              setResumeChunk(data.next_chunk);
-              setTotalChunks(data.total_chunks);
-              setCanResume(true);
-              const pct = Math.floor((data.chunk_index / data.total_chunks) * 100);
-              setProgressPercent(pct);
-              setProgressStage(`Batch ${data.chunk_index} of ${data.total_chunks} Ready for Review`);
-              setProgressDetail(data.message || `Batch ${data.chunk_index} ready. Provide feedback below or continue.`);
-              console.log(`[Subtitle Studio] Batch ${data.chunk_index}/${data.total_chunks} paused for review.`);
-              try { await reader.cancel(); } catch (_) { }
-              break;
-            } else if (data.type === 'batch_error') {
-              console.warn(`[Subtitle Studio] Batch ${data.chunk_index} notice:`, data.error);
-              setProgressDetail(`Batch ${data.chunk_index} notice: ${data.error ? String(data.error).slice(0, 70) : 'issue processing'}`);
-            } else if (data.type === 'stream_error') {
-              console.error(`[Subtitle Studio] Fatal stream error reported:`, data.error);
-              throw new Error(`Server generation error: ${data.error}`);
+              setProgressPercent(data.progress || 50);
+              setProgressStage(data.stage || 'Transcribing with ElevenLabs Scribe v2...');
+              setProgressDetail(data.detail || data.stage || 'Conforming subtitles to Netflix Timed Text guidelines...');
+              console.log(
+                '%c[SSE Progress ' + (data.progress || 0) + '%]%c ' + data.stage + (data.detail ? ' (' + data.detail + ')' : ''),
+                'background: #6366f1; color: white; padding: 2px 6px; border-radius: 3px; font-weight: bold;',
+                'color: #4f46e5; font-weight: 500;'
+              );
             } else if (data.type === 'complete') {
               streamCompleted = true;
-              setCanResume(false);
-              setResumeChunk(null);
-              setBatchPauseData(null);
               setUserFeedbackText('');
               const res = data.result || {};
-              const finalEvents = (res.events || accumulatedEvents).map(e => ({
+              const finalEvents = (data.events || res.events || accumulatedEvents).map(e => ({
                 ...e,
-                start: e.start_time || e.start,
-                end: e.end_time || e.end
+                start: e.start_time !== undefined ? e.start_time : (e.start ?? 0),
+                end: e.end_time !== undefined ? e.end_time : (e.end ?? 0)
               }));
-              setEvents(prev => {
-                const prevMap = new Map(prev.map(e => [e.id, e]));
-                return finalEvents.map(e => {
-                  // Protect manual edits made by user while subsequent batches were generating
-                  if (editedEventIdsRef.current.has(e.id) && prevMap.has(e.id)) {
-                    return prevMap.get(e.id);
-                  }
-                  return e;
-                });
-              });
+              setEvents(finalEvents);
               pushToHistory(finalEvents);
-              setComplianceScore(res.compliance_score || 100);
+              const score = data.compliance_score ?? res.compliance_score ?? 100;
+              setComplianceScore(score);
               setTotalErrors(res.total_errors || 0);
               setTotalWarnings(res.total_warnings || 0);
               setCpsStats(res.cps_stats || null);
               setProgressPercent(100);
+
+              const totalSec = ((Date.now() - startTimer) / 1000).toFixed(2);
+              console.log(
+                '%c[Subtitle Studio]%c Generated ' + finalEvents.length + ' Netflix-compliant subtitle cards with ' + score + '% compliance in ' + totalSec + 's!',
+                'background: #16a34a; color: white; padding: 3px 8px; border-radius: 4px; font-weight: bold;',
+                'color: #16a34a; font-weight: bold;'
+              );
+
+              // Detailed diagnostic tables in console
+              try {
+                console.groupCollapsed(
+                  '%c[Subtitle Studio Output Preview]%c ' + finalEvents.length + ' cards | Score: ' + score + '% | Errors: ' + (res.total_errors || 0) + ' | Warnings: ' + (res.total_warnings || 0),
+                  'color: #059669; font-weight: bold;',
+                  'color: inherit;'
+                );
+                if (res.cps_stats) {
+                  console.log('Reading Speed (CPS) Statistics:');
+                  console.table(res.cps_stats);
+                }
+                if (finalEvents.length > 0) {
+                  console.log('First 5 Subtitle Cards:');
+                  console.table(finalEvents.slice(0, 5).map(e => ({
+                    ID: e.id,
+                    Start: `${(e.start_time ?? e.start ?? 0).toFixed(3)}s`,
+                    End: `${(e.end_time ?? e.end ?? 0).toFixed(3)}s`,
+                    Duration: `${((e.end_time ?? e.end ?? 0) - (e.start_time ?? e.start ?? 0)).toFixed(2)}s`,
+                    Speaker: e.primary_speaker || e.speaker || 'Speaker 1',
+                    CPS: typeof e.cps === 'number' ? e.cps.toFixed(1) : (e.cps || '-'),
+                    CPL: e.cpl || '-',
+                    Text: (e.text || '').replace(/\n/g, ' / ')
+                  })));
+                }
+                if (finalEvents.length > 5) {
+                  console.log('Last 5 Subtitle Cards:');
+                  console.table(finalEvents.slice(-5).map(e => ({
+                    ID: e.id,
+                    Start: `${(e.start_time ?? e.start ?? 0).toFixed(3)}s`,
+                    End: `${(e.end_time ?? e.end ?? 0).toFixed(3)}s`,
+                    Duration: `${((e.end_time ?? e.end ?? 0) - (e.start_time ?? e.start ?? 0)).toFixed(2)}s`,
+                    Speaker: e.primary_speaker || e.speaker || 'Speaker 1',
+                    CPS: typeof e.cps === 'number' ? e.cps.toFixed(1) : (e.cps || '-'),
+                    CPL: e.cpl || '-',
+                    Text: (e.text || '').replace(/\n/g, ' / ')
+                  })));
+                }
+                console.log('All Subtitle Event Objects:', finalEvents);
+                console.groupEnd();
+              } catch (_) { }
+
               if (finalEvents.length === 0) {
                 setProgressStage('No Dialogue Detected');
                 setProgressDetail(res.error || '0 subtitles found across recording.');
-                alert(res.error || `No Subtitles Generated: No audible dialogue was transcribed across all parts.\n\nTip: If you recently uploaded multiple files, your Gemini API key free tier quota may be temporarily rate-limited (429). The system also attempts local Whisper fallback.`);
+                alert(res.error || `No Subtitles Generated: No audible dialogue was transcribed.\n\nTip: Ensure the audio has audible speech and your ElevenLabs API key / quota is active in Settings.`);
               } else {
                 setProgressStage('Complete');
-                setProgressDetail(`All ${finalEvents.length} subtitles generated and audited!`);
-                console.log("[Subtitle Studio] Subtitle generation completed successfully!");
+                setProgressDetail(`All ${finalEvents.length} subtitles generated following Netflix guidelines!`);
               }
+            } else if (data.type === 'error' || data.type === 'stream_error') {
+              console.error(
+                '%c[SSE Error]%c ' + (data.message || data.error),
+                'background: #dc2626; color: white; padding: 2px 6px; border-radius: 3px; font-weight: bold;',
+                'color: #dc2626; font-weight: bold;'
+              );
+              const errMsg = data.message || data.error || 'ElevenLabs transcription failed';
+              if (
+                errMsg.toLowerCase().includes('api key') ||
+                errMsg.toLowerCase().includes('401') ||
+                errMsg.toLowerCase().includes('unauthorized') ||
+                errMsg.toLowerCase().includes('quota')
+              ) {
+                setApiKeyModalError(errMsg);
+                setShowApiKeyModal(true);
+                streamCompleted = true;
+                return;
+              }
+              throw new Error(errMsg);
             }
           } catch (e) {
             console.warn("SSE parse error:", e, jsonStr);
@@ -1765,34 +2176,34 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
 
       // Check for premature disconnection
       if (!streamCompleted) {
-        console.warn(`[Subtitle Studio] Stream reader closed without 'complete' event. Ingested ${lastBatchIndex}/${totalExpectedChunks} batches (${accumulatedEvents.length} events).`);
         if (accumulatedEvents.length > 0) {
           const finalEvents = accumulatedEvents.map(e => ({
             ...e,
-            start: e.start_time || e.start,
-            end: e.end_time || e.end
+            start: e.start_time !== undefined ? e.start_time : (e.start ?? 0),
+            end: e.end_time !== undefined ? e.end_time : (e.end ?? 0)
           }));
           setEvents(finalEvents);
           pushToHistory(finalEvents);
-          if (lastBatchIndex < totalExpectedChunks) {
-            setCanResume(true);
-            setResumeChunk(lastBatchIndex + 1);
-            setTotalChunks(totalExpectedChunks);
-          }
           setProgressPercent(100);
-          setProgressStage('Generation Paused');
-          setProgressDetail(`Stream paused at Batch ${lastBatchIndex}/${totalExpectedChunks}. All ${finalEvents.length} subtitles preserved!`);
-          alert(`Subtitle Generation Paused: ${finalEvents.length} subtitles generated across ${lastBatchIndex || 1} of ${totalExpectedChunks} batches and saved to your timeline.\n\nYou can click 'Continue (Batch ${(lastBatchIndex || 1) + 1}/${totalExpectedChunks})' anytime to resume from where it stopped without restarting!`);
+          setProgressStage('Generation Complete');
+          setProgressDetail(`${finalEvents.length} subtitles preserved.`);
         } else {
           throw new Error("Stream connection closed before subtitles could be generated. Please try again.");
         }
       }
     } catch (err) {
       console.error("Generation error:", err);
-      if (lastBatchIndex > 0 && lastBatchIndex < totalExpectedChunks) {
-        setCanResume(true);
-        setResumeChunk(lastBatchIndex + 1);
-        setTotalChunks(totalExpectedChunks);
+      if (
+        err.message && (
+          err.message.toLowerCase().includes('api key') ||
+          err.message.toLowerCase().includes('401') ||
+          err.message.toLowerCase().includes('unauthorized') ||
+          err.message.toLowerCase().includes('quota')
+        )
+      ) {
+        setApiKeyModalError(err.message);
+        setShowApiKeyModal(true);
+        return;
       }
       const isNetwork = err.message?.includes('Failed to fetch') ||
         err.message?.includes('NetworkError') ||
@@ -1812,511 +2223,9 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
       if (elapsedTimerRef.current) clearInterval(elapsedTimerRef.current);
       setTimeout(() => {
         setProgressPercent(0);
-        setBatchProgress(null);
       }, 2500);
     }
   };
-
-  // ── Continue / Resume Subtitle Generation from Last Processed Batch ──
-  const handleContinueGenerate = async (targetMode = 'all', feedbackText = null) => {
-    if (!selectedFile) {
-      fileInputRef.current?.click();
-      return;
-    }
-
-    const chunkToStart = resumeChunk || 1;
-    const prevEventsCount = events.length;
-    const prevBatchEnd = events.length > 0 ? (events[events.length - 1].end_time ?? events[events.length - 1].end ?? 0.0) : 0.0;
-    const prevContext = events.slice(-3).map(e => e.text).filter(Boolean);
-    const activeFeedback = (typeof feedbackText === 'string' && feedbackText.trim()) ? feedbackText.trim() : (userFeedbackText.trim() || null);
-
-    setBatchPauseData(null);
-    setIsGenerating(true);
-    setProgressPercent(Math.min(95, Math.floor(((chunkToStart - 1) / (totalChunks || chunkToStart)) * 100)));
-    setProgressStage(`Resuming from Batch ${chunkToStart} of ${totalChunks || '?'}`);
-    setProgressDetail(`Connecting to resume stream from ${prevEventsCount} existing subtitles...`);
-    setBatchProgress({ current: chunkToStart - 1, total: totalChunks || chunkToStart });
-    setElapsedSeconds(0);
-
-    const startTimer = Date.now();
-    elapsedTimerRef.current = setInterval(() => {
-      setElapsedSeconds(parseFloat(((Date.now() - startTimer) / 1000).toFixed(1)));
-    }, 200);
-
-    let lastBatchIndex = chunkToStart - 1;
-    let totalExpectedChunks = totalChunks || 1;
-
-    try {
-      let videoId = currentVideoId;
-      if (!videoId) {
-        setProgressDetail('Transferring media to server session...');
-        videoId = await processAndUploadMedia(selectedFile, isAudioFile);
-        if (videoId) {
-          setCurrentVideoId(videoId);
-        } else {
-          throw new Error('Could not transfer media to server.');
-        }
-      }
-
-      console.log(`[Subtitle Studio] Resuming stream for Video ID: ${videoId} starting at Batch ${chunkToStart} (mode: ${targetMode})`);
-      let streamRes = await fetch(`${API_BASE}/api/subtitle/generate_stream`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          video_id: videoId,
-          language,
-          script,
-          content_type: contentType,
-          sdh_mode: sdhMode,
-          cpl_limit: cplLimit,
-          max_cps: cpsLimit,
-          max_lines: maxLines,
-          min_duration: minDuration,
-          max_duration: maxDuration,
-          frame_rate: frameRate,
-          gemini_auto_fix: geminiAutoFix,
-          start_time: prevBatchEnd,
-          start_chunk: chunkToStart,
-          prev_events_count: prevEventsCount,
-          prev_batch_end: prevBatchEnd,
-          prev_context: prevContext,
-          batch_mode: targetMode,
-          user_feedback: activeFeedback,
-          project_glossary: glossaryTerms
-        })
-      });
-
-      if (streamRes.status === 404) {
-        console.warn(`[Subtitle Studio] Session for ${videoId} expired on server (404). Re-uploading media...`);
-        setCurrentVideoId(null);
-        videoId = await processAndUploadMedia(selectedFile, isAudioFile);
-        if (!videoId) {
-          throw new Error('Media re-upload failed after server session expired.');
-        }
-        setCurrentVideoId(videoId);
-
-        streamRes = await fetch(`${API_BASE}/api/subtitle/generate_stream`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            video_id: videoId,
-            language,
-            script,
-            content_type: contentType,
-            sdh_mode: sdhMode,
-            cpl_limit: cplLimit,
-            max_cps: cpsLimit,
-            max_lines: maxLines,
-            min_duration: minDuration,
-            max_duration: maxDuration,
-            frame_rate: frameRate,
-            gemini_auto_fix: geminiAutoFix,
-            start_time: prevBatchEnd,
-            start_chunk: chunkToStart,
-            prev_events_count: prevEventsCount,
-            prev_batch_end: prevBatchEnd,
-            prev_context: prevContext,
-            batch_mode: targetMode,
-            user_feedback: activeFeedback,
-            project_glossary: glossaryTerms
-          })
-        });
-      }
-
-      if (!streamRes.ok) {
-        const errDetail = await streamRes.json().catch(() => null);
-        throw new Error(errDetail?.detail || `Stream request failed (Status: ${streamRes.status})`);
-      }
-
-      const reader = streamRes.body.getReader();
-      const decoder = new TextDecoder('utf-8');
-      let buffer = '';
-      let streamCompleted = false;
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n\n');
-        buffer = lines.pop() || '';
-
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (trimmed.startsWith(':')) continue;
-          if (!trimmed.startsWith('data:')) continue;
-          const jsonStr = trimmed.replace(/^data:\s*/, '');
-          try {
-            const data = JSON.parse(jsonStr);
-
-            if (data.type === 'init') {
-              totalExpectedChunks = data.total_chunks || totalExpectedChunks;
-              setTotalChunks(totalExpectedChunks);
-              setProgressDetail(`Continuing batches ${data.start_chunk || chunkToStart} to ${totalExpectedChunks}...`);
-              setBatchProgress({ current: data.start_chunk || chunkToStart, total: totalExpectedChunks });
-            } else if (data.type === 'heartbeat') {
-              if (data.stage) setProgressDetail(data.stage);
-            } else if (data.type === 'progress') {
-              const pct = Math.floor((data.chunk_index / data.total_chunks) * 100);
-              setProgressPercent(pct);
-              setProgressStage(`Generating Batch ${data.chunk_index} of ${data.total_chunks}`);
-              setProgressDetail(data.stage || `Transcribing dialogue & applying Netflix rules for Batch ${data.chunk_index}...`);
-              setBatchProgress({ current: data.chunk_index, total: data.total_chunks });
-            } else if (data.type === 'batch') {
-              lastBatchIndex = data.chunk_index || lastBatchIndex;
-              const newBatchEvents = data.events || [];
-              setEvents(prev => {
-                const prevMap = new Map(prev.map(e => [e.id, e]));
-                const merged = [...prev];
-                for (const newEv of newBatchEvents) {
-                  if (!prevMap.has(newEv.id)) {
-                    merged.push(newEv);
-                  } else if (!editedEventIdsRef.current.has(newEv.id)) {
-                    const idx = merged.findIndex(e => e.id === newEv.id);
-                    if (idx !== -1) merged[idx] = newEv;
-                  }
-                }
-                return sanitizeEvents(merged);
-              });
-              const nextToResume = lastBatchIndex + 1;
-              if (nextToResume <= (data.total_chunks || totalExpectedChunks)) {
-                setResumeChunk(nextToResume);
-                setTotalChunks(data.total_chunks || totalExpectedChunks);
-                setCanResume(true);
-              }
-              console.log(`[Subtitle Studio] Appended Batch ${data.chunk_index}/${data.total_chunks} (${newBatchEvents.length} new events).`);
-            } else if (data.type === 'batch_ready') {
-              setQcNotification({
-                message: data.message || `Part ${data.chunk_index} is complete!`,
-                chunkIndex: data.chunk_index,
-                totalChunks: data.total_chunks,
-                timestamp: Date.now()
-              });
-            } else if (data.type === 'batch_pause') {
-              streamCompleted = true;
-              setBatchPauseData({
-                chunkIndex: data.chunk_index,
-                totalChunks: data.total_chunks,
-                nextChunk: data.next_chunk,
-                prevBatchEnd: data.prev_batch_end,
-                prevEventsCount: data.prev_events_count,
-                prevContext: data.prev_context,
-                message: data.message
-              });
-              setResumeChunk(data.next_chunk);
-              setTotalChunks(data.total_chunks);
-              setCanResume(true);
-              const pct = Math.floor((data.chunk_index / data.total_chunks) * 100);
-              setProgressPercent(pct);
-              setProgressStage(`Batch ${data.chunk_index} of ${data.total_chunks} Ready for Review`);
-              setProgressDetail(data.message || `Batch ${data.chunk_index} ready. Check subtitles or provide AI guidance.`);
-              console.log(`[Subtitle Studio] Batch ${data.chunk_index}/${data.total_chunks} paused for review.`);
-              try { await reader.cancel(); } catch (_) { }
-              break;
-            } else if (data.type === 'batch_error') {
-              console.warn(`[Subtitle Studio] Batch ${data.chunk_index} issue:`, data.error);
-              setProgressDetail(`Batch ${data.chunk_index} had an issue: continuing to next batch...`);
-            } else if (data.type === 'stream_error') {
-              console.error(`[Subtitle Studio] Stream error:`, data.error);
-              throw new Error(`Server generation error: ${data.error}`);
-            } else if (data.type === 'complete') {
-              streamCompleted = true;
-              setCanResume(false);
-              setResumeChunk(null);
-              setBatchPauseData(null);
-              setUserFeedbackText('');
-              const res = data.result || {};
-              setComplianceScore(res.compliance_score || 100);
-              setTotalErrors(res.total_errors || 0);
-              setTotalWarnings(res.total_warnings || 0);
-              setCpsStats(res.cps_stats || null);
-              setProgressPercent(100);
-              setProgressStage('Complete');
-              setProgressDetail(`All batches generated and audited!`);
-              console.log("[Subtitle Studio] Continued subtitle generation completed successfully!");
-            }
-          } catch (e) {
-            console.warn("SSE parse error:", e, jsonStr);
-          }
-        }
-      }
-
-      if (!streamCompleted) {
-        console.warn(`[Subtitle Studio] Stream stopped at batch ${lastBatchIndex}/${totalExpectedChunks}.`);
-        if (lastBatchIndex < totalExpectedChunks) {
-          setResumeChunk(lastBatchIndex + 1);
-          setTotalChunks(totalExpectedChunks);
-          setCanResume(true);
-          alert(`Generation paused at batch ${lastBatchIndex} of ${totalExpectedChunks}. Existing subtitles are safely preserved.\n\nYou can click 'Continue (Batch ${lastBatchIndex + 1}/${totalExpectedChunks})' anytime to continue.`);
-        }
-      }
-    } catch (err) {
-      console.error("Resume error:", err);
-      if (lastBatchIndex > 0 && lastBatchIndex < totalExpectedChunks) {
-        setCanResume(true);
-        setResumeChunk(lastBatchIndex + 1);
-        setTotalChunks(totalExpectedChunks);
-      }
-      alert(`Error resuming subtitle generation: ${err.message}`);
-    } finally {
-      setIsGenerating(false);
-      if (elapsedTimerRef.current) clearInterval(elapsedTimerRef.current);
-      setTimeout(() => {
-        setProgressPercent(0);
-        setBatchProgress(null);
-      }, 2500);
-    }
-  };
-
-  // ── Step Continue with AI Steering Guidance ──
-  const handleContinueBatchStep = async (mode = 'single') => {
-    const feedback = userFeedbackText.trim();
-    setBatchPauseData(null);
-    await handleContinueGenerate(mode, feedback);
-  };
-
-  // ── Open Custom Time Resume Modal ──
-  const handleOpenCustomTimeModal = useCallback((initialTime = null) => {
-    let t = initialTime;
-    if (t === 'lastSub' || (t === null && events.length > 0)) {
-      const lastEv = events[events.length - 1];
-      t = lastEv ? (lastEv.end_time ?? lastEv.end ?? 0) : currentTime;
-    } else if (t === null) {
-      t = currentTime;
-    }
-    setCustomStartTime(t);
-    setShowCustomTimeModal(true);
-  }, [currentTime, events]);
-
-  // ── Continue / Generate Subtitles From Custom Timestamp on Timeline ──
-  const handleStartGenerationFromCustomTime = useCallback(async (targetSec, shouldPreserve = true) => {
-    setShowCustomTimeModal(false);
-    if (!selectedFile) {
-      fileInputRef.current?.click();
-      return;
-    }
-
-    const t = Math.max(0, typeof targetSec === 'number' ? targetSec : parseFloat(targetSec) || 0);
-
-    // If shouldPreserve is true, keep events starting before t
-    const preservedEvents = shouldPreserve
-      ? events.filter(e => {
-        const st = e.start_time ?? e.start ?? 0;
-        return st < t;
-      })
-      : [];
-
-    setEvents(preservedEvents);
-    pushToHistory(preservedEvents);
-
-    const prevEventsCount = preservedEvents.length;
-    const prevBatchEnd = preservedEvents.length > 0
-      ? (preservedEvents[preservedEvents.length - 1].end_time ?? preservedEvents[preservedEvents.length - 1].end ?? t)
-      : t;
-    const prevContext = preservedEvents.slice(-3).map(e => e.text).filter(Boolean);
-
-    setIsGenerating(true);
-    setProgressPercent(Math.min(95, Math.floor((t / Math.max(1, videoDuration || t)) * 100)));
-    setProgressStage(`Generating from ${formatTime(t)}`);
-    setProgressDetail(`Starting stream from ${formatTime(t)} (${prevEventsCount} earlier subtitles preserved)...`);
-    setBatchProgress(null);
-    setElapsedSeconds(0);
-
-    const startTimer = Date.now();
-    elapsedTimerRef.current = setInterval(() => {
-      setElapsedSeconds(parseFloat(((Date.now() - startTimer) / 1000).toFixed(1)));
-    }, 200);
-
-    let lastBatchIndex = 0;
-    let totalExpectedChunks = 1;
-
-    try {
-      let videoId = currentVideoId;
-      if (!videoId) {
-        setProgressDetail('Transferring media to server session...');
-        videoId = await processAndUploadMedia(selectedFile, isAudioFile);
-        if (videoId) {
-          setCurrentVideoId(videoId);
-        } else {
-          throw new Error('Could not transfer media to server.');
-        }
-      }
-
-      console.log(`[Subtitle Studio] Starting stream from custom timestamp: ${t.toFixed(3)}s`);
-      let streamRes = await fetch(`${API_BASE}/api/subtitle/generate_stream`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          video_id: videoId,
-          language,
-          script,
-          content_type: contentType,
-          sdh_mode: sdhMode,
-          cpl_limit: cplLimit,
-          max_cps: cpsLimit,
-          max_lines: maxLines,
-          min_duration: minDuration,
-          max_duration: maxDuration,
-          frame_rate: frameRate,
-          gemini_auto_fix: geminiAutoFix,
-          start_time: t,
-          prev_events_count: prevEventsCount,
-          prev_batch_end: prevBatchEnd,
-          prev_context: prevContext,
-          project_glossary: glossaryTerms
-        })
-      });
-
-      if (streamRes.status === 404) {
-        console.warn(`[Subtitle Studio] Session for ${videoId} expired on server (404). Re-uploading media...`);
-        setCurrentVideoId(null);
-        videoId = await processAndUploadMedia(selectedFile, isAudioFile);
-        if (!videoId) {
-          throw new Error('Media re-upload failed after server session expired.');
-        }
-        setCurrentVideoId(videoId);
-
-        streamRes = await fetch(`${API_BASE}/api/subtitle/generate_stream`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            video_id: videoId,
-            language,
-            script,
-            content_type: contentType,
-            sdh_mode: sdhMode,
-            cpl_limit: cplLimit,
-            max_cps: cpsLimit,
-            max_lines: maxLines,
-            min_duration: minDuration,
-            max_duration: maxDuration,
-            frame_rate: frameRate,
-            gemini_auto_fix: geminiAutoFix,
-            start_time: t,
-            prev_events_count: prevEventsCount,
-            prev_batch_end: prevBatchEnd,
-            prev_context: prevContext,
-            project_glossary: glossaryTerms
-          })
-        });
-      }
-
-      if (!streamRes.ok) {
-        const errDetail = await streamRes.json().catch(() => null);
-        throw new Error(errDetail?.detail || `Stream request failed (Status: ${streamRes.status})`);
-      }
-
-      const reader = streamRes.body.getReader();
-      const decoder = new TextDecoder('utf-8');
-      let buffer = '';
-      let streamCompleted = false;
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n\n');
-        buffer = lines.pop() || '';
-
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (trimmed.startsWith(':')) continue;
-          if (!trimmed.startsWith('data:')) continue;
-          const jsonStr = trimmed.replace(/^data:\s*/, '');
-          try {
-            const data = JSON.parse(jsonStr);
-
-            if (data.type === 'init') {
-              totalExpectedChunks = data.total_chunks || totalExpectedChunks;
-              setTotalChunks(totalExpectedChunks);
-              setProgressDetail(`Generating ${totalExpectedChunks} batches from ${formatTime(t)}...`);
-              setBatchProgress({ current: 0, total: totalExpectedChunks });
-            } else if (data.type === 'heartbeat') {
-              if (data.stage) setProgressDetail(data.stage);
-            } else if (data.type === 'progress') {
-              const pct = Math.floor((data.chunk_index / data.total_chunks) * 100);
-              setProgressPercent(pct);
-              setProgressStage(`Generating Batch ${data.chunk_index} of ${data.total_chunks}`);
-              setProgressDetail(data.stage || `Transcribing dialogue for Batch ${data.chunk_index}...`);
-              setBatchProgress({ current: data.chunk_index, total: data.total_chunks });
-            } else if (data.type === 'batch') {
-              lastBatchIndex = data.chunk_index || lastBatchIndex;
-              const newBatchEvents = data.events || [];
-              setEvents(prev => {
-                const prevMap = new Map(prev.map(e => [e.id, e]));
-                const merged = [...prev];
-                for (const newEv of newBatchEvents) {
-                  if (!prevMap.has(newEv.id)) {
-                    merged.push(newEv);
-                  } else if (!editedEventIdsRef.current.has(newEv.id)) {
-                    const idx = merged.findIndex(e => e.id === newEv.id);
-                    if (idx !== -1) merged[idx] = newEv;
-                  }
-                }
-                return sanitizeEvents(merged);
-              });
-              const nextToResume = lastBatchIndex + 1;
-              if (nextToResume <= (data.total_chunks || totalExpectedChunks)) {
-                setResumeChunk(nextToResume);
-                setTotalChunks(data.total_chunks || totalExpectedChunks);
-                setCanResume(true);
-              }
-              console.log(`[Subtitle Studio] Appended Batch ${data.chunk_index}/${data.total_chunks} (${newBatchEvents.length} events from ${formatTime(t)}).`);
-            } else if (data.type === 'batch_ready') {
-              setQcNotification({
-                message: data.message || `Part ${data.chunk_index} is complete!`,
-                chunkIndex: data.chunk_index,
-                totalChunks: data.total_chunks,
-                timestamp: Date.now()
-              });
-            } else if (data.type === 'batch_error') {
-              console.warn(`[Subtitle Studio] Batch ${data.chunk_index} issue:`, data.error);
-              setProgressDetail(`Batch ${data.chunk_index} issue: continuing...`);
-            } else if (data.type === 'stream_error') {
-              console.error(`[Subtitle Studio] Stream error:`, data.error);
-              throw new Error(`Server generation error: ${data.error}`);
-            } else if (data.type === 'complete') {
-              streamCompleted = true;
-              setCanResume(false);
-              setResumeChunk(null);
-              const res = data.result || {};
-              setComplianceScore(res.compliance_score || 100);
-              setTotalErrors(res.total_errors || 0);
-              setTotalWarnings(res.total_warnings || 0);
-              setCpsStats(res.cps_stats || null);
-              setProgressPercent(100);
-              setProgressStage('Complete');
-              setProgressDetail(`All batches generated from ${formatTime(t)}!`);
-            }
-          } catch (e) {
-            console.warn("SSE parse error:", e, jsonStr);
-          }
-        }
-      }
-
-      if (!streamCompleted) {
-        if (lastBatchIndex < totalExpectedChunks) {
-          setResumeChunk(lastBatchIndex + 1);
-          setTotalChunks(totalExpectedChunks);
-          setCanResume(true);
-          alert(`Generation paused at batch ${lastBatchIndex} of ${totalExpectedChunks}. Subtitles are preserved. You can continue anytime.`);
-        }
-      }
-    } catch (err) {
-      console.error("Custom time generate error:", err);
-      alert(`Error generating subtitles from ${formatTime(t)}: ${err.message}`);
-    } finally {
-      setIsGenerating(false);
-      if (elapsedTimerRef.current) clearInterval(elapsedTimerRef.current);
-      setTimeout(() => {
-        setProgressPercent(0);
-        setBatchProgress(null);
-      }, 2500);
-    }
-  }, [selectedFile, events, videoDuration, currentVideoId, isAudioFile, processAndUploadMedia, language, script, contentType, sdhMode, cplLimit, cpsLimit, maxLines, minDuration, maxDuration, geminiAutoFix, pushToHistory]);
-
-
 
   // ── Gemini-Coordinated QC Self-Correction Pass ──
   const handleGeminiFix = async () => {
@@ -2365,6 +2274,13 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
   // ── Closed-Loop Acoustic Audio Synchronization Pass ──
   const handleAcousticSync = async () => {
     if (!events || events.length === 0 || !currentVideoId) return;
+    const storedApiKey = (localStorage.getItem('elevenlabs_api_key') || '').trim();
+    if (!storedApiKey && !serverHasElevenLabsKey) {
+      setApiKeyModalError(null);
+      setShowApiKeyModal(true);
+      return;
+    }
+
     setIsSyncingAudio(true);
     try {
       const res = await fetch(`${API_BASE}/api/subtitle/acoustic_sync`, {
@@ -2381,7 +2297,8 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
           max_lines: maxLines,
           min_duration: minDuration,
           max_duration: maxDuration,
-          shot_changes: shotChanges
+          shot_changes: shotChanges,
+          elevenlabs_api_key: storedApiKey
         })
       });
       if (res.ok) {
@@ -2403,7 +2320,12 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
         setAutoSaveStatus('Acoustically Synced to Audio ✓');
         setTimeout(() => setAutoSaveStatus(''), 4000);
       } else {
-        const err = await res.json();
+        const err = await res.json().catch(() => ({ detail: "Acoustic audio synchronization failed." }));
+        if (err.detail && (err.detail.toLowerCase().includes('api key') || err.detail.toLowerCase().includes('401') || err.detail.toLowerCase().includes('quota'))) {
+          setApiKeyModalError(err.detail);
+          setShowApiKeyModal(true);
+          return;
+        }
         alert(err.detail || "Acoustic audio synchronization failed.");
       }
     } catch (err) {
@@ -2505,668 +2427,370 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
           pushToHistory(parsed);
           setActiveEventId(parsed[0].id);
           handleLint(parsed);
-          alert(`Successfully imported ${parsed.length} subtitles from ${file.name}`);
+          setAutoSaveStatus(`Imported ${parsed.length} subtitles from ${file.name}`);
+          setTimeout(() => setAutoSaveStatus(''), 4000);
         }
       } catch (err) {
         console.error(err);
-        alert('Failed to parse subtitle file.');
+        setAutoSaveStatus('Failed to parse subtitle file.');
+        setTimeout(() => setAutoSaveStatus(''), 4000);
       }
     };
     reader.readAsText(file);
   };
 
+  // ── Menu actions ──
+  const flashStatus = (msg) => {
+    setAutoSaveStatus(msg);
+    setTimeout(() => setAutoSaveStatus(''), 3500);
+  };
+  const hasEvents = events.length > 0;
+  const hasActive = activeEventId != null && events.some((e) => e.id === activeEventId || e.event_id === activeEventId);
+  const activeIdx = events.findIndex((e) => e.id === activeEventId || e.event_id === activeEventId);
+
+  /** Run a pure bulk edit through the normal undo history + QC. */
+  const applyEdit = (fn, doneMsg, noneMsg = 'Nothing to change.') => {
+    const { events: next, changed } = fn(events);
+    if (!changed) { flashStatus(noneMsg); return; }
+    next.forEach((ev) => editedEventIdsRef.current.add(ev.id));
+    setEvents(next);
+    pushToHistory(next);
+    handleLint(next);
+    flashStatus(typeof doneMsg === 'function' ? doneMsg(changed) : doneMsg);
+  };
+  const scopeIds = hasActive ? new Set([activeEventId]) : null; // selected subtitle, otherwise everything
+  const scopeWord = hasActive ? 'selected subtitle' : 'all subtitles';
+  const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+
+  const goToIndex = (i) => {
+    const ev = events[i];
+    if (!ev) return;
+    setActiveEventId(ev.id);
+    handlePlayEvent(ev.id);
+  };
+  const goToTime = (t) => {
+    setCurrentTime(t);
+    setPlayTarget({ time: t, pause: true });
+  };
+  const jumpToPrevIssue = () => {
+    const issues = events.filter((e) => (e.qc_errors || e.errors || []).length > 0);
+    if (!issues.length) return;
+    const cur = issues.findIndex((e) => e.id === activeEventId);
+    const prev = issues[(cur <= 0 ? issues.length : cur) - 1];
+    if (prev) { setActiveEventId(prev.id); handlePlayEvent(prev.id); }
+  };
+  const findNext = (find, opts) => {
+    const re = tools.makeMatcher(find, opts);
+    if (!re || !events.length) return;
+    const start = activeIdx + 1;
+    for (let n = 0; n < events.length; n += 1) {
+      const ev = events[(start + n) % events.length];
+      if (re.test(ev.text || '')) {
+        setActiveEventId(ev.id);
+        goToTime(ev.start_time ?? ev.start ?? 0);
+        return;
+      }
+    }
+  };
+  const sendKey = (key) => window.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+  const toggleFullscreen = () => {
+    if (document.fullscreenElement) document.exitFullscreen?.();
+    else document.documentElement.requestFullscreen?.().catch(() => {});
+  };
+  const confirmGenerate = () => {
+    if (hasEvents && prefs.confirmGenerate && !window.confirm('Generate new subtitles with ElevenLabs? This replaces the current subtitles (you can undo) and uses ElevenLabs credits.')) return;
+    handleGenerate();
+  };
+  const exportSubs = () => { if (hasEvents) setShowExportModal(true); else flashStatus('Nothing to export yet. Generate or import subtitles first.'); };
+  const saveDraftCmd = () => { flashStatus(saveDraftNow() ? 'Draft saved on this device.' : 'Nothing to save yet.'); };
+  const toggleLayoutKey = (key, on, off) => patchLayout({ [key]: layout[key] === off ? on : off });
+
+  shortcutRef.current = {
+    openLayout: () => openSettings('layout'),
+    palette: () => setShowPalette(true),
+    settings: () => openSettings(),
+    find: () => { if (hasEvents) setDialog('find'); },
+    goTo: () => { if (hasEvents) setDialog('goto'); },
+    save: saveDraftCmd,
+    exportSubs,
+    preset: applyBuiltinByIndex,
+  };
+
+  const menus = [
+    {
+      id: 'file',
+      label: 'File',
+      items: [
+        { label: 'Open media…', icon: FolderOpen, onSelect: () => fileInputRef.current?.click() },
+        { label: 'Import subtitles (SRT / VTT)…', icon: FileText, onSelect: () => srtImportRef.current?.click() },
+        { type: 'separator' },
+        { label: 'Export subtitles…', icon: Download, shortcut: 'Ctrl+E', disabled: !hasEvents, onSelect: exportSubs },
+        { label: 'Save draft now', icon: Save, shortcut: 'Ctrl+S', disabled: !hasEvents, onSelect: saveDraftCmd },
+        { type: 'separator' },
+        { label: 'Settings…', icon: Settings, shortcut: 'Ctrl+,', onSelect: () => openSettings() },
+        { type: 'separator' },
+        { label: 'Discard and start fresh', icon: Trash2, danger: true, onSelect: () => handleDiscardPreviousWork() },
+      ],
+    },
+    {
+      id: 'edit',
+      label: 'Edit',
+      items: [
+        { label: 'Undo', icon: Undo2, shortcut: 'Ctrl+Z', disabled: historyIndex <= 0, onSelect: handleUndo },
+        { label: 'Redo', icon: Redo2, shortcut: 'Ctrl+Y', disabled: historyIndex >= history.length - 1, onSelect: handleRedo },
+        { type: 'separator' },
+        { label: 'Search subtitle list', icon: Search, shortcut: 'Ctrl+F', disabled: !hasEvents, onSelect: () => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', ctrlKey: true, bubbles: true })) },
+        { label: 'Find and replace…', icon: Replace, shortcut: 'Ctrl+H', disabled: !hasEvents, onSelect: () => setDialog('find') },
+        { label: 'Go to subtitle or time…', icon: ListOrdered, shortcut: 'Ctrl+G', disabled: !hasEvents, onSelect: () => setDialog('goto') },
+        { type: 'separator' },
+        { label: 'Move selected and following to playhead', icon: Clock, shortcut: 'Ctrl+Space', disabled: !hasActive, onSelect: () => handleShiftAllFollowing(activeEventId, currentTime) },
+        { label: 'Clear text formatting', icon: Eraser, disabled: !hasEvents, onSelect: handleClearFormat },
+      ],
+    },
+    {
+      id: 'subtitle',
+      label: 'Subtitle',
+      items: [
+        { label: 'Add at playhead', icon: Plus, onSelect: () => handleAddSubtitle(currentTime) },
+        { label: 'Split at playhead', icon: Split, disabled: !hasEvents, onSelect: () => handleSplitAtCursor(currentTime) },
+        { label: 'Merge selected with next', icon: Merge, disabled: !hasActive || activeIdx >= events.length - 1, onSelect: () => handleMergeEvents(activeEventId) },
+        { label: 'Extend selected to next subtitle', icon: ArrowRightLeft, disabled: !hasActive || activeIdx >= events.length - 1, onSelect: () => applyEdit((evs) => tools.extendToNext(evs, activeEventId, frameRate), 'Extended to the next subtitle.', 'Already touching the next subtitle.') },
+        { label: 'Delete selected', icon: Trash2, danger: true, shortcut: 'Del', disabled: !hasActive, onSelect: () => handleDeleteEvent(activeEventId) },
+        { type: 'separator' },
+        { type: 'heading', label: 'Navigate' },
+        { label: 'Previous subtitle', icon: SkipBack, disabled: !hasEvents || activeIdx <= 0, onSelect: () => goToIndex(activeIdx - 1) },
+        { label: 'Next subtitle', icon: SkipForward, disabled: !hasEvents || activeIdx >= events.length - 1, onSelect: () => goToIndex(activeIdx + 1) },
+        { type: 'separator' },
+        { type: 'heading', label: 'Timing' },
+        { label: 'Shift timings…', icon: ArrowRightLeft, disabled: !hasEvents, onSelect: () => setDialog('shift') },
+        { label: 'Snap in/out points to frames', icon: AlignJustify, disabled: !hasEvents, onSelect: () => applyEdit((evs) => tools.snapToFrames(evs, frameRate), (n) => `Snapped ${plural(n, 'subtitle')} to the frame grid.`, 'Everything is already on the frame grid.') },
+        { label: 'Enforce 2-frame gaps', icon: AlignJustify, disabled: !hasEvents, onSelect: () => applyEdit((evs) => tools.enforceMinGap(evs, frameRate, 2), (n) => `Opened the gap on ${plural(n, 'subtitle')}.`, 'All gaps already meet the 2-frame minimum.') },
+        { label: 'Sort by start time', icon: SkipForward, disabled: !hasEvents, onSelect: () => applyEdit(tools.sortByStart, 'Sorted by start time.', 'Already in order.') },
+        { type: 'separator' },
+        { type: 'heading', label: `Change case (${scopeWord})` },
+        { label: 'UPPERCASE', icon: CaseSensitive, disabled: !hasEvents, onSelect: () => applyEdit((evs) => tools.changeCase(evs, 'upper', scopeIds), (n) => `Updated ${plural(n, 'subtitle')}.`) },
+        { label: 'lowercase', icon: CaseSensitive, disabled: !hasEvents, onSelect: () => applyEdit((evs) => tools.changeCase(evs, 'lower', scopeIds), (n) => `Updated ${plural(n, 'subtitle')}.`) },
+        { label: 'Sentence case', icon: CaseSensitive, disabled: !hasEvents, onSelect: () => applyEdit((evs) => tools.changeCase(evs, 'sentence', scopeIds), (n) => `Updated ${plural(n, 'subtitle')}.`) },
+        { label: 'Title Case', icon: CaseSensitive, disabled: !hasEvents, onSelect: () => applyEdit((evs) => tools.changeCase(evs, 'title', scopeIds), (n) => `Updated ${plural(n, 'subtitle')}.`) },
+        { type: 'separator' },
+        { type: 'heading', label: 'Clean up' },
+        { label: 'Tidy spaces and blank lines', icon: Eraser, disabled: !hasEvents, onSelect: () => applyEdit((evs) => tools.tidyWhitespace(evs, scopeIds), (n) => `Tidied ${plural(n, 'subtitle')}.`, 'Spacing is already clean.') },
+        { label: 'Remove empty subtitles', icon: Trash2, disabled: !hasEvents, onSelect: () => applyEdit(tools.removeEmpty, (n) => `Removed ${plural(n, 'empty subtitle')}.`, 'No empty subtitles.') },
+        { label: 'Merge repeated neighbours', icon: Merge, disabled: !hasEvents, onSelect: () => applyEdit((evs) => tools.mergeDuplicates(evs), (n) => `Merged ${plural(n, 'repeat')}.`, 'No repeated neighbours.') },
+        { label: 'Strip formatting tags', icon: Eraser, disabled: !hasEvents, onSelect: () => applyEdit((evs) => tools.stripTags(evs, scopeIds), (n) => `Stripped tags from ${plural(n, 'subtitle')}.`, 'No formatting tags found.') },
+        { type: 'separator' },
+        { label: 'Auto-fix QC issues (rules)', icon: Sparkles, disabled: !hasEvents, onSelect: handleAutoFix },
+      ],
+    },
+    {
+      id: 'tools',
+      label: 'Tools',
+      items: [
+        { label: 'Generate subtitles (ElevenLabs)…', icon: Sparkles, disabled: isGenerating || !(selectedFile || currentVideoId), onSelect: confirmGenerate },
+        { label: 'Re-sync timings to speech…', icon: Volume2, disabled: !hasEvents || !currentVideoId, onSelect: handleAcousticSync },
+        { label: 'Fix QC issues with Gemini…', icon: Wand2, disabled: !hasEvents, onSelect: handleGeminiFix },
+        { label: 'Re-break all line breaks', icon: AlignJustify, disabled: !hasEvents, onSelect: handleRebreakAll },
+        { label: 'Translate subtitles…', icon: Languages, onSelect: () => openCentroid('translate') },
+        ...(centroidState.hasResults ? [{ label: 'Centroid QC…', icon: ShieldCheck, onSelect: () => openCentroid('qc') }] : []),
+        { type: 'separator' },
+        { label: 'Speakers…', icon: Users, disabled: !hasEvents, onSelect: () => setShowSpeakerModal(true) },
+        { label: 'Glossary…', icon: BookText, onSelect: () => openSettings('glossary') },
+        { label: 'Netflix QC report', icon: ShieldCheck, onSelect: () => setShowQcDrawer(true) },
+      ],
+    },
+    {
+      id: 'view',
+      label: 'View',
+      items: [
+        { type: 'heading', label: 'Panes' },
+        { label: 'Video monitor', checked: layout.videoPos !== 'hidden', onSelect: () => toggleLayoutKey('videoPos', 'left', 'hidden') },
+        { label: 'Timeline', checked: layout.timelinePos !== 'hidden', onSelect: () => toggleLayoutKey('timelinePos', 'bottom', 'hidden') },
+        { label: 'Tool rail', checked: layout.sidebar !== 'hidden', onSelect: () => toggleLayoutKey('sidebar', 'left', 'hidden') },
+        { label: 'Status bar', checked: layout.showFooter, onSelect: () => patchLayout({ showFooter: !layout.showFooter }) },
+        { label: 'QC report', checked: showQcDrawer, onSelect: () => setShowQcDrawer((v) => !v) },
+        { type: 'separator' },
+        { type: 'heading', label: 'Focus' },
+        { label: 'Focus on video', checked: layout.maximize === 'video', onSelect: () => patchLayout({ maximize: layout.maximize === 'video' ? 'none' : 'video' }) },
+        { label: 'Focus on subtitle list', checked: layout.maximize === 'list', onSelect: () => patchLayout({ maximize: layout.maximize === 'list' ? 'none' : 'list' }) },
+        { label: 'Focus on timeline', checked: layout.maximize === 'timeline', onSelect: () => patchLayout({ maximize: layout.maximize === 'timeline' ? 'none' : 'timeline' }) },
+        { type: 'separator' },
+        { type: 'heading', label: 'Layout preset' },
+        ...BUILTIN_PRESETS.slice(0, 9).map((p, i) => ({ label: p.name, shortcut: `Alt+${i + 1}`, checked: studioLayout.activeId === p.id, onSelect: () => studioLayout.applyPreset(p.id) })),
+        { label: 'More layouts and customisation…', icon: LayoutDashboard, shortcut: 'Ctrl+Shift+L', onSelect: () => openSettings('layout') },
+        { type: 'separator' },
+        { label: 'Previous QC issue', icon: SkipBack, disabled: !hasEvents, onSelect: jumpToPrevIssue },
+        { label: 'Next QC issue', icon: SkipForward, shortcut: 'F8', disabled: !hasEvents, onSelect: jumpToNextIssue },
+        { type: 'separator' },
+        { label: 'Appearance…', icon: Palette, onSelect: () => openSettings('appearance') },
+        { label: 'Full screen', icon: Maximize, onSelect: toggleFullscreen },
+      ],
+    },
+    {
+      id: 'help',
+      label: 'Help',
+      items: [
+        { label: 'Command palette…', icon: Command, shortcut: 'Ctrl+K', onSelect: () => setShowPalette(true) },
+        { label: 'Keyboard shortcuts', icon: Keyboard, onSelect: () => openSettings('shortcuts') },
+        { type: 'separator' },
+        { label: 'Reset layout to Classic', icon: RotateCcw, onSelect: () => studioLayout.reset() },
+        { label: 'Back up or reset settings…', icon: Settings, onSelect: () => openSettings('data') },
+      ],
+    },
+  ];
+
+  // Command palette = every menu command + every settings page + playback
+  const paletteCommands = [
+    ...menus.flatMap((m) => m.items
+      .filter((i) => i.onSelect)
+      .map((i) => ({ id: `${m.id}:${i.label}`, label: i.label.replace(/…$/, ''), group: m.label, icon: i.icon, shortcut: i.shortcut, disabled: i.disabled, onSelect: i.onSelect }))),
+    ...SETTINGS_GROUPS.flatMap((g) => g.pages.map((pg) => ({ id: `settings:${pg.id}`, label: `Settings: ${pg.label}`, group: 'Settings', icon: pg.icon, keywords: pg.desc, onSelect: () => openSettings(pg.id) }))),
+    { id: 'play:toggle', label: 'Play / pause', group: 'Playback', icon: Play, shortcut: 'Space', onSelect: () => sendKey(' ') },
+    { id: 'play:back', label: 'Seek back', group: 'Playback', icon: StepBack, shortcut: '←', onSelect: () => sendKey('ArrowLeft') },
+    { id: 'play:fwd', label: 'Seek forward', group: 'Playback', icon: StepForward, shortcut: '→', onSelect: () => sendKey('ArrowRight') },
+    { id: 'play:frame-', label: 'Previous frame', group: 'Playback', icon: StepBack, shortcut: ',', onSelect: () => sendKey(',') },
+    { id: 'play:frame+', label: 'Next frame', group: 'Playback', icon: StepForward, shortcut: '.', onSelect: () => sendKey('.') },
+  ];
+
   return (
-    <div className="h-screen w-screen overflow-hidden flex flex-col font-sans select-none transition-colors duration-150 bg-[#0e0f12] text-[#f1f2f6] animate-studio-entrance">
+    <div className={`subtitle-studio h-screen w-screen overflow-hidden flex flex-col select-none animate-studio-entrance bg-[var(--ss-bg)] text-[var(--ss-text)]`}>
       {/* Hidden File Upload Inputs */}
       <input
         type="file"
         ref={fileInputRef}
         onChange={handleFileChange}
-        accept="video/mp4,video/mkv,video/quicktime,video/webm,video/avi,audio/mp3,audio/wav,audio/m4a,audio/aac,audio/flac,audio/ogg,audio/mpeg,audio/opus,.mp4,.mkv,.mov,.webm,.avi,.mp3,.wav,.m4a,.aac,.flac,.ogg,.opus"
-        className="hidden"
+        accept="video/mp4,video/mkv,video/quicktime,video/webm,video/avi,audio/mp3,audio/wav,audio/m4a,audio/aac,audio/flac,audio/ogg,audio/mpeg,audio/opus,audio/x-ms-wma,audio/wma,.mp4,.mkv,.mov,.webm,.avi,.mp3,.wav,.m4a,.aac,.flac,.ogg,.opus,.wma"
+        style={{ position: 'absolute', opacity: 0, width: 0, height: 0, pointerEvents: 'none', overflow: 'hidden' }}
+        tabIndex={-1}
+        aria-hidden="true"
+      />
+      <input
+        type="file"
+        ref={audioTrackInputRef}
+        onChange={handleAudioTrackChange}
+        accept="audio/*,.mp3,.wav,.m4a,.aac,.flac,.ogg,.opus,.wma"
+        style={{ position: 'absolute', opacity: 0, width: 0, height: 0, pointerEvents: 'none', overflow: 'hidden' }}
+        tabIndex={-1}
+        aria-hidden="true"
       />
       <input
         type="file"
         ref={srtImportRef}
         onChange={handleImportSrt}
         accept=".srt,.vtt,.txt"
-        className="hidden"
+        style={{ position: 'absolute', opacity: 0, width: 0, height: 0, pointerEvents: 'none', overflow: 'hidden' }}
+        tabIndex={-1}
+        aria-hidden="true"
       />
 
-      {/* ── Top Header Row 1: Hub, Subtitle Studio Brand, File Menu, Settings, Media Info & Account Section ── */}
-      <header ref={topHeaderRef} className="border-b border-[#20222c] bg-[#101116] px-3.5 py-1.5 flex items-center justify-between shadow-xs shrink-0 z-40 gap-2">
-        {/* Left: Hub, Tool Identity, File Menu, Settings, Media Badge, Auto-Save Status */}
-        <div className="flex items-center gap-2.5 min-w-0 flex-wrap sm:flex-nowrap">
-          <button
-            onClick={onBackToHome}
-            className="p-1 px-2.5 rounded-md transition-colors cursor-pointer flex items-center gap-1.5 text-xs font-semibold border border-[#262734] bg-[#14151a] hover:bg-[#1c1e26] text-slate-300 hover:text-white shrink-0"
-            title="Return to Hub"
-          >
-            <ArrowLeft className="w-3.5 h-3.5 text-[#00e5be]" />
-            <span>Hub</span>
-          </button>
-
-          <div className="h-4 w-px bg-[#262734] shrink-0" />
-
-          <div className="flex items-center gap-2 shrink-0">
-            <div className="w-5 h-5 rounded-md bg-gradient-to-tr from-[#00e5be] to-[#0099ff] text-black flex items-center justify-center shadow-[0_0_10px_rgba(0,229,190,0.3)]">
-              <Film className="w-3 h-3 text-black fill-black/20" />
-            </div>
-            <div className="flex items-center gap-1.5">
-              <h1 className="text-xs font-extrabold tracking-tight text-white flex items-center gap-1 font-sans">
-                <span>Subtitle</span>
-                <span className="text-transparent bg-clip-text bg-gradient-to-r from-[#00e5be] to-[#00c9ff]">Studio</span>
-              </h1>
-              <span className="text-[8px] font-mono font-bold uppercase tracking-wider px-1.5 py-0.2 bg-[#00e5be]/15 text-[#00e5be] rounded border border-[#00e5be]/40 shadow-xs">
-                PRO
-              </span>
-            </div>
+      {/* ── Professional Broadcast Master Header Bar (Reference Exact) ── */}
+      {!layout.showHeader && (
+        <Button
+          size="sm"
+          icon={Settings}
+          onClick={() => openSettings('layout')}
+          className="fixed top-2 right-2 z-40 shadow-lg"
+          title="Settings (Ctrl+,)"
+        >
+          Settings
+        </Button>
+      )}
+      {layout.showHeader && (
+      <header className="shrink-0 z-40 h-12 px-3 flex items-center gap-2 border-b border-[var(--ss-line)] bg-[var(--ss-bg)] select-none">
+        {/* Left: back, brand, menus */}
+        <div className="flex items-center gap-1.5 min-w-0">
+          <IconButton icon={ArrowLeft} label="Back to hub" onClick={onBackToHome} />
+          <div className="flex items-center gap-2 pl-1 pr-2">
+            <span className="w-6 h-6 rounded-lg bg-[var(--ss-accent)] flex items-center justify-center text-[var(--ss-accent-ink)] shrink-0">
+              <Play size={12} fill="currentColor" className="ml-0.5" />
+            </span>
+            <span className="text-[13px] font-semibold tracking-tight text-[var(--ss-text)] whitespace-nowrap hidden sm:inline">Subtitle Studio</span>
+            <span className="h-[18px] px-1.5 rounded-full hidden md:inline-flex items-center text-[10px] font-bold text-[var(--ss-accent)] border border-[var(--ss-accent)]/40 bg-[var(--ss-accent)]/10">PRO</span>
           </div>
-
-          <div className="h-4 w-px bg-[#262734] shrink-0" />
-
-          {/* File Dropdown (Moved to Top Header near Subtitle Studio) */}
-          <div className="relative shrink-0">
-            <button
-              onClick={() => { setShowFileDropdown(!showFileDropdown); setShowSettingsDropdown(false); }}
-              className="px-2.5 py-1 rounded-md text-xs font-semibold flex items-center gap-1 transition-colors cursor-pointer border border-[#262734] bg-[#181920] hover:bg-[#22232c] text-slate-300 hover:text-white"
-            >
-              <span>File</span>
-              <ChevronDown size={12} />
-            </button>
-
-            {showFileDropdown && (
-              <div className="absolute top-full left-0 mt-1 w-56 rounded-lg shadow-xl border border-[#262734] p-1 z-50 animate-in fade-in zoom-in-95 duration-150 bg-[#181920] text-slate-200">
-                <button
-                  onClick={() => { fileInputRef.current?.click(); setShowFileDropdown(false); }}
-                  className="w-full text-left px-3 py-2 text-xs rounded flex items-center gap-2 cursor-pointer hover:bg-[#22232c] text-slate-200"
-                >
-                  <Upload size={13} className="text-[#00e5be]" />
-                  <span>Open Media (Video / Audio)...</span>
-                </button>
-                <button
-                  onClick={() => { srtImportRef.current?.click(); setShowFileDropdown(false); }}
-                  className="w-full text-left px-3 py-2 text-xs rounded flex items-center gap-2 cursor-pointer hover:bg-[#22232c] text-slate-200"
-                >
-                  <FileText size={13} className="text-emerald-400" />
-                  <span>Import Subtitle (SRT/VTT)...</span>
-                </button>
-                <div className="h-px my-1 bg-[#262734]" />
-                <button
-                  onClick={() => { setShowExportModal(true); setShowFileDropdown(false); }}
-                  className="w-full text-left px-3 py-2 text-xs rounded flex items-center gap-2 font-bold cursor-pointer hover:bg-[#22232c] text-[#00e5be]"
-                >
-                  <Download size={13} />
-                  <span>Export Subtitles...</span>
-                </button>
-                <div className="h-px my-1 bg-[#262734]" />
-                <button
-                  onClick={() => {
-                    if (window.confirm("Clear all current subtitles, remove saved draft, and purge server audio/peaks cache for this media?")) {
-                      handleDiscardPreviousWork();
-                    }
-                    setShowFileDropdown(false);
-                  }}
-                  className={`w-full text-left px-3 py-2 text-xs rounded flex items-center gap-2 font-medium cursor-pointer text-rose-400 hover:bg-rose-950/40`}
-                >
-                  <Trash2 size={13} />
-                  <span>Clear Subtitles & Draft</span>
-                </button>
-              </div>
-            )}
-          </div>
-
-          {/* Settings Modal Trigger Button (Moved to Top Header near Subtitle Studio) */}
-          <button
-            onClick={() => setShowSettingsModal(true)}
-            className="px-2.5 py-1 rounded-md text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer border border-[#262734] bg-[#181920] hover:bg-[#22232c] text-slate-300 hover:text-white shrink-0"
-            title="Configure CPL, CPS, Frame Rate (FPS), Line Limits & AI Auto-Fix"
-          >
-            <Settings size={13} className="text-[#00e5be]" />
-            <span>Settings</span>
-            <span className="text-[10px] font-mono text-slate-400 bg-[#0e0f12] px-1.5 py-0.5 rounded border border-[#262734] font-medium hidden md:inline-block">
-              {cplLimit} CPL · {cpsLimit} CPS · {frameRate} FPS
-            </span>
-          </button>
-
-          {/* Complete Media Filename Display (Full name shown without '...' truncation) */}
-          {selectedFile && (
-            <span className="text-[10px] font-mono px-2.5 py-0.5 rounded border border-[#262734] text-slate-200 bg-[#181920] flex items-center gap-1.5 shrink-0 max-w-none" title={selectedFile.name}>
-              <span className={`px-1 py-0.2 rounded text-[9px] font-bold shrink-0 ${isAudioFile ? 'bg-cyan-500/20 text-[#00e5ff] border border-cyan-500/40' : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'}`}>
-                {isAudioFile ? '🎵 AUDIO' : '🎬 VIDEO'}
-              </span>
-              <span className="font-medium whitespace-nowrap">{selectedFile.name}</span>
-            </span>
-          )}
-
-          {autoSaveStatus && (
-            <span className="text-[10px] text-[#00e5be] font-mono font-bold animate-pulse shrink-0">
-              {autoSaveStatus}
-            </span>
+          <span className="h-5 w-px bg-[var(--ss-line)] mx-0.5" aria-hidden="true" />
+          {layout.menuStyle === 'compact' ? (
+            <StudioMenuBar menus={menus} compact />
+          ) : (
+            <>
+              <div className="hidden lg:block"><StudioMenuBar menus={menus} /></div>
+              <div className="lg:hidden"><StudioMenuBar menus={menus} compact /></div>
+            </>
           )}
         </div>
 
-        {/* Right: Username Account Section */}
-        <div className="flex items-center gap-2 shrink-0">
-          {user && (
-            <AccountMenuDropdown
-              user={user}
-              onOpenLogoutModal={onOpenLogoutModal || onLogout}
-            />
+        {/* Centre: media file */}
+        <div className="flex-1 min-w-0 flex justify-center px-2">
+          {layout.showMediaPill && (
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="h-8 max-w-[420px] min-w-0 px-2.5 rounded-lg inline-flex items-center gap-2 border border-[var(--ss-line)] bg-[var(--ss-raised)] hover:bg-[var(--ss-hover)] hover:border-[var(--ss-muted)] transition-colors cursor-pointer"
+              title={selectedFile ? `${selectedFile.name} (click to change)` : 'Open a video or audio file'}
+            >
+              <span className={`h-[18px] px-1.5 rounded inline-flex items-center text-[10px] font-bold shrink-0 border ${isAudioFile ? 'text-[var(--ss-accent)] border-[var(--ss-accent)]/40 bg-[var(--ss-accent)]/10' : 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10'}`}>
+                {isAudioFile ? 'AUDIO' : 'VIDEO'}
+              </span>
+              <span className="text-[12.5px] text-[var(--ss-text)] truncate">{selectedFile ? selectedFile.name : 'Open a video or audio file…'}</span>
+              <ChevronDown size={13} className="text-[var(--ss-faint)] shrink-0" />
+            </button>
           )}
+        </div>
+
+        {/* Right: status, history, search, export, settings, account */}
+        <div className="flex items-center gap-1.5 shrink-0">
+          {layout.showSaveStatus && (autoSaveStatus || hasEvents) && (
+            <div className="hidden xl:flex items-center gap-1.5 mr-1 text-[11.5px] text-[var(--ss-muted)] max-w-[260px]" title="A copy of your work is kept in this browser. Use Export to save files." role="status">
+              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${hasUnsavedDraftChanges && !autoSaveStatus ? 'bg-[var(--ss-warn)]' : 'bg-emerald-400'}`} />
+              <span className="truncate">
+                {autoSaveStatus || (hasUnsavedDraftChanges
+                  ? (lastDraftSavedAt ? `Draft saved ${lastDraftSavedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · newer edits pending` : 'Not saved to a draft yet')
+                  : `Draft saved ${lastDraftSavedAt ? lastDraftSavedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}`)}
+              </span>
+            </div>
+          )}
+          <IconButton icon={Undo2} label="Undo (Ctrl+Z)" onClick={handleUndo} disabled={historyIndex <= 0} />
+          <IconButton icon={Redo2} label="Redo (Ctrl+Y)" onClick={handleRedo} disabled={historyIndex >= history.length - 1} />
+          <span className="h-5 w-px bg-[var(--ss-line)] mx-0.5" aria-hidden="true" />
+          <div className="hidden md:block">
+            <Button onClick={() => setShowPalette(true)} icon={Search} title="Search every command (Ctrl+K)">
+              <span className="hidden xl:inline">Commands</span>
+              <span className="hidden xl:inline-flex"><Kbd>Ctrl K</Kbd></span>
+            </Button>
+          </div>
+          <Button variant="primary" icon={Download} onClick={exportSubs} disabled={!hasEvents} title="Export subtitles (Ctrl+E)">
+            <span className="hidden sm:inline">Export</span>
+          </Button>
+          <IconButton icon={Settings} label="Settings (Ctrl+,)" onClick={() => openSettings()} active={showSettingsModal} variant="secondary" />
+          <NotificationBellDropdown />
+          {user ? <AccountMenuDropdown user={user} onOpenLogoutModal={onOpenLogoutModal || onLogout} /> : null}
         </div>
       </header>
-
-      {/* ── Toolbar Row 2: Format (MS Word Style), Language, Script & Studio Controls ── */}
-      <nav ref={headerMenuRef} className="border-b border-[#262734] bg-[#14151a] px-3.5 py-1.5 flex items-center justify-between gap-2 shadow-xs shrink-0 z-30 transition-colors">
-        {/* Left: MS Word-Style Formatting Ribbon Trigger & Dropdown */}
-        <div ref={formatMenuRef} className="relative shrink-0 flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setShowFormatToolbar(!showFormatToolbar)}
-            className={`px-2.5 py-1 rounded-md text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer border ${
-              showFormatToolbar
-                ? 'bg-[#00e5be]/15 border-[#00e5be] text-[#00e5be] shadow-[0_0_10px_rgba(0,229,190,0.2)]'
-                : 'border-[#262734] bg-[#181920] hover:bg-[#22232c] text-slate-300 hover:text-white'
-            }`}
-            title="Click to reveal MS Word-style typography, font, styles and color controls"
-          >
-            <Type size={13} className={showFormatToolbar ? 'text-[#00e5be]' : 'text-slate-400'} />
-            <span>Format</span>
-            <ChevronDown size={11} className={`transition-transform duration-200 ${showFormatToolbar ? 'rotate-180 text-[#00e5be]' : 'text-slate-400'}`} />
-          </button>
-
-          {/* Quick Active Style Indicator Pill */}
-          <div className="hidden lg:flex items-center gap-1.5 text-[10px] font-mono text-slate-400 px-2 py-0.5 rounded border border-[#262734] bg-[#0e0f12]">
-            <span className="truncate max-w-[100px]">{subtitleStyle.fontFamily.split(',')[0]}</span>
-            <span>·</span>
-            <span className="text-[#00e5be] font-bold">{subtitleStyle.fontSize}px</span>
-            {subtitleStyle.isBold && <span className="font-bold text-white">B</span>}
-            {subtitleStyle.isItalic && <span className="italic text-white">I</span>}
-            {subtitleStyle.isUnderline && <span className="underline text-white">U</span>}
-            <span
-              className="w-2.5 h-2.5 rounded-full border border-white/20 shrink-0 inline-block"
-              style={{ backgroundColor: subtitleStyle.textColor }}
-              title={`Text color: ${subtitleStyle.textColor}`}
-            />
-          </div>
-
-          {/* MS Word Formatting Ribbon Popover (Revealed when Format is clicked) */}
-          {showFormatToolbar && (
-            <div className="absolute top-full left-0 mt-1.5 w-[560px] max-w-[95vw] rounded-xl shadow-2xl border border-[#2e3142] p-3 z-50 animate-in fade-in zoom-in-95 duration-150 bg-[#181920]/95 backdrop-blur-md text-slate-200">
-              {/* Ribbon Header */}
-              <div className="flex items-center justify-between pb-2 mb-2 border-b border-[#262734]">
-                <div className="flex items-center gap-2">
-                  <Type size={14} className="text-[#00e5be]" />
-                  <span className="text-xs font-bold text-white uppercase tracking-wider">Subtitle Font & Typography</span>
-                  <span className="text-[9px] font-mono bg-[#00e5be]/15 text-[#00e5be] px-1.5 py-0.2 rounded border border-[#00e5be]/30">
-                    WORD STYLE
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setShowFormatToolbar(false)}
-                  className="p-1 rounded text-slate-400 hover:text-white hover:bg-[#262734] transition-colors"
-                >
-                  <X size={12} />
-                </button>
-              </div>
-
-              {/* Row 1: Font Family, Font Size, B, I, U, S, Alignment */}
-              <div className="flex items-center gap-2 flex-wrap pb-2 mb-2 border-b border-[#262734]">
-                {/* Font Family Dropdown */}
-                <div className="flex flex-col gap-0.5 flex-1 min-w-[140px]">
-                  <span className="text-[9px] text-slate-400 font-medium">Font Family</span>
-                  <select
-                    value={subtitleStyle.fontFamily}
-                    onChange={(e) => updateSubtitleStyle('fontFamily', e.target.value)}
-                    className="w-full bg-[#0e0f12] border border-[#262734] rounded-md px-2 py-1 text-xs text-white focus:border-[#00e5be] focus:outline-none cursor-pointer"
-                  >
-                    <option value="Netflix Sans, Roboto, Helvetica, Arial, sans-serif">Netflix Sans (Default)</option>
-                    <option value="Arial, sans-serif">Arial</option>
-                    <option value="Inter, sans-serif">Inter</option>
-                    <option value="Roboto, sans-serif">Roboto</option>
-                    <option value="Montserrat, sans-serif">Montserrat</option>
-                    <option value="'Courier New', Courier, monospace">Courier New (Monospace)</option>
-                    <option value="Georgia, serif">Georgia (Serif)</option>
-                    <option value="Impact, fantasy">Impact (Bold Title)</option>
-                    <option value="'Trebuchet MS', sans-serif">Trebuchet MS</option>
-                    <option value="'Comic Sans MS', cursive">Comic Sans MS</option>
-                  </select>
-                </div>
-
-                {/* Font Size (+ / -) */}
-                <div className="flex flex-col gap-0.5 shrink-0">
-                  <span className="text-[9px] text-slate-400 font-medium">Size</span>
-                  <div className="flex items-center bg-[#0e0f12] border border-[#262734] rounded-md px-1 py-0.5">
-                    <button
-                      type="button"
-                      onClick={() => updateSubtitleStyle('fontSize', Math.max(12, subtitleStyle.fontSize - 2))}
-                      className="p-0.5 text-slate-400 hover:text-white font-bold cursor-pointer text-xs"
-                      title="Decrease font size"
-                    >
-                      -
-                    </button>
-                    <span className="font-mono text-xs font-bold text-[#00e5be] px-1.5 min-w-[32px] text-center">
-                      {subtitleStyle.fontSize}px
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => updateSubtitleStyle('fontSize', Math.min(60, subtitleStyle.fontSize + 2))}
-                      className="p-0.5 text-slate-400 hover:text-white font-bold cursor-pointer text-xs"
-                      title="Increase font size"
-                    >
-                      +
-                    </button>
-                  </div>
-                </div>
-
-                {/* Bold, Italic, Underline, Strikethrough Button Group */}
-                <div className="flex flex-col gap-0.5 shrink-0">
-                  <span className="text-[9px] text-slate-400 font-medium">Style</span>
-                  <div className="flex items-center bg-[#0e0f12] border border-[#262734] rounded-md p-0.5 gap-0.5">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const nextVal = !subtitleStyle.isBold;
-                        updateSubtitleStyle('isBold', nextVal);
-                        if (activeEventId) applyFormatTagToActive('b');
-                      }}
-                      className={`p-1 rounded text-xs font-bold transition-colors cursor-pointer ${
-                        subtitleStyle.isBold ? 'bg-[#00e5be] text-black shadow-xs' : 'text-slate-300 hover:bg-[#262734]'
-                      }`}
-                      title="Bold (Ctrl+B)"
-                    >
-                      <Bold size={13} />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const nextVal = !subtitleStyle.isItalic;
-                        updateSubtitleStyle('isItalic', nextVal);
-                        if (activeEventId) applyFormatTagToActive('i');
-                      }}
-                      className={`p-1 rounded text-xs font-bold transition-colors cursor-pointer ${
-                        subtitleStyle.isItalic ? 'bg-[#00e5be] text-black shadow-xs' : 'text-slate-300 hover:bg-[#262734]'
-                      }`}
-                      title="Italic (Ctrl+I)"
-                    >
-                      <Italic size={13} />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const nextVal = !subtitleStyle.isUnderline;
-                        updateSubtitleStyle('isUnderline', nextVal);
-                        if (activeEventId) applyFormatTagToActive('u');
-                      }}
-                      className={`p-1 rounded text-xs font-bold transition-colors cursor-pointer ${
-                        subtitleStyle.isUnderline ? 'bg-[#00e5be] text-black shadow-xs' : 'text-slate-300 hover:bg-[#262734]'
-                      }`}
-                      title="Underline (Ctrl+U)"
-                    >
-                      <Underline size={13} />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const nextVal = !subtitleStyle.isStrikethrough;
-                        updateSubtitleStyle('isStrikethrough', nextVal);
-                        if (activeEventId) applyFormatTagToActive('s');
-                      }}
-                      className={`p-1 rounded text-xs font-bold transition-colors cursor-pointer ${
-                        subtitleStyle.isStrikethrough ? 'bg-[#00e5be] text-black shadow-xs' : 'text-slate-300 hover:bg-[#262734]'
-                      }`}
-                      title="Strikethrough"
-                    >
-                      <Strikethrough size={13} />
-                    </button>
-                  </div>
-                </div>
-
-                {/* Alignment */}
-                <div className="flex flex-col gap-0.5 shrink-0">
-                  <span className="text-[9px] text-slate-400 font-medium">Alignment</span>
-                  <div className="flex items-center bg-[#0e0f12] border border-[#262734] rounded-md p-0.5 gap-0.5">
-                    <button
-                      type="button"
-                      onClick={() => updateSubtitleStyle('textAlign', 'left')}
-                      className={`p-1 rounded text-xs transition-colors cursor-pointer ${
-                        subtitleStyle.textAlign === 'left' ? 'bg-[#00e5be] text-black' : 'text-slate-400 hover:bg-[#262734]'
-                      }`}
-                      title="Align Left"
-                    >
-                      <AlignLeft size={13} />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => updateSubtitleStyle('textAlign', 'center')}
-                      className={`p-1 rounded text-xs transition-colors cursor-pointer ${
-                        subtitleStyle.textAlign === 'center' ? 'bg-[#00e5be] text-black' : 'text-slate-400 hover:bg-[#262734]'
-                      }`}
-                      title="Align Center (Standard)"
-                    >
-                      <AlignCenter size={13} />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => updateSubtitleStyle('textAlign', 'right')}
-                      className={`p-1 rounded text-xs transition-colors cursor-pointer ${
-                        subtitleStyle.textAlign === 'right' ? 'bg-[#00e5be] text-black' : 'text-slate-400 hover:bg-[#262734]'
-                      }`}
-                      title="Align Right"
-                    >
-                      <AlignRight size={13} />
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              {/* Row 2: Text Color, Background Highlight, Outline & Reset */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pb-2 mb-2 border-b border-[#262734]">
-                {/* Text Color Picker & Presets */}
-                <div className="flex flex-col gap-1.5 p-2 rounded-lg bg-[#0e0f12] border border-[#262734]">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[10px] font-semibold text-slate-300 flex items-center gap-1">
-                      <Palette size={11} className="text-[#00e5be]" />
-                      <span>Text Color</span>
-                    </span>
-                    <label className="flex items-center gap-1 cursor-pointer" title="Custom color picker">
-                      <input
-                        type="color"
-                        value={subtitleStyle.textColor}
-                        onChange={(e) => {
-                          updateSubtitleStyle('textColor', e.target.value);
-                          if (activeEventId) applyColorToActive(e.target.value);
-                        }}
-                        className="w-4 h-4 rounded cursor-pointer border-0 bg-transparent p-0"
-                      />
-                      <span className="text-[10px] font-mono text-slate-400 uppercase">{subtitleStyle.textColor}</span>
-                    </label>
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    {[
-                      { name: 'White', color: '#ffffff' },
-                      { name: 'Yellow', color: '#ffe600' },
-                      { name: 'Cyan', color: '#00e5ff' },
-                      { name: 'Neon Green', color: '#00e5be' },
-                      { name: 'Red', color: '#ff4d4f' },
-                      { name: 'Amber', color: '#f59e0b' },
-                      { name: 'Black', color: '#111111' }
-                    ].map((swatch) => (
-                      <button
-                        key={swatch.color}
-                        type="button"
-                        onClick={() => {
-                          updateSubtitleStyle('textColor', swatch.color);
-                          if (activeEventId) applyColorToActive(swatch.color);
-                        }}
-                        className={`w-5 h-5 rounded-full border transition-transform cursor-pointer hover:scale-110 ${
-                          subtitleStyle.textColor.toLowerCase() === swatch.color.toLowerCase()
-                            ? 'border-[#00e5be] scale-110 ring-2 ring-[#00e5be]/40'
-                            : 'border-white/20'
-                        }`}
-                        style={{ backgroundColor: swatch.color }}
-                        title={swatch.name}
-                      />
-                    ))}
-                  </div>
-                </div>
-
-                {/* Background Box / Highlight Color */}
-                <div className="flex flex-col gap-1.5 p-2 rounded-lg bg-[#0e0f12] border border-[#262734]">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[10px] font-semibold text-slate-300 flex items-center gap-1">
-                      <Highlighter size={11} className="text-amber-400" />
-                      <span>Box / Highlight</span>
-                    </span>
-                    <span className="text-[9px] font-mono text-slate-400">
-                      {subtitleStyle.bgColor === 'transparent' ? 'None' : 'Active'}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    {[
-                      { name: 'Netflix 60% Black', color: 'rgba(0,0,0,0.6)' },
-                      { name: 'Solid Black', color: '#000000' },
-                      { name: 'None / Transparent', color: 'transparent' },
-                      { name: 'Cyan Glow', color: 'rgba(0,229,255,0.25)' },
-                      { name: 'Yellow Tint', color: 'rgba(255,230,0,0.25)' }
-                    ].map((swatch) => (
-                      <button
-                        key={swatch.name}
-                        type="button"
-                        onClick={() => updateSubtitleStyle('bgColor', swatch.color)}
-                        className={`px-2 py-0.5 rounded text-[9px] font-mono border transition-all cursor-pointer ${
-                          subtitleStyle.bgColor === swatch.color
-                            ? 'bg-[#00e5be]/20 border-[#00e5be] text-[#00e5be] font-bold'
-                            : 'bg-[#181920] border-[#262734] text-slate-400 hover:text-white'
-                        }`}
-                      >
-                        {swatch.name.split(' ')[0]}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </div>
-
-              {/* Bottom Row: Live Preview & Action Buttons */}
-              <div className="flex items-center justify-between pt-1 gap-2 flex-wrap">
-                <div className="flex items-center gap-2">
-                  <span className="text-[10px] text-slate-400">Preview:</span>
-                  <div
-                    className="px-2 py-0.5 rounded text-xs border border-[#262734]"
-                    style={{
-                      fontFamily: subtitleStyle.fontFamily,
-                      color: subtitleStyle.textColor,
-                      backgroundColor: subtitleStyle.bgColor,
-                      fontWeight: subtitleStyle.isBold ? 'bold' : 'normal',
-                      fontStyle: subtitleStyle.isItalic ? 'italic' : 'normal',
-                      textDecoration: [
-                        subtitleStyle.isUnderline ? 'underline' : '',
-                        subtitleStyle.isStrikethrough ? 'line-through' : ''
-                      ].filter(Boolean).join(' ') || 'none'
-                    }}
-                  >
-                    Sample Subtitle Text
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const defaultStyle = {
-                        fontFamily: 'Netflix Sans, Roboto, Helvetica, Arial, sans-serif',
-                        fontSize: 22,
-                        isBold: false,
-                        isItalic: false,
-                        isUnderline: false,
-                        isStrikethrough: false,
-                        textColor: '#ffffff',
-                        bgColor: 'rgba(0,0,0,0.6)',
-                        textAlign: 'center',
-                        textShadow: 'outline'
-                      };
-                      setSubtitleStyle(defaultStyle);
-                      try { localStorage.setItem('karya_subtitle_style', JSON.stringify(defaultStyle)); } catch (_) {}
-                    }}
-                    className="px-2 py-1 rounded text-[10px] font-medium text-slate-400 hover:text-white bg-[#0e0f12] border border-[#262734] flex items-center gap-1 cursor-pointer transition-colors"
-                    title="Reset formatting to default Netflix standard"
-                  >
-                    <RotateCcw size={10} />
-                    <span>Reset</span>
-                  </button>
-
-                  {activeEventId && (
-                    <button
-                      type="button"
-                      onClick={() => clearFormatFromActive()}
-                      className="px-2 py-1 rounded text-[10px] font-medium text-amber-300 hover:bg-amber-950/40 bg-[#0e0f12] border border-amber-500/30 flex items-center gap-1 cursor-pointer transition-colors"
-                      title="Clear HTML formatting tags from currently active subtitle"
-                    >
-                      <span>Clear Tags (#{activeEventId})</span>
-                    </button>
-                  )}
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Right: Remaining Tools, Selectors & Actions */}
-        <div className="flex items-center gap-1.5 shrink-0 flex-wrap sm:flex-nowrap">
-          {/* Language & Script Selectors (Native text and scripts) */}
-          <div className="flex items-center gap-1.5 bg-[#181920] border border-[#262734] px-2 py-0.5 rounded-md text-xs shrink-0">
-            <Globe size={12} className="text-[#00e5be] shrink-0" />
-            <select
-              value={language}
-              onChange={(e) => {
-                setLanguage(e.target.value);
-                try { localStorage.setItem('karya_sub_language', e.target.value); } catch (_) { }
-              }}
-              disabled={isGenerating}
-              className="bg-transparent text-slate-200 font-semibold text-xs focus:outline-none cursor-pointer"
-              title="Target Spoken Language"
-            >
-              <option value="auto" className="bg-[#181920]">Auto-Detect</option>
-              <option value="hi" className="bg-[#181920]">Hindi (हिंदी)</option>
-              <option value="en" className="bg-[#181920]">English</option>
-              <option value="hinglish" className="bg-[#181920]">Hinglish (Hindi in Latin)</option>
-              <option value="bn" className="bg-[#181920]">Bengali (বাংলা)</option>
-              <option value="ta" className="bg-[#181920]">Tamil (தமிழ்)</option>
-              <option value="te" className="bg-[#181920]">Telugu (తెలుగు)</option>
-              <option value="mr" className="bg-[#181920]">Marathi (मराठी)</option>
-              <option value="gu" className="bg-[#181920]">Gujarati (ગુજરાતી)</option>
-              <option value="pa" className="bg-[#181920]">Punjabi (ਪੰਜਾਬੀ)</option>
-              <option value="kn" className="bg-[#181920]">Kannada (ಕನ್ನಡ)</option>
-              <option value="ml" className="bg-[#181920]">Malayalam (മലയാളം)</option>
-              <option value="ur" className="bg-[#181920]">Urdu (اردو)</option>
-              <option value="es" className="bg-[#181920]">Spanish (Español)</option>
-              <option value="fr" className="bg-[#181920]">French (Français)</option>
-              <option value="de" className="bg-[#181920]">German (Deutsch)</option>
-              <option value="ja" className="bg-[#181920]">Japanese (日本語)</option>
-              <option value="ko" className="bg-[#181920]">Korean (한국어)</option>
-              <option value="ar" className="bg-[#181920]">Arabic (العربية)</option>
-            </select>
-
-            <div className="h-3.5 w-px bg-[#262734]" />
-
-            <select
-              value={script}
-              onChange={(e) => {
-                setScript(e.target.value);
-                try { localStorage.setItem('karya_sub_script', e.target.value); } catch (_) { }
-              }}
-              disabled={isGenerating}
-              className="bg-transparent text-[#00e5be] font-semibold text-xs focus:outline-none cursor-pointer"
-              title="Target Output Script"
-            >
-              <option value="auto" className="bg-[#181920]">Native / Auto Script</option>
-              <option value="devanagari" className="bg-[#181920]">Devanagari (देवनागरी)</option>
-              <option value="latin" className="bg-[#181920]">Latin (Hinglish / Roman)</option>
-            </select>
-          </div>
-
-          {/* Auto-Fix Button */}
-          <button
-            onClick={handleAutoFix}
-            disabled={isGenerating || events.length === 0}
-            className="px-2 py-1 rounded-md text-[11px] font-semibold flex items-center gap-1 transition-colors cursor-pointer border border-emerald-500/30 bg-[#181920] hover:bg-[#22232c] text-emerald-400 shadow-xs disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
-            title="Auto-Fix Netflix Compliance Rules"
-          >
-            <Sparkles className="w-3 h-3 text-emerald-400" />
-            <span>Auto-Fix</span>
-          </button>
-
-          {/* Continue Subtitle Generation Button */}
-          <button
-            onClick={() => handleOpenCustomTimeModal('lastSub')}
-            disabled={isGenerating}
-            className={`px-2 py-1 rounded-md text-[11px] font-bold flex items-center gap-1 transition-all cursor-pointer shadow-xs shrink-0 ${canResume || events.length > 0
-              ? 'bg-amber-500 hover:bg-amber-400 text-black shadow-[0_0_10px_rgba(245,158,11,0.3)]'
-              : 'bg-[#181920] hover:bg-[#22232c] border border-amber-500/40 text-amber-300'
-              } disabled:opacity-40 disabled:cursor-not-allowed`}
-            title="Continue / start generating subtitles from specific timeline time"
-          >
-            <Play className={`w-3 h-3 ${canResume || events.length > 0 ? 'fill-black text-black' : 'fill-amber-300 text-amber-300'}`} />
-            <span>Continue</span>
-          </button>
-
-          {/* Auto-Generate AI Button */}
-          <button
-            onClick={handleGenerate}
-            disabled={isGenerating}
-            className="px-2 py-1 rounded-md text-[11px] font-semibold bg-[#181920] hover:bg-[#22232c] border border-[#00e5be]/40 text-[#00e5be] flex items-center gap-1 transition-all shadow-xs cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
-            title="Run Gemini AI Netflix Subtitle Pipeline"
-          >
-            {isGenerating ? (
-              <>
-                <Loader2 className="w-3 h-3 animate-spin text-[#00e5be]" />
-                <span>Generating...</span>
-              </>
-            ) : (
-              <>
-                <Sparkles className="w-3 h-3 text-[#00e5be]" />
-                <span className="hidden sm:inline">Auto-</span><span>Generate</span>
-              </>
-            )}
-          </button>
-
-          {/* Acoustic Audio Sync Button */}
-          <button
-            onClick={handleAcousticSync}
-            disabled={events.length === 0 || isSyncingAudio || !currentVideoId}
-            className="px-2 py-1 rounded-md text-[11px] font-semibold bg-[#181920] border border-emerald-500/30 hover:bg-[#22232c] text-emerald-300 flex items-center gap-1 transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
-            title="Snap and re-synchronize all subtitles directly to speech audio acoustics (Whisper + VAD)"
-          >
-            <Volume2 className={`w-3 h-3 text-emerald-400 ${isSyncingAudio ? 'animate-bounce' : ''}`} />
-            <span className="hidden lg:inline">Sync Audio</span>
-            <span className="lg:hidden">Sync</span>
-          </button>
-
-          {/* Export Button */}
-          <button
-            onClick={() => setShowExportModal(true)}
-            disabled={events.length === 0}
-            className="px-2.5 py-1 rounded-md text-[11px] font-bold bg-[#00e5be] hover:bg-[#00c9a7] text-black flex items-center gap-1 transition-all shadow-[0_0_10px_rgba(0,229,190,0.25)] cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
-            title="Export TTML / SRT / VTT"
-          >
-            <FileDown className="w-3 h-3" />
-            <span>Export</span>
-          </button>
-        </div>
-      </nav>
+      )}
 
       {/* ── Broadcast-Grade AI Streaming Progress Bar & Stage Status (Below Nav, Zero Nav Overflow) ── */}
       {isGenerating && (
-        <div className="px-4 py-2 flex items-center justify-between border-b border-[#00e5be]/30 bg-[#0c1413]/95 backdrop-blur-xs text-slate-200 text-xs shrink-0 z-30 transition-all">
+        <div className={`px-4 py-2 flex items-center justify-between border-b backdrop-blur-xs text-xs shrink-0 z-10 transition-all border-[var(--ss-accent)]/30 bg-[var(--kt-s1)]/95 text-slate-200`}>
           <div className="flex items-center gap-2.5 min-w-0">
-            <Loader2 className="w-3.5 h-3.5 animate-spin text-[#00e5be] shrink-0" />
-            <span className="font-bold text-[#00e5be] text-xs tracking-tight">
+            <Loader2 className={`w-3.5 h-3.5 animate-spin shrink-0 text-[var(--ss-accent)]`} />
+            <span className={`font-bold text-xs tracking-tight text-[var(--ss-accent)]`}>
               {progressStage || 'Generating Subtitles...'}
             </span>
-            {batchProgress && (
-              <span className="px-2 py-0.5 rounded text-[10px] font-mono font-black bg-[#00e5be] text-black shrink-0 shadow-xs">
-                Batch {batchProgress.current} of {batchProgress.total}
-              </span>
-            )}
             {progressDetail && (
-              <span className="text-slate-400 text-[11px] truncate hidden sm:inline opacity-80">
+              <span className={`text-[11px] truncate hidden sm:inline opacity-80 text-slate-400`}>
                 · {progressDetail}
               </span>
             )}
           </div>
           <div className="flex items-center gap-3 shrink-0 font-mono text-[11px]">
-            <span className="w-12 text-right font-bold text-[#00e5be] tabular-nums">
+            <span className={`w-12 text-right font-bold tabular-nums text-[var(--ss-accent)]`}>
               {Math.round(progressPercent)}%
             </span>
-            <div className="w-24 sm:w-36 h-1.5 bg-[#181920] rounded-full overflow-hidden border border-[#262734]">
+            <div className={`w-24 sm:w-36 h-1.5 rounded-none overflow-hidden border bg-[var(--ss-raised)] border-[var(--ss-line)]`}>
               <div
-                className="h-full bg-gradient-to-r from-[#00e5be] via-[#00c9a7] to-[#0099ff] transition-all duration-300 shadow-[0_0_8px_rgba(0,229,190,0.4)]"
+                className="h-full bg-gradient-to-r from-[var(--ss-accent)] via-[var(--ss-accent-hover)] to-[var(--kt-accent)] transition-all duration-300 shadow-[0_0_8px_rgba(var(--kt-accent-rgb),0.4)]"
                 style={{ width: `${progressPercent}%` }}
               />
             </div>
-            <span className="w-16 text-right tabular-nums text-slate-400 font-medium">
+            <span className={`w-16 text-right tabular-nums font-medium text-slate-400`}>
               [{elapsedSeconds.toFixed(1)}s]
             </span>
           </div>
@@ -3175,16 +2799,16 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
 
       {/* Backend Connection Warning Banner */}
       {backendConnected === false && (
-        <div className="px-4 py-2 flex items-center justify-between border-b border-amber-800 bg-amber-950/80 text-amber-200 text-xs shrink-0 z-30 transition-all">
+        <div className="px-4 py-2 flex items-center justify-between border-b border-amber-800 bg-amber-950/80 text-amber-200 text-xs shrink-0 z-10 transition-all">
           <div className="flex items-center gap-2">
             <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
             <span>
-              <strong>Backend Disconnected:</strong> Could not reach backend at <code className="bg-black/30 px-1 py-0.5 rounded font-mono text-[11px]">{API_BASE || '(relative / localhost)'}</code>. If this is a live deployed website, configure your live Backend API URL.
+              <strong>Backend Disconnected:</strong> Could not reach backend at <code className="bg-black/30 px-1 py-0.5 rounded-none font-mono text-[11px]">{API_BASE || '(relative / localhost)'}</code>. If this is a live deployed website, configure your live Backend API URL.
             </span>
           </div>
           <button
-            onClick={() => setShowSettingsModal(true)}
-            className="px-3 py-1 bg-amber-600 hover:bg-amber-500 text-white rounded text-xs font-bold shrink-0 transition-colors cursor-pointer"
+            onClick={() => openSettings('connection')}
+            className="px-3 py-1 bg-amber-500 hover:bg-amber-400 text-black rounded-none text-xs font-bold shrink-0 transition-colors cursor-pointer"
           >
             Configure API URL
           </button>
@@ -3193,22 +2817,22 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
 
       {/* Client Audio Extraction & Fast Cloud Transfer Progress Banner */}
       {audioExtractionStatus && (
-        <div className="px-4 py-2 flex items-center justify-between border-b border-cyan-800/60 bg-cyan-950/90 text-cyan-200 text-xs shrink-0 z-30 transition-all animate-pulse">
+        <div className="px-4 py-2 flex items-center justify-between border-b border-blue-800/60 bg-blue-950/90 text-blue-200 text-xs shrink-0 z-10 transition-all animate-pulse">
           <div className="flex items-center gap-2">
-            <Loader2 className="w-4 h-4 text-cyan-400 animate-spin shrink-0" />
+            <Loader2 className="w-4 h-4 text-blue-400 animate-spin shrink-0" />
             <span>
               <strong>⚡ Fast Cloud Transfer:</strong> {audioExtractionStatus.detail || 'Extracting lightweight audio from video...'} ({audioExtractionStatus.percent || 0}%)
             </span>
           </div>
-          <span className="text-[11px] text-cyan-300 font-mono hidden sm:inline">Bypassing 100MB cloud limits</span>
+          <span className="text-[11px] text-blue-300 font-mono hidden sm:inline">Bypassing 100MB cloud limits</span>
         </div>
       )}
 
       {/* Draft Restore Notification Banner */}
       {pendingDraft && (
-        <div className="px-4 py-2 flex items-center justify-between border-b border-[#262734] bg-[#181920] text-slate-200 text-xs shrink-0 z-30 transition-all">
+        <div className={`px-4 py-2 flex items-center justify-between border-b text-xs shrink-0 z-10 transition-all border-[var(--ss-line)] bg-[var(--ss-raised)] text-slate-200`}>
           <div className="flex items-center gap-2">
-            <Sparkles className="w-4 h-4 text-[#00e5be] shrink-0" />
+            <Sparkles className={`w-4 h-4 shrink-0 text-[var(--ss-accent)]`} />
             <span>
               Found an earlier saved draft for <strong>{selectedFile?.name}</strong> with {pendingDraft.events?.length || 0} subtitles ({pendingDraft.timestamp ? new Date(pendingDraft.timestamp).toLocaleTimeString() : 'autosaved'}).
             </span>
@@ -3222,20 +2846,15 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
                 setTotalErrors(pendingDraft.totalErrors || 0);
                 setTotalWarnings(pendingDraft.totalWarnings || 0);
                 setActiveEventId(restoredEvents[0]?.id || null);
-                if (pendingDraft.resumeChunk && pendingDraft.totalChunks && pendingDraft.resumeChunk <= pendingDraft.totalChunks) {
-                  setResumeChunk(pendingDraft.resumeChunk);
-                  setTotalChunks(pendingDraft.totalChunks);
-                  setCanResume(true);
-                }
                 setPendingDraft(null);
               }}
-              className="px-3 py-1 bg-[#00e5be] hover:bg-[#00c9a7] text-black rounded font-bold cursor-pointer transition-colors shadow-xs"
+              className={`px-3 py-1 rounded-none font-bold cursor-pointer transition-colors shadow-xs bg-[var(--ss-accent)] hover:bg-[var(--ss-accent-hover)] text-black`}
             >
               Restore Draft
             </button>
             <button
               onClick={() => handleDiscardPreviousWork()}
-              className="px-3 py-1 rounded cursor-pointer transition-colors bg-[#22232c] hover:bg-rose-950/40 hover:text-rose-300 text-slate-300"
+              className={`px-3 py-1 rounded-none cursor-pointer transition-colors bg-[var(--ss-hover)] hover:bg-rose-950/40 hover:text-rose-300 text-slate-300`}
               title="Discard previous draft and delete all previous audio, video, and peaks files on the server"
             >
               Discard & Start Fresh
@@ -3244,141 +2863,160 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
         </div>
       )}
 
-      {/* Resume Interrupted Generation Notification Banner */}
-      {canResume && !isGenerating && events.length > 0 && (
-        <div className="px-4 py-1.5 flex items-center justify-between border-b border-amber-500/40 bg-amber-950/70 text-amber-200 text-xs shrink-0 z-30 transition-all">
-          <div className="flex items-center gap-2">
-            <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
-            <span>
-              <strong>Generation Interrupted:</strong> Completed through Batch {(resumeChunk || 2) - 1} of {totalChunks || '?'} ({events.length} subtitles generated). You can continue generating remaining batches anytime!
-            </span>
-          </div>
-          <button
-            onClick={() => handleContinueGenerate('all')}
-            className="px-3 py-1 bg-amber-500 hover:bg-amber-400 text-black font-bold rounded text-xs shrink-0 transition-colors cursor-pointer flex items-center gap-1.5 shadow-xs"
-          >
-            <Play className="w-3 h-3 fill-black" />
-            <span>Continue Generation (Batch {resumeChunk}/{totalChunks})</span>
-          </button>
-        </div>
-      )}
-
       {/* Slim Real-Time Progress Line during Streaming */}
       {isGenerating && (
-        <div className="w-full h-1 bg-[#181920] overflow-hidden shrink-0">
+        <div className={`w-full h-1 overflow-hidden shrink-0 bg-[var(--ss-raised)]`}>
           <div
-            className="h-full bg-gradient-to-r from-[#00e5be] via-[#00c9a7] to-[#00b4d8] shadow-[0_0_8px_rgba(0,229,190,0.5)] transition-all duration-300"
+            className="h-full bg-gradient-to-r from-[var(--ss-accent)] via-[var(--ss-accent-hover)] to-[var(--kt-accent-2)] shadow-[0_0_8px_rgba(var(--kt-accent-rgb),0.5)] transition-all duration-300"
             style={{ width: `${progressPercent}%` }}
           />
         </div>
       )}
 
-      {/* ── Resizable Subtitle Studio Workstation ── */}
-      <div className="flex-1 min-h-0 flex flex-col p-1.5 gap-1.5 w-full mx-auto overflow-hidden relative select-none">
+      {/* ── Workstation: tool rail + (panes, optional docked QC report) ── */}
+      <div
+        className="flex-1 min-h-0 flex overflow-hidden bg-[var(--ss-bg)] select-none"
+        style={{ flexDirection: layout.sidebar === 'top' || layout.sidebar === 'bottom' ? 'column' : 'row' }}
+      >
+        {layout.sidebar !== 'hidden' && (
+        <Sidebar
+          activeTab={showQcDrawer ? 'qa' : showExportModal ? 'export' : null}
+          isGenerating={isGenerating}
+          canGenerate={Boolean(selectedFile || currentVideoId)}
+          onTabChange={(tabId) => {
+            if (tabId === 'media') fileInputRef.current?.click();
+            if (tabId === 'import') srtImportRef.current?.click();
+            if (tabId === 'generate') {
+              confirmGenerate();
+            }
+            if (tabId === 'qa') setShowQcDrawer(true);
+            if (tabId === 'export') setShowExportModal(true);
+            if (tabId === 'translate') { if (showCentroidModal && centroidTab === 'translate') setShowCentroidModal(false); else openCentroid('translate'); }
+            if (tabId === 'centroid-qc') openCentroid('qc');
+          }}
+          onOpenLayout={() => openSettings('layout')}
+          layoutOpen={showSettingsModal && settingsPage === 'layout'}
+          translateOpen={showCentroidModal}
+          hasTranslation={centroidState.hasResults}
+          centroidQcCount={centroidState.qcIssues}
+          position={layout.sidebar}
+          showLabels={layout.sidebarLabels}
+          onOpenHelp={() => openSettings('shortcuts')}
+        />
+        )}
 
-        {/* Top Resizable Split Area (Left: Subtitle Sheet vs Right: Video + Inspector) */}
-        <div className="flex-1 min-h-0 flex gap-0 overflow-hidden">
-
-          {/* Left Panel: Subtitle List / Spreadsheet View (Resizable Width) */}
-          <div
-            style={{ width: `${leftPanelWidth}px` }}
-            className="shrink-0 flex flex-col h-full overflow-hidden rounded-lg border border-[#262734] bg-[#14151a] shadow-sm transition-colors"
-          >
-            <SubtitleGridView
+        <div
+          className="flex-1 min-w-0 min-h-0 flex overflow-hidden"
+          style={{ flexDirection: layout.qcDock === 'bottom' ? 'column' : 'row', order: 1 }}
+        >
+          <main className="flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden" style={{ order: 1 }} aria-label="Subtitle workspace">
+            <StudioStage
+              layout={layout}
+              patch={patchLayout}
+              video={
+                <div className="h-full flex flex-col overflow-hidden bg-[var(--ss-bg)]">
+              <VideoPlayer
+                videoUrl={videoUrl}
+                audioUrl={extractedAudioUrl}
+                onOpenFilePicker={() => fileInputRef.current?.click()}
+                onFileSelect={(file) => {
+                  const syntheticEvent = { target: { files: [file] } };
+                  handleFileChange(syntheticEvent);
+                }}
+                events={events}
+                activeEventId={activeEventId}
+                setActiveEventId={setActiveEventId}
+                playTarget={playTarget}
+                onTimeUpdate={handlePlayerTimeUpdate}
+                frameRate={frameRate}
+                theme={theme}
+                isAudio={isAudioFile}
+                subtitleStyle={subtitleStyle}
+                onUpdateSubtitleStyle={updateSubtitleStyle}
+                seekStep={prefs.seekStep}
+              />
+                </div>
+              }
+              list={
+                <div className="h-full overflow-hidden flex flex-col bg-[var(--ss-panel)]">
+              <SubtitleTablePanel
+                events={events}
+                activeEventId={activeEventId}
+                setActiveEventId={setActiveEventId}
+                onSeek={(t) => {
+                  setCurrentTime(t);
+                  setPlayTarget({ time: t, pause: true });
+                }}
+                onPlayEvent={handlePlayEvent}
+                onDeleteEvent={handleDeleteEvent}
+                onBulkDelete={handleBulkDelete}
+                onUpdateEvent={handleUpdateEvent}
+                onTimeChange={handleEventTimeChange}
+                onSplitEvent={handleSplitEvent}
+                onMergeWithNext={handleMergeEvents}
+                onRebreakEvent={handleRebreakEvent}
+                onAddSubtitle={(t) => handleAddSubtitle(t)}
+                onExport={() => setShowExportModal(true)}
+                currentTime={currentTime}
+                availableSpeakers={availableSpeakers}
+                frameRate={frameRate}
+                cplLimit={cplLimit}
+                cpsLimit={cpsLimit}
+                minDuration={minDuration}
+                maxDuration={maxDuration}
+              />
+                </div>
+              }
+              timeline={
+                <div className="h-full w-full overflow-hidden bg-[var(--ss-bg)]">
+            <AudioWaveformTimeline
+              videoUrl={videoUrl}
+              audioUrl={extractedAudioUrl}
+              selectedFile={selectedFile}
+              videoId={currentVideoId || null}
+              initialPeaks={initialWaveformPeaks}
+              API_BASE={API_BASE}
+              isAudio={isAudioFile}
               events={events}
+              shotChanges={shotChanges}
+              duration={videoDuration}
+              currentTime={currentTime}
               activeEventId={activeEventId}
               setActiveEventId={setActiveEventId}
-              onPlayEvent={handlePlayEvent}
+              onEventTimeChange={handleEventTimeChange}
               onSeek={(t) => {
                 setCurrentTime(t);
                 setPlayTarget({ time: t, pause: true });
               }}
-              onGlobalReplace={handleGlobalReplace}
-              onUpdateEvent={handleUpdateEvent}
+              onAddSubtitleAtTime={handleAddSubtitle}
+              onShiftAllFollowing={handleShiftAllFollowing}
+              onContinueFromTime={null}
+              onUndo={historyIndex > 0 ? handleUndo : null}
+              onRedo={historyIndex < history.length - 1 ? handleRedo : null}
               onDeleteEvent={handleDeleteEvent}
-              onBulkDelete={handleBulkDelete}
-              onSplitEvent={handleSplitEvent}
-              onMergeEvent={handleMergeEvents}
-              onRebreakEvent={handleRebreakEvent}
-              onAddSubtitle={() => handleAddSubtitle(currentTime)}
-              onJumpNextIssue={jumpToNextIssue}
-              cplLimit={cplLimit}
+              onSplitAtTime={handleSplitAtCursor}
+              onMergeWithNext={handleMergeEvents}
+              onPlayEvent={handlePlayEvent}
+              frameRate={frameRate}
               cpsLimit={cpsLimit}
-              frameRate={frameRate}
+              cplLimit={cplLimit}
               theme={theme}
             />
-          </div>
-
-          {/* ── Vertical Resizer Splitter (Left Subtitles vs Right Video) ── */}
-          <div
-            onMouseDown={handleLeftSplitterDown}
-            className="w-2 hover:w-2.5 hover:bg-[#00e5be]/40 cursor-col-resize flex items-center justify-center transition-all group z-30 shrink-0"
-            title="Drag to resize Subtitle Sheet width"
-          >
-            <div className="w-0.5 h-10 bg-[#262734] rounded-full group-hover:bg-[#00e5be] transition-colors" />
-          </div>
-
-          {/* Right Panel: Full Video Player Viewport */}
-          <div className="flex-1 min-w-0 h-full overflow-hidden bg-black rounded-lg border border-[#262734]">
-            <VideoPlayer
-              videoUrl={videoUrl}
-              events={events}
-              activeEventId={activeEventId}
-              setActiveEventId={setActiveEventId}
-              playTarget={playTarget}
-              onTimeUpdate={(t) => setCurrentTime(t)}
-              frameRate={frameRate}
-              theme={theme}
-              isAudio={isAudioFile}
-              subtitleStyle={subtitleStyle}
-              onUpdateSubtitleStyle={updateSubtitleStyle}
+                </div>
+              }
             />
-          </div>
-        </div>
+          </main>
 
-        {/* ── Horizontal Resizer Splitter (Top Panels vs Bottom Timeline) ── */}
-        <div
-          onMouseDown={handleBottomSplitterDown}
-          className="h-2 hover:h-2.5 hover:bg-[#00e5be]/40 cursor-row-resize flex items-center justify-center transition-all group z-30 w-full shrink-0"
-          title="Drag to resize Timeline height"
-        >
-          <div className="h-0.5 w-16 bg-[#262734] rounded-full group-hover:bg-[#00e5be] transition-colors" />
-        </div>
-
-        {/* Bottom Row: Audio Waveform Timeline with Clean Continuous Waveform & Rectangular Subtitle Boxes */}
-        <div style={{ height: `${bottomTimelineHeight}px` }} className="w-full shrink-0 overflow-hidden">
-          <AudioWaveformTimeline
-            videoUrl={videoUrl}
-            selectedFile={selectedFile}
-            videoId={currentVideoId || null}
-            initialPeaks={initialWaveformPeaks}
-            API_BASE={API_BASE}
-            isAudio={isAudioFile}
-            events={events}
-            shotChanges={shotChanges}
-            duration={videoDuration}
-            currentTime={currentTime}
-            activeEventId={activeEventId}
-            setActiveEventId={setActiveEventId}
-            onEventTimeChange={handleEventTimeChange}
-            onSeek={(t) => {
-              setCurrentTime(t);
-              setPlayTarget({ time: t, pause: true });
-            }}
-            onAddSubtitleAtTime={handleAddSubtitle}
-            onShiftAllFollowing={handleShiftAllFollowing}
-            onContinueFromTime={handleOpenCustomTimeModal}
-            frameRate={frameRate}
-            cpsLimit={cpsLimit}
-            cplLimit={cplLimit}
-            theme={theme}
-          />
-        </div>
-
-        {/* ── Slide-Over Netflix QC Panel Drawer ── */}
-        {showQcDrawer && (
-          <div className="fixed inset-y-0 right-0 z-50 w-80 md:w-96 shadow-2xl border-l border-[#262734] bg-[#14151a] text-slate-200 p-4 flex flex-col animate-in slide-in-from-right duration-200">
+          {/* Netflix QC report: floating overlay, or docked beside / below the panes */}
+          {showQcDrawer && (
+            <div
+              className={layout.qcDock === 'overlay'
+                ? 'fixed inset-y-0 right-0 z-50 w-80 md:w-96 shadow-2xl border-l p-4 flex flex-col animate-in slide-in-from-right duration-200 border-[var(--kt-s4)] bg-[var(--ss-panel)] text-slate-200'
+                : 'shrink-0 min-h-0 min-w-0 flex flex-col p-4 border-[var(--kt-s4)] bg-[var(--ss-panel)] text-slate-200 overflow-hidden ' + (layout.qcDock === 'bottom' ? 'border-t' : layout.qcDock === 'left' ? 'border-r' : 'border-l')}
+              style={layout.qcDock === 'overlay' ? undefined : (layout.qcDock === 'bottom' ? { height: layout.qcSize, order: 2 } : { width: layout.qcSize, order: layout.qcDock === 'left' ? 0 : 2 })}
+            >
             <NetflixQCPanel
+              qcUnavailable={qcUnavailable}
               complianceScore={complianceScore}
               totalErrors={totalErrors}
               totalWarnings={totalWarnings}
@@ -3389,6 +3027,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
               cplLimit={cplLimit}
               cpsLimit={cpsLimit}
               onAutoFix={handleAutoFix}
+              onRebreakAll={handleRebreakAll}
               onGeminiFix={handleGeminiFix}
               isFixingWithGemini={isFixingWithGemini}
               onAcousticSync={handleAcousticSync}
@@ -3397,52 +3036,146 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
               onJumpToEvent={(id) => {
                 setActiveEventId(id);
                 handlePlayEvent(id);
-                setShowQcDrawer(false);
+                if (layout.qcDock === 'overlay') setShowQcDrawer(false);
               }}
               onClose={() => setShowQcDrawer(false)}
             />
-          </div>
-        )}
+            </div>
+          )}
+        </div>
       </div>
 
-      {/* ── Progressive Batch Ready QC Notification Toast ── */}
-      {qcNotification && (
-        <div className="fixed top-16 right-6 z-50 flex items-center gap-3 px-4 py-3 bg-[#131b18]/95 border border-[#00e5be]/60 rounded-xl shadow-2xl backdrop-blur-md animate-in fade-in slide-in-from-top-4 duration-300 text-slate-100 max-w-md">
-          <div className="w-8 h-8 rounded-lg bg-[#00e5be]/20 border border-[#00e5be]/40 flex items-center justify-center text-[#00e5be] shrink-0">
-            <CheckCircle2 className="w-4 h-4" />
-          </div>
-          <div className="flex-1 min-w-0">
-            <div className="text-xs font-bold text-white flex items-center gap-1.5">
-              <span>Part {qcNotification.chunkIndex} Complete</span>
-              <span className="px-1.5 py-0.2 bg-[#00e5be]/20 text-[#00e5be] rounded text-[9px] font-mono font-black uppercase">
-                Ready for Manual QC
-              </span>
-            </div>
-            <div className="text-[11px] text-slate-300 truncate mt-0.5">
-              {qcNotification.message}
-            </div>
-            {isGenerating && (
-              <div className="text-[10px] text-emerald-400/80 font-mono mt-0.5 flex items-center gap-1">
-                <Loader2 className="w-2.5 h-2.5 animate-spin" />
-                <span>Next part processing concurrently in background...</span>
-              </div>
-            )}
-          </div>
-          <button
-            onClick={() => setQcNotification(null)}
-            className="p-1 rounded-md text-slate-400 hover:text-white hover:bg-white/10 transition shrink-0"
-            title="Dismiss notification"
-          >
-            <X className="w-3.5 h-3.5" />
-          </button>
-        </div>
+      {dialog === 'shift' && (
+        <ShiftTimingsDialog
+          events={events}
+          activeEventId={activeEventId}
+          frameRate={frameRate}
+          onClose={() => setDialog(null)}
+          onApply={(delta, fromId) => applyEdit((evs) => tools.shiftTimes(evs, delta, { fromId }), (n) => `Shifted ${plural(n, 'subtitle')} by ${delta > 0 ? '+' : ''}${delta.toFixed(3)} s.`)}
+        />
       )}
+      {dialog === 'goto' && (
+        <GoToDialog
+          eventCount={events.length}
+          frameRate={frameRate}
+          duration={videoDuration}
+          onClose={() => setDialog(null)}
+          onGoToIndex={goToIndex}
+          onGoToTime={goToTime}
+        />
+      )}
+      {dialog === 'find' && (
+        <FindReplaceDialog
+          events={events}
+          onClose={() => setDialog(null)}
+          onFindNext={findNext}
+          onReplaceAll={(find, rep, opts) => {
+            const { events: next, changed } = tools.replaceInEvents(events, find, rep, opts);
+            if (changed) {
+              next.forEach((ev) => editedEventIdsRef.current.add(ev.id));
+              setEvents(next);
+              pushToHistory(next);
+              handleLint(next);
+            }
+            return { count: changed };
+          }}
+        />
+      )}
+      {showPalette && <CommandPalette commands={paletteCommands} onClose={() => setShowPalette(false)} />}
+
+      {/* ── Broadcast Studio Status Bar / Footer (44px SMPTE Timecode & QC Telemetry) ── */}
+      {layout.showFooter && (
+      <footer className={`h-6 px-3 border-t flex items-center justify-between text-[11px] font-mono shrink-0 select-none z-20 ${
+        'bg-[var(--ss-bg)] border-[var(--kt-s3)] text-slate-400'
+      }`}>
+        <div className="flex items-center gap-3">
+          <span className="flex items-center gap-1 font-semibold">
+            <span className="text-slate-300">
+              {activeEventId != null && events.length > 0
+                ? `Subtitle ${(events.findIndex(e => (e.id === activeEventId || e.event_id === activeEventId)) + 1) || '–'} of ${events.length}`
+                : 'No subtitle selected'}
+            </span>
+          </span>
+          <span className="opacity-40">|</span>
+          <span className="flex items-center gap-1">
+            <span className="text-slate-400">TC</span>
+            <span className="font-semibold text-[var(--ss-accent)]">
+              {formatTimecode(currentTime, prefs.tcFormat, frameRate)}
+            </span>
+            <span className="opacity-40">/</span>
+            <span>{formatTimecode(videoDuration, prefs.tcFormat, frameRate)}</span>
+          </span>
+          <span className="opacity-40">|</span>
+          <span>{Number(frameRate).toFixed(2)} FPS</span>
+        </div>
+
+        <div className="flex items-center gap-3">
+          {/* Netflix Compliance Health */}
+          <div 
+            onClick={() => setShowQcDrawer(true)} 
+            className="flex items-center gap-1.5 cursor-pointer hover:underline"
+            title="Click to open Netflix QC Report Drawer"
+          >
+            <div className={`w-2 h-2 rounded-none ${
+              totalErrors > 0 ? 'bg-rose-500 animate-pulse' : totalWarnings > 0 ? 'bg-amber-400' : 'bg-emerald-400'
+            }`} />
+            <span className="font-semibold">
+              {qcUnavailable ? 'Netflix QC: unavailable (backend offline)' : `Netflix QC: ${complianceScore.toFixed(0)}%`}
+            </span>
+            {!qcUnavailable && totalErrors > 0 && <span className="text-rose-400 font-bold">({totalErrors} Err)</span>}
+          </div>
+
+          <span className="opacity-40">|</span>
+
+          {/* Quick Shortcuts Hint */}
+          {layout.showHints && <div className="hidden md:flex items-center gap-2 opacity-70 text-[10px]">
+            <span>Space: Play</span>
+            <span>·</span>
+            <span>,: -1f</span>
+            <span>·</span>
+            <span>.: +1f</span>
+            <span>·</span>
+            <span>L: Loop</span>
+            <span>·</span>
+            <span>Ctrl+F: Search</span>
+            <span>·</span>
+            <span>F8: Next issue</span>
+          </div>}
+        </div>
+      </footer>
+      )}
+
+      {/* ── Speaker Rename Modal (shared with Transcription) ── */}
+      <SpeakerCustomizerModal
+        isOpen={showSpeakerModal}
+        onClose={() => setShowSpeakerModal(false)}
+        segments={events}
+        getSpeaker={(ev) => ev.speaker || (ev.speakers && ev.speakers[0]) || ''}
+        setSpeaker={(ev, name) => ({
+          ...ev,
+          speaker: name,
+          speaker_id: name.toLowerCase().replace(/\s+/g, '_'),
+          ...(Array.isArray(ev.speakers) ? { speakers: [name] } : {})
+        })}
+        onUpdateSegments={(updated) => {
+          setEvents(updated);
+          pushToHistory(updated);
+        }}
+      />
 
       {/* ── Subtitle & QC Settings Modal ── */}
       <SubtitleSettingsModal
         isOpen={showSettingsModal}
         onClose={() => setShowSettingsModal(false)}
-        isDark={isDark}
+        page={settingsPage}
+        onPageChange={setSettingsPage}
+        studioLayout={studioLayout}
+        prefs={prefs}
+        setPref={setPref}
+        resetPrefs={resetPrefs}
+        onSaveDraft={saveDraftCmd}
+        hasEvents={hasEvents}
+        isDark={true}
         cplLimit={cplLimit}
         setCplLimit={setCplLimit}
         cpsLimit={cpsLimit}
@@ -3456,13 +3189,27 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
         frameRate={frameRate}
         setFrameRate={setFrameRate}
         language={language}
-        setLanguage={setLanguage}
+        setLanguage={handleLanguageChange}
         script={script}
         setScript={setScript}
         contentType={contentType}
         setContentType={setContentType}
         sdhMode={sdhMode}
         setSdhMode={setSdhMode}
+        includeSpeakerTags={includeSpeakerTags}
+        setIncludeSpeakerTags={setIncludeSpeakerTags}
+        snapToShotChanges={snapToShotChanges}
+        setSnapToShotChanges={setSnapToShotChanges}
+        numSpeakers={numSpeakers}
+        setNumSpeakers={(val) => {
+          setNumSpeakers(val);
+          try { localStorage.setItem('karya_num_speakers', String(val)); } catch (_) {}
+        }}
+        strictNativeScript={strictNativeScript}
+        setStrictNativeScript={(val) => {
+          setStrictNativeScript(val);
+          try { localStorage.setItem('karya_strict_native_script', String(val)); } catch (_) {}
+        }}
         geminiAutoFix={geminiAutoFix}
         setGeminiAutoFix={setGeminiAutoFix}
         glossaryTerms={glossaryTerms}
@@ -3471,6 +3218,50 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
           if (events && events.length > 0) {
             handleLint(events);
           }
+        }}
+      />
+
+      {/* ── ElevenLabs API Key Modal ── */}
+      <ElevenLabsApiKeyModal
+        isOpen={showApiKeyModal}
+        onClose={() => {
+          setShowApiKeyModal(false);
+          setApiKeyModalError(null);
+        }}
+        errorMessage={apiKeyModalError}
+        initialKey={localStorage.getItem('elevenlabs_api_key') || ''}
+        onSave={() => {
+          setApiKeyModalError(null);
+          if (selectedFile && !isGenerating) {
+            setTimeout(() => {
+              handleGenerate();
+            }, 100);
+          }
+        }}
+      />
+
+      {/* ── Centroid Translate & QC (kept mounted so results survive closing the panel) ── */}
+      <CentroidModal
+        isOpen={showCentroidModal}
+        onClose={() => setShowCentroidModal(false)}
+        defaultSourceLang={language}
+        startTab={centroidTab}
+        startTabNonce={centroidNonce}
+        onStateChange={setCentroidState}
+        onJumpToEvent={(id) => { setActiveEventId(id); handlePlayEvent(id); }}
+        events={events}
+        glossaryTerms={glossaryTerms}
+        cplLimit={cplLimit}
+        cpsLimit={cpsLimit}
+        maxLines={maxLines}
+        fileName={selectedFile?.name || 'subtitles'}
+        onUpdateEvent={handleUpdateEvent}
+        onLoadEvents={(loaded) => {
+          const next = loaded.map(e => ({ ...e, start: e.start_time, end: e.end_time }));
+          setEvents(next);
+          pushToHistory(next);
+          setActiveEventId(next[0]?.id ?? null);
+          handleLint(next);
         }}
       />
 
@@ -3490,27 +3281,33 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
       {showDiffModal && (
         <SubtitleDiffModal
           isOpen={showDiffModal}
-          onClose={() => setShowDiffModal(false)}
           originalEvents={originalEvents}
           fixedEvents={events}
-          onAccept={() => setShowDiffModal(false)}
-          onReject={() => {
-            setEvents(originalEvents);
+          onAcceptAll={() => { diffDecisionRef.current = 'accepted'; }}
+          onAcceptSelective={(ids) => {
+            diffDecisionRef.current = 'accepted';
+            const chosen = new Set(ids);
+            const merged = originalEvents.map((orig, i) => {
+              const fixed = events[i];
+              return fixed && chosen.has(fixed.id ?? fixed.event_id ?? i + 1) ? fixed : orig;
+            });
+            setEvents(merged);
+            pushToHistory(merged);
+            handleLint(merged);
+          }}
+          onClose={() => {
+            // Closing without accepting (Cancel, X, Esc) restores the subtitles from before the auto-fix
+            if (diffDecisionRef.current !== 'accepted') {
+              setEvents(originalEvents);
+              pushToHistory(originalEvents);
+              handleLint(originalEvents);
+            }
+            diffDecisionRef.current = null;
             setShowDiffModal(false);
           }}
         />
       )}
 
-      {/* ── Custom Timeline Time Resume Modal ── */}
-      <CustomTimeResumeModal
-        isOpen={showCustomTimeModal}
-        onClose={() => setShowCustomTimeModal(false)}
-        targetTime={customStartTime}
-        playheadTime={currentTime}
-        videoDuration={videoDuration}
-        events={events}
-        onStartGeneration={handleStartGenerationFromCustomTime}
-      />
 
       {/* ── Custom Studio-Themed Reload Confirmation Modal ── */}
       <ReloadConfirmModal

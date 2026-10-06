@@ -67,6 +67,15 @@ def _load_and_resample_audio(
     if not os.path.exists(audio_path):
         return None, 0
 
+    # If passed a video container, look for pre-extracted WAV or extracted audio
+    ext = Path(audio_path).suffix.lower()
+    if ext in ['.mp4', '.mkv', '.mov', '.avi', '.webm', '.m4v', '.wmv', '.flv']:
+        wav_cand = Path(audio_path).with_suffix(".wav")
+        if wav_cand.exists():
+            audio_path = str(wav_cand)
+        else:
+            return None, 0
+
     try:
         info = sf.info(audio_path)
         sr = info.samplerate

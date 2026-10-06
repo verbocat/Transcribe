@@ -134,19 +134,19 @@ export default function SrtPreviewModal({ isOpen, onClose, segments, filename })
         if (e.target === e.currentTarget) handleDismiss();
       }}
     >
-      <div className={`bg-[#14151a] border border-[#262734] rounded-2xl w-full max-w-3xl p-5 shadow-2xl flex flex-col max-h-[90vh] text-slate-200 ${
+      <div className={`bg-[var(--kt-s1)] border border-[var(--kt-s4)] rounded-2xl w-full max-w-3xl p-5 shadow-2xl flex flex-col max-h-[90vh] text-slate-200 ${
         isClosing ? 'animate-mac-squish-exit' : 'animate-mac-squish'
       }`}>
         {/* Header */}
-        <div className="flex items-center justify-between pb-3 border-b border-[#262734]">
+        <div className="flex items-center justify-between pb-3 border-b border-[var(--kt-s4)]">
           <div className="flex items-center gap-2.5">
-            <div className="p-2 bg-[#1c1d25] text-[#00e5be] border border-[#262734] rounded-xl shadow-xs">
+            <div className="p-2 bg-[var(--kt-s3)] text-[var(--kt-accent)] border border-[var(--kt-s4)] rounded-xl shadow-xs">
               <Film className="w-5 h-5" />
             </div>
             <div>
               <div className="flex items-center gap-2">
                 <h2 className="text-base font-bold text-white tracking-tight">SRT Live Subtitle Preview</h2>
-                <span className="text-[11px] bg-[#1c1d25] text-[#00e5be] px-2 py-0.5 rounded-full font-mono font-bold border border-[#262734]">
+                <span className="text-[11px] bg-[var(--kt-s3)] text-[var(--kt-accent)] px-2 py-0.5 rounded-full font-mono font-bold border border-[var(--kt-s4)]">
                   {(segments && segments.length) || 0} subtitles
                 </span>
               </div>
@@ -157,12 +157,12 @@ export default function SrtPreviewModal({ isOpen, onClose, segments, filename })
           </div>
 
           <div className="flex items-center gap-2">
-            <div className="flex items-center bg-[#0e0f12] p-0.5 rounded-lg border border-[#262734] text-xs font-semibold">
+            <div className="flex items-center bg-[var(--kt-s0)] p-0.5 rounded-lg border border-[var(--kt-s4)] text-xs font-semibold">
               <button
                 onClick={() => setActiveTab('formatted')}
                 className={`px-2.5 py-1 rounded-md transition-all cursor-pointer ${
                   activeTab === 'formatted'
-                    ? 'bg-[#22232c] text-[#00e5be] font-bold shadow-xs'
+                    ? 'bg-[var(--kt-s3)] text-[var(--kt-accent)] font-bold shadow-xs'
                     : 'text-slate-400 hover:text-slate-200'
                 }`}
               >
@@ -172,7 +172,7 @@ export default function SrtPreviewModal({ isOpen, onClose, segments, filename })
                 onClick={() => setActiveTab('raw')}
                 className={`px-2.5 py-1 rounded-md transition-all cursor-pointer ${
                   activeTab === 'raw'
-                    ? 'bg-[#22232c] text-[#00e5be] font-bold shadow-xs'
+                    ? 'bg-[var(--kt-s3)] text-[var(--kt-accent)] font-bold shadow-xs'
                     : 'text-slate-400 hover:text-slate-200'
                 }`}
               >
@@ -182,16 +182,16 @@ export default function SrtPreviewModal({ isOpen, onClose, segments, filename })
 
             <button
               onClick={handleCopy}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-[#181920] hover:bg-[#22232c] text-slate-300 hover:text-white border border-[#262734] rounded-xl text-xs font-semibold transition-colors cursor-pointer"
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-[var(--kt-s2)] hover:bg-[var(--kt-s3)] text-slate-300 hover:text-white border border-[var(--kt-s4)] rounded-xl text-xs font-semibold transition-colors cursor-pointer"
               title="Copy all SRT content to clipboard"
             >
-              {copied ? <Check className="w-3.5 h-3.5 text-[#00e5be]" /> : <Copy className="w-3.5 h-3.5 text-slate-400" />}
+              {copied ? <Check className="w-3.5 h-3.5 text-[var(--kt-accent)]" /> : <Copy className="w-3.5 h-3.5 text-slate-400" />}
               <span>{copied ? 'Copied!' : 'Copy'}</span>
             </button>
 
             <button
               onClick={handleDismiss}
-              className="p-1.5 text-slate-400 hover:text-white rounded-xl bg-[#181920] hover:bg-[#22232c] border border-[#262734] transition-colors cursor-pointer"
+              className="p-1.5 text-slate-400 hover:text-white rounded-xl bg-[var(--kt-s2)] hover:bg-[var(--kt-s3)] border border-[var(--kt-s4)] transition-colors cursor-pointer"
             >
               <X className="w-4 h-4" />
             </button>
@@ -231,7 +231,7 @@ export default function SrtPreviewModal({ isOpen, onClose, segments, filename })
               readOnly
               value={srtLines}
               rows={18}
-              className="w-full bg-[#0e0f12] text-[#00e5be] font-mono text-xs p-4 rounded-xl border border-[#262734] focus:outline-none resize-none leading-relaxed select-all"
+              className="w-full bg-[var(--kt-s0)] text-[var(--kt-accent)] font-mono text-xs p-4 rounded-xl border border-[var(--kt-s4)] focus:outline-none resize-none leading-relaxed select-all"
             />
           ) : (
             lineItems.map((item) => (
@@ -242,15 +242,15 @@ export default function SrtPreviewModal({ isOpen, onClose, segments, filename })
                     ? 'bg-rose-950/30 border-rose-500/40 ring-1 ring-rose-500/20'
                     : item.isGap
                     ? 'bg-amber-950/30 border-amber-500/40'
-                    : 'bg-[#181920] border-[#262734] hover:border-slate-600'
+                    : 'bg-[var(--kt-s2)] border-[var(--kt-s4)] hover:border-slate-600'
                 }`}
               >
                 <div className="flex items-center justify-between gap-2 mb-1.5">
                   <div className="flex items-center gap-2">
-                    <span className="font-mono font-bold text-xs px-2 py-0.5 rounded bg-[#0e0f12] border border-[#262734] text-slate-300">
+                    <span className="font-mono font-bold text-xs px-2 py-0.5 rounded bg-[var(--kt-s0)] border border-[var(--kt-s4)] text-slate-300">
                       #{item.i}
                     </span>
-                    <span className="font-mono text-xs font-semibold text-[#00e5be] bg-[#0e0f12] px-2 py-0.5 rounded border border-[#262734]">
+                    <span className="font-mono text-xs font-semibold text-[var(--kt-accent)] bg-[var(--kt-s0)] px-2 py-0.5 rounded border border-[var(--kt-s4)]">
                       {item.s} ➔ {item.e}
                     </span>
                   </div>
@@ -270,7 +270,7 @@ export default function SrtPreviewModal({ isOpen, onClose, segments, filename })
                       className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded ${
                         item.hasLongLine
                           ? 'bg-rose-950/60 text-rose-300 border border-rose-500/40'
-                          : 'bg-[#0e0f12] text-slate-400 border border-[#262734]'
+                          : 'bg-[var(--kt-s0)] text-slate-400 border border-[var(--kt-s4)]'
                       }`}
                       title={item.hasLongLine ? 'Subtitles > 42 chars per line may wrap poorly' : 'Character count'}
                     >
@@ -279,7 +279,7 @@ export default function SrtPreviewModal({ isOpen, onClose, segments, filename })
                   </div>
                 </div>
 
-                <div className="mt-1 text-xs font-medium text-slate-200 bg-[#14151a] p-2.5 rounded-lg border border-[#262734] leading-relaxed">
+                <div className="mt-1 text-xs font-medium text-slate-200 bg-[var(--kt-s1)] p-2.5 rounded-lg border border-[var(--kt-s4)] leading-relaxed">
                   {item.text || <span className="text-slate-500 italic font-normal">(Empty transcript)</span>}
                 </div>
               </div>
@@ -288,20 +288,20 @@ export default function SrtPreviewModal({ isOpen, onClose, segments, filename })
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-between pt-3 mt-3 border-t border-[#262734] text-xs">
+        <div className="flex items-center justify-between pt-3 mt-3 border-t border-[var(--kt-s4)] text-xs">
           <span className="text-slate-400">
-            Standard format: <code className="font-mono bg-[#0e0f12] px-1.5 py-0.5 rounded border border-[#262734] text-slate-300">00:00:00,000 --&gt; 00:00:00,000</code>
+            Standard format: <code className="font-mono bg-[var(--kt-s0)] px-1.5 py-0.5 rounded border border-[var(--kt-s4)] text-slate-300">00:00:00,000 --&gt; 00:00:00,000</code>
           </span>
           <div className="flex items-center gap-2">
             <button
               onClick={handleDismiss}
-              className="px-3.5 py-1.5 bg-[#181920] hover:bg-[#22232c] text-slate-300 hover:text-white rounded-xl font-semibold border border-[#262734] transition-colors cursor-pointer"
+              className="px-3.5 py-1.5 bg-[var(--kt-s2)] hover:bg-[var(--kt-s3)] text-slate-300 hover:text-white rounded-xl font-semibold border border-[var(--kt-s4)] transition-colors cursor-pointer"
             >
               Close
             </button>
             <button
               onClick={handleDownload}
-              className="px-4 py-1.5 bg-[#00e5be] hover:bg-[#00c8a5] text-black rounded-xl font-bold transition-all shadow-[0_0_15px_rgba(0,229,190,0.2)] cursor-pointer"
+              className="px-4 py-1.5 bg-[var(--kt-accent)] hover:bg-[var(--kt-accent)] text-black rounded-xl font-bold transition-all shadow-[0_0_15px_rgba(var(--kt-accent-rgb),0.2)] cursor-pointer"
             >
               Download .SRT File
             </button>

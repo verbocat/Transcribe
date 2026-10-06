@@ -5,7 +5,11 @@ from dotenv import load_dotenv
 # Load .env from backend directory or root directory
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# Ensure bundled ffmpeg from imageio_ffmpeg is on PATH for whisper, pydub, and audio decoders
+# Ensure local bin and bundled ffmpeg from imageio_ffmpeg are on PATH
+local_bin = BASE_DIR / "bin"
+if local_bin.exists():
+    os.environ["PATH"] = str(local_bin) + os.pathsep + os.environ.get("PATH", "")
+
 try:
     import imageio_ffmpeg
     ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
@@ -16,19 +20,20 @@ try:
 except Exception:
     pass
 load_dotenv(BASE_DIR / ".env")
-if not os.getenv("GEMINI_API_KEY"):
+if not os.getenv("ELEVENLABS_API_KEY") or not os.getenv("GEMINI_API_KEY"):
     load_dotenv(BASE_DIR.parent / ".env", override=True)
 else:
     load_dotenv(BASE_DIR.parent / ".env")
 
+# ElevenLabs Scribe v2 Configuration
+ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "")
+ELEVENLABS_MODEL_ID = os.getenv("ELEVENLABS_MODEL_ID", "scribe_v2")
+
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
-# "base" is the correct default for this pipeline. Whisper is used ONLY for
-# acoustic word timestamps (not full transcription). base gives tighter
-# word-level timestamps, lower hallucination rate under greedy decode, and
-# processes all 30s audio chunks without memory pressure on CPU.
-# On cloud (Render), whisper_aligner.py overrides this to "tiny" automatically.
-WHISPER_MODEL = os.getenv("WHISPER_MODEL", "base")
+# Transcription runs fully offline (local models + CMU phonetics) unless this is switched on.
+# When on, Gemini adds extra gender votes and handles words the offline phonetics do not know.
+GEMINI_ASSIST = os.getenv("GEMINI_ASSIST", "false").strip().lower() in ("1", "true", "yes", "on")
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 DEFAULT_LANGUAGE = os.getenv("DEFAULT_LANGUAGE", "English")
 DEFAULT_SCRIPT = os.getenv("DEFAULT_SCRIPT", "Latin")
@@ -44,3 +49,8 @@ EXPORTS_DIR = BASE_DIR / "exports"
 
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
+
+# Centroid translation + QC API (server-to-server; the key never reaches the browser)
+CENTROID_API_URL = os.getenv("CENTROID_API_URL", "").rstrip("/")
+CENTROID_API_KEY = os.getenv("CENTROID_API_KEY", "")
+CENTROID_TIMEOUT_SEC = float(os.getenv("CENTROID_TIMEOUT_SEC", "600"))

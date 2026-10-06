@@ -103,8 +103,13 @@ export function AuthProvider({ children }) {
       } catch (err) {
         console.warn('Session verification note:', err);
         if (isMounted) {
-          const isExpired = (err.message || '').toLowerCase().includes('expired');
-          logout(isExpired ? 'Your session has expired after 4 hours of inactivity. Please log in again.' : '');
+          // Only invalidate local session if the backend explicitly tells us the token is invalid/unauthorized
+          if (err.status === 401 || err.status === 403) {
+            logout('Your session has expired. Please log in again.');
+          } else {
+            // Transient network error, 404 due to temporarily wrong URL, or server restarting: keep existing session
+            console.warn('Backend verification skipped due to transient or network issue:', err.message);
+          }
         }
       } finally {
         if (isMounted) {
@@ -199,6 +204,31 @@ export function AuthProvider({ children }) {
       logout();
     }
   }, [token, logout]);
+
+  // Synchronize authentication state across multiple browser tabs/windows
+  useEffect(() => {
+    const handleStorageChange = (e) => {
+      if (e.key === TOKEN_KEY) {
+        const storedToken = localStorage.getItem(TOKEN_KEY);
+        setToken(storedToken);
+      }
+      if (e.key === USER_KEY) {
+        const storedUser = localStorage.getItem(USER_KEY);
+        if (storedUser) {
+          try {
+            setUser(JSON.parse(storedUser));
+          } catch {
+            setUser(null);
+          }
+        } else {
+          setUser(null);
+        }
+      }
+    };
+
+    window.addEventListener('storage', handleStorageChange);
+    return () => window.removeEventListener('storage', handleStorageChange);
+  }, []);
 
   const login = (newToken, userData) => {
     setToken(newToken);
