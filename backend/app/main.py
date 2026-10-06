@@ -315,19 +315,35 @@ app.add_middleware(
 )
 
 
+_CORS_ORIGIN_RE = re.compile(
+    os.getenv(
+        "ALLOWED_ORIGIN_REGEX",
+        r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$|^https://([a-z0-9-]+\.)*verbolabs\.com$",
+    )
+)
+
+
+def _cors_headers(request) -> dict:
+    """CORS headers for responses built outside CORSMiddleware; only for origins on the allow-list."""
+    origin = request.headers.get("origin")
+    if not origin or not (origin in ALLOWED_ORIGINS or _CORS_ORIGIN_RE.match(origin)):
+        return {}
+    return {
+        "Access-Control-Allow-Origin": origin,
+        "Access-Control-Allow-Credentials": "true",
+        "Access-Control-Allow-Methods": "*",
+        "Access-Control-Allow-Headers": "*",
+        "Vary": "Origin",
+    }
+
+
 @app.exception_handler(HTTPException)
 async def custom_http_exception_handler(request: Request, exc: HTTPException):
     """Ensure HTTP exceptions (e.g. 429, 404, 413) always include CORS headers."""
-    origin = request.headers.get("origin") or "*"
     return JSONResponse(
         status_code=exc.status_code,
         content={"detail": exc.detail},
-        headers={
-            "Access-Control-Allow-Origin": origin,
-            "Access-Control-Allow-Credentials": "true",
-            "Access-Control-Allow-Methods": "*",
-            "Access-Control-Allow-Headers": "*",
-        }
+        headers=_cors_headers(request),
     )
 
 
@@ -338,16 +354,10 @@ async def custom_general_exception_handler(request: Request, exc: Exception):
     tb = traceback.format_exc()
     print("=== UNHANDLED 500 EXCEPTION ===", flush=True)
     print(tb, flush=True)
-    origin = request.headers.get("origin") or "*"
     return JSONResponse(
         status_code=500,
         content={"detail": f"Internal server error: {str(exc)}", "traceback": tb},
-        headers={
-            "Access-Control-Allow-Origin": origin,
-            "Access-Control-Allow-Credentials": "true",
-            "Access-Control-Allow-Methods": "*",
-            "Access-Control-Allow-Headers": "*",
-        }
+        headers=_cors_headers(request),
     )
 
 
@@ -355,10 +365,9 @@ async def custom_general_exception_handler(request: Request, exc: Exception):
 async def add_security_headers(request, call_next):
     """REL-07: Add modern security response headers without breaking CORS."""
     response = await call_next(request)
-    origin = request.headers.get("origin")
-    if origin and "Access-Control-Allow-Origin" not in response.headers:
-        response.headers["Access-Control-Allow-Origin"] = origin
-        response.headers["Access-Control-Allow-Credentials"] = "true"
+    if "Access-Control-Allow-Origin" not in response.headers:
+        for key, value in _cors_headers(request).items():
+            response.headers[key] = value
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["Permissions-Policy"] = "camera=(), microphone=(self), geolocation=()"
