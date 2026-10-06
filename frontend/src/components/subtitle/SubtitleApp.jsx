@@ -27,6 +27,8 @@ import StudioStage from './layout/StudioStage';
 import { useStudioLayout, BUILTIN_PRESETS } from './layout/layoutModel';
 import StudioMenuBar from './StudioMenuBar';
 import CommandPalette from './CommandPalette';
+import LanguageTracks from './LanguageTracks';
+import { langName } from './languages';
 import { ShiftTimingsDialog, GoToDialog, FindReplaceDialog } from './ToolDialogs';
 import { Button, IconButton, Kbd } from './ui/controls';
 import { useStudioPrefs, formatTimecode, loadPrefs } from './prefs';
@@ -481,6 +483,10 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
   const [showSpeakerModal, setShowSpeakerModal] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
   const [showCentroidModal, setShowCentroidModal] = useState(false);
+  // Language tracks: after a translation each language is its own editable subtitle track
+  const [tracks, setTracks] = useState({});          // { [languageCode]: events[] } (the active track is saved on switch)
+  const [activeTrack, setActiveTrack] = useState(null);
+  const [sourceTrack, setSourceTrack] = useState(null);
   const [centroidTab, setCentroidTab] = useState('translate');
   const [centroidNonce, setCentroidNonce] = useState(0);
   const [centroidState, setCentroidState] = useState({ hasResults: false, qcIssues: null });
@@ -998,6 +1004,85 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
     }
   }, [shotChanges, frameRate, contentType, cplLimit, cpsLimit, maxLines, minDuration, maxDuration, sanitizeEvents]);
 
+  // ── Language tracks (translations as switchable subtitle sets) ──
+  const eventsNowRef = useRef([]);
+  eventsNowRef.current = events;
+  const tracksRef = useRef({});
+  tracksRef.current = tracks;
+  const activeTrackRef = useRef(null);
+  activeTrackRef.current = activeTrack;
+
+  const resetTracks = useCallback(() => {
+    setTracks({});
+    setActiveTrack(null);
+    setSourceTrack(null);
+  }, []);
+
+  /** Load a track into the list/timeline/video and give it a fresh undo history. */
+  const loadTrackEvents = useCallback((next) => {
+    setEvents(next);
+    setHistory([next]);
+    setHistoryIndex(0);
+    setActiveEventId(next[0]?.id ?? null);
+    if (next.length) handleLint(next);
+  }, [handleLint]);
+
+  /** Centroid finished: register the original and every translation as tracks (nothing on screen changes). */
+  const handleTranslated = useCallback(({ sourceLang, built }) => {
+    const current = tracksRef.current;
+    const active = activeTrackRef.current;
+    const next = { ...current };
+    if (!active) {
+      next[sourceLang] = eventsNowRef.current; // what is on screen now is the original-language track
+      setActiveTrack(sourceLang);
+      setSourceTrack(sourceLang);
+    } else {
+      next[active] = eventsNowRef.current;      // keep edits made to the track being viewed
+    }
+    Object.entries(built).forEach(([code, evs]) => {
+      if (code !== activeTrackRef.current) next[code] = evs;
+    });
+    setTracks(next);
+  }, []);
+
+  /** Switch the editor to another language. Edits to the language you leave are kept. */
+  const switchTrack = useCallback((code) => {
+    const active = activeTrackRef.current;
+    if (!code || code === active) return;
+    const saved = { ...tracksRef.current };
+    if (active) saved[active] = eventsNowRef.current;
+    const target = saved[code];
+    if (!target) return;
+    setTracks(saved);
+    setActiveTrack(code);
+    loadTrackEvents(target);
+  }, [loadTrackEvents]);
+
+  /** "Show in editor" from the translate drawer: refresh that language from Centroid's result and switch to it. */
+  const showTranslatedTrack = useCallback(({ code, sourceLang, events: evs }) => {
+    const active = activeTrackRef.current;
+    const saved = { ...tracksRef.current };
+    if (!active) {
+      saved[sourceLang] = eventsNowRef.current;
+      setSourceTrack(sourceLang);
+    } else {
+      saved[active] = eventsNowRef.current;
+    }
+    const existing = saved[code];
+    const edited = existing && JSON.stringify(existing.map((e) => e.text)) !== JSON.stringify(evs.map((e) => e.text));
+    if (edited && !window.confirm(`Replace your ${langName(code)} edits with Centroid's latest ${langName(code)} translation?`)) {
+      // keep the user's version and just switch to it
+      setTracks(saved);
+      setActiveTrack(code);
+      loadTrackEvents(existing);
+      return;
+    }
+    saved[code] = evs;
+    setTracks(saved);
+    setActiveTrack(code);
+    loadTrackEvents(evs);
+  }, [loadTrackEvents]);
+
   const lintDebounceRef = useRef(null);
   const debouncedLint = useCallback((updatedEvents) => {
     if (lintDebounceRef.current) clearTimeout(lintDebounceRef.current);
@@ -1391,6 +1476,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
 
   // Media File (Video or Audio) Upload Handler
   const handleFileChange = (e) => {
+    resetTracks();
     const file = e.target.files?.[0];
     if (file) {
       console.log(
@@ -1498,6 +1584,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
 
   // Discard previous work for currently selected media: purges local drafts and deletes backend audio/peaks/chunks
   const handleDiscardPreviousWork = useCallback(async (customFileName = null, customVideoId = null) => {
+    resetTracks();
     const fileNameToDiscard = customFileName || selectedFile?.name;
     const videoIdToDiscard = customVideoId || currentVideoId;
 
@@ -1851,6 +1938,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
 
   // ── Non-Blocking Progressive Batch-Wise Auto-Generate (Streaming SSE) ──
   const handleGenerate = async () => {
+    resetTracks();
     if (!selectedFile) {
       fileInputRef.current?.click();
       return;
@@ -2385,6 +2473,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
 
   // Import SRT / VTT File
   const handleImportSrt = (e) => {
+    resetTracks();
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -2944,6 +3033,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
               }
               list={
                 <div className="h-full overflow-hidden flex flex-col bg-[var(--ss-panel)]">
+              <LanguageTracks tracks={tracks} active={activeTrack} source={sourceTrack} onSwitch={switchTrack} />
               <SubtitleTablePanel
                 events={events}
                 activeEventId={activeEventId}
@@ -3261,13 +3351,10 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
         maxLines={maxLines}
         fileName={selectedFile?.name || 'subtitles'}
         onUpdateEvent={handleUpdateEvent}
-        onLoadEvents={(loaded) => {
-          const next = loaded.map(e => ({ ...e, start: e.start_time, end: e.end_time }));
-          setEvents(next);
-          pushToHistory(next);
-          setActiveEventId(next[0]?.id ?? null);
-          handleLint(next);
-        }}
+        activeLang={activeTrack}
+        trackLangs={Object.keys(tracks)}
+        onTranslated={handleTranslated}
+        onShowTrack={showTranslatedTrack}
       />
 
       {/* ── Export Deliverables Modal ── */}
@@ -3277,7 +3364,9 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
           onClose={() => setShowExportModal(false)}
           events={events}
           complianceScore={complianceScore}
-          filename={selectedFile?.name || 'subtitles'}
+          filename={(activeTrack && sourceTrack && activeTrack !== sourceTrack)
+            ? (selectedFile?.name || 'subtitles').replace(/(\.[^.]+)?$/, `.${activeTrack}$1`)
+            : (selectedFile?.name || 'subtitles')}
           API_BASE={API_BASE}
         />
       )}

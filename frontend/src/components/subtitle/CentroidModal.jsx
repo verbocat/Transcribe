@@ -1,25 +1,15 @@
 import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import {
-  X, Languages, ShieldCheck, Download, Upload, Check, AlertTriangle, Wand2, Loader2, ChevronDown,
-  ChevronRight, Package, FileInput, ArrowLeftRight, BadgeCheck, Eye, EyeOff, Crosshair, Plus,
+  X, Languages, ShieldCheck, Download, Check, AlertTriangle, Wand2, Loader2, ChevronDown,
+  ChevronRight, Package, FileInput, ArrowLeftRight, BadgeCheck, Eye, EyeOff, Crosshair, Plus, Pencil,
 } from 'lucide-react';
 import { API_BASE } from '../../config';
 import { parseSrtText, cuesToSrt, downloadBlob, buildZip } from '../../utils/centroidSrt';
 import { Button, IconButton, Segmented, Select, TextInput, Switch, Badge } from './ui/controls';
+import { COMMON_LANGS, OTHER_LANGS, ALL_LANGS, langName } from './languages';
 
-const COMMON = [
-  ['en', 'English'], ['hi', 'Hindi'], ['bn', 'Bengali'], ['ta', 'Tamil'], ['te', 'Telugu'], ['mr', 'Marathi'],
-  ['gu', 'Gujarati'], ['kn', 'Kannada'], ['ml', 'Malayalam'], ['pa', 'Punjabi'], ['ur', 'Urdu'],
-  ['es', 'Spanish'], ['fr', 'French'], ['de', 'German'], ['ar', 'Arabic'],
-];
-const OTHERS = [
-  ['ne', 'Nepali'], ['it', 'Italian'], ['pt', 'Portuguese'], ['pt-br', 'Portuguese (Brazil)'], ['ru', 'Russian'],
-  ['tr', 'Turkish'], ['fa', 'Persian'], ['he', 'Hebrew'], ['zh', 'Chinese (Simplified)'], ['zht', 'Chinese (Traditional)'],
-  ['ja', 'Japanese'], ['ko', 'Korean'], ['th', 'Thai'], ['vi', 'Vietnamese'], ['id', 'Indonesian'], ['ms', 'Malay'],
-  ['nl', 'Dutch'], ['pl', 'Polish'], ['sv', 'Swedish'], ['uk', 'Ukrainian'], ['el', 'Greek'],
-];
-const ALL_LANGS = [...COMMON, ...OTHERS];
-const langName = (code) => (ALL_LANGS.find(([c]) => c === code) || [code, code])[1];
+const COMMON = COMMON_LANGS;
+const OTHERS = OTHER_LANGS;
 const langOptions = (exclude) => [
   { group: 'Common', items: COMMON.filter(([c]) => c !== exclude) },
   { group: 'All languages', items: OTHERS.filter(([c]) => c !== exclude) },
@@ -121,7 +111,8 @@ const Notice = ({ tone = 'danger', children }) => {
 export default function CentroidModal({
   isOpen, onClose, events = [], glossaryTerms = [], cplLimit = 42, maxLines = 2, cpsLimit = 20,
   fileName = 'subtitles', defaultSourceLang = 'en', startTab = 'translate', startTabNonce = 0,
-  onLoadEvents, onUpdateEvent, onJumpToEvent, onStateChange,
+  activeLang = null, trackLangs = [],
+  onTranslated, onShowTrack, onUpdateEvent, onJumpToEvent, onStateChange,
 }) {
   const [tab, setTab] = useState('translate');
   const [status, setStatus] = useState(null);
@@ -130,6 +121,7 @@ export default function CentroidModal({
   const [sourceMode, setSourceMode] = useState('editor'); // 'editor' | 'upload'
   const [uploaded, setUploaded] = useState({ name: '', cues: [] });
   const [snapshot, setSnapshot] = useState([]); // source cues used for the last run (QC reference)
+  const [sourceBase, setSourceBase] = useState([]); // the full source subtitle objects, used to build each language's track
   const [sourceLang, setSourceLang] = useState(() => readStore('centroid_src_v2', null) || toCentroidLang(defaultSourceLang));
   const [targetLang, setTargetLang] = useState(() => readStore('centroid_tgt_v2', null) || 'hi');
   const [extraTargets, setExtraTargets] = useState([]);
@@ -163,6 +155,11 @@ export default function CentroidModal({
   useEffect(() => { setLimits((l) => ({ ...l, max_cpl: cplLimit, max_lines: maxLines, max_cps: cpsLimit })); }, [cplLimit, maxLines, cpsLimit]);
   useEffect(() => { writeStore('centroid_src_v2', sourceLang); writeStore('centroid_tgt_v2', targetLang); }, [sourceLang, targetLang]);
   useEffect(() => { writeStore('centroid_autoqc_v2', autoQc); }, [autoQc]);
+
+  // Translating from what you are looking at: when you switch language tracks, that language becomes the source
+  useEffect(() => {
+    if (activeLang && ALL_LANGS.some(([c]) => c === activeLang)) setSourceLang(activeLang);
+  }, [activeLang]);
 
   // The rail asks for a specific tab ("Translate" vs "Centroid QC")
   useEffect(() => { if (isOpen) setTab(startTab); }, [startTab, startTabNonce, isOpen]);
@@ -266,6 +263,7 @@ export default function CentroidModal({
       const snap = sourceCues.map((c, i) => ({ id: i + 1, editorId: c.id ?? c.event_id, start_time: c.start_time ?? c.start, end_time: c.end_time ?? c.end, text: c.text }));
       const res = data.results || {};
       setSnapshot(snap);
+      setSourceBase(sourceCues);
       setResults(res);
       setFailedLangs(data.errors || {});
       setQc(null);
@@ -273,6 +271,10 @@ export default function CentroidModal({
       const first = Object.keys(res)[0] || '';
       setQcTarget(first);
       setPreviewLang(first || null);
+      // Every translated language becomes an editable track (nothing in the editor changes until you pick one)
+      const built = {};
+      Object.keys(res).forEach((code) => { built[code] = eventsFromResult(res[code], sourceCues); });
+      onTranslated?.({ sourceLang, built });
       if (first && autoQc) runQcFor(first, res, snap);
     } catch (e) {
       setError(e.message);
@@ -290,14 +292,36 @@ export default function CentroidModal({
     const base = fileName.replace(/\.[^.]+$/, '');
     downloadBlob(buildZip(resultLangs.map((c) => ({ name: `${base}.${c}.srt`, content: results[c].srt }))), `${base}_translations.zip`);
   };
+  /** Turn a translation result into editor subtitles, keeping speakers etc. from the source subtitle at the same position. */
+  const eventsFromResult = (r, base) => r.cues.map((c, i) => {
+    const src = base[i] || {};
+    const text = c.target || c.source || '';
+    const start = c.start ?? src.start_time ?? src.start ?? 0;
+    const end = c.end ?? src.end_time ?? src.end ?? start + 1;
+    const id = src.id ?? src.event_id ?? i + 1;
+    return {
+      ...src,
+      id,
+      event_id: id,
+      start_time: start,
+      end_time: end,
+      start,
+      end,
+      duration: Math.round((end - start) * 1000) / 1000,
+      text,
+      lines: text.split('\n'),
+      qc_errors: [],
+      errors: [],
+      is_valid: true,
+      autoFocusText: false,
+    };
+  });
+
+  /** Load a language into the editor, list, timeline and video overlay as its own track. */
   const openInEditor = (code) => {
     const r = results[code];
-    if (!r || !onLoadEvents) return;
-    if (events.length && !window.confirm(`Replace the ${events.length} subtitles in the editor with the ${langName(code)} translation? You can undo this.`)) return;
-    onLoadEvents(r.cues.map((c, i) => ({
-      id: i + 1, event_id: i + 1, start_time: c.start, end_time: c.end, text: c.target || c.source,
-      speaker: 'Speaker 1', qc_errors: [],
-    })));
+    if (!r || !onShowTrack) return;
+    onShowTrack({ code, sourceLang, events: eventsFromResult(r, sourceBase) });
   };
 
   // ---- QC actions ----
@@ -519,7 +543,7 @@ export default function CentroidModal({
                       <div className="mt-3 flex flex-wrap gap-2">
                         <Button variant="primary" icon={BadgeCheck} onClick={() => runQcFor(code, results, snapshot)} disabled={qcBusy || notReady}>Run Centroid QC</Button>
                         <Button icon={Download} onClick={() => downloadLang(code)}>Download SRT</Button>
-                        <Button icon={Upload} onClick={() => openInEditor(code)}>Open in editor</Button>
+                        <Button icon={Pencil} onClick={() => openInEditor(code)} disabled={activeLang === code}>{activeLang === code ? 'Showing in editor' : trackLangs.includes(code) ? 'Show in editor' : 'Edit in studio'}</Button>
                       </div>
                     </div>
                   );
@@ -609,7 +633,7 @@ export default function CentroidModal({
                 {qc.target !== 'editor' && results[qc.target] && (
                   <div className="flex gap-2 pt-1">
                     <Button icon={Download} onClick={() => downloadLang(qc.target)}>Download corrected SRT</Button>
-                    <Button icon={Upload} onClick={() => openInEditor(qc.target)}>Open in editor</Button>
+                    <Button icon={Pencil} onClick={() => openInEditor(qc.target)} disabled={activeLang === qc.target}>{activeLang === qc.target ? 'Showing in editor' : 'Show in editor'}</Button>
                   </div>
                 )}
               </>
