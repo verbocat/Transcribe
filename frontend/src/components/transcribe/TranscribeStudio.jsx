@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import './transcribe.css';
 import TopBar from './TopBar';
 import SpeakerRail from './SpeakerRail';
@@ -8,6 +8,9 @@ import EmptyState from './EmptyState';
 import AudioWaveform from '../AudioWaveform';
 import VideoPane, { createMediaBus } from './VideoPane';
 import CastModal from './CastModal';
+import QcDrawer from './QcDrawer';
+import CentroidModal from '../subtitle/CentroidModal';
+import { ALL_LANGS } from '../subtitle/languages';
 import { buildRoster } from './speakerUtils';
 import { loadCast, saveCast, findCastMember } from './castUtils';
 
@@ -21,6 +24,14 @@ export default function TranscribeStudio(p) {
   const [cast, setCast] = useState(loadCast);
   const [showCast, setShowCast] = useState(false);
   const [dismissedNotes, setDismissedNotes] = useState(null);
+  // Translate (Centroid) and QC. Subtitle Studio's Centroid panel is reused as is; it works on {id, start_time, end_time, text}.
+  const [showTranslate, setShowTranslate] = useState(false);
+  const [showQc, setShowQc] = useState(false);
+  const [qcView, setQcView] = useState('karya');
+  const [qcHost, setQcHost] = useState(null);
+  const [centroidState, setCentroidState] = useState({ hasResults: false, qcIssues: null });
+  const [tracks, setTracks] = useState({}); // language code -> translated cues
+  const [activeTrack, setActiveTrack] = useState(null);
   const roster = useMemo(() => buildRoster(p.segments), [p.segments]);
   const hasSegments = p.segments.length > 0;
   const video = p.videoUrl ? <VideoPane src={p.videoUrl} bus={mediaBus} /> : null;
@@ -42,6 +53,52 @@ export default function TranscribeStudio(p) {
   };
 
   const updateCast = (next) => { setCast(next); saveCast(next); };
+
+  const events = useMemo(() => p.segments.map((s) => ({
+    id: s.segment_id, event_id: s.segment_id, start_time: s.start_time, end_time: s.end_time,
+    start: s.start_time, end: s.end_time, text: s.transcript || '', speaker: s.speaker,
+  })), [p.segments]);
+  const sourceLangCode = useMemo(() => {
+    const name = (p.detectedLanguage || '').toLowerCase();
+    return (ALL_LANGS.find(([, n]) => n.toLowerCase() === name) || [null])[0] || 'hi';
+  }, [p.detectedLanguage]);
+  const translation = useMemo(() => (activeTrack && tracks[activeTrack]
+    ? { code: activeTrack, byId: new Map(tracks[activeTrack].map((e) => [e.id, e.text])) } : null), [activeTrack, tracks]);
+
+  // A new transcript invalidates the translations of the old one
+  useEffect(() => { setTracks({}); setActiveTrack(null); }, [p.audioUrl, p.filename]);
+
+  const openTranslate = () => { setShowTranslate((v) => !v); };
+  const openQc = (view) => { if (view) setQcView(view); setShowQc(true); };
+
+  // QC fixes: the transcript itself, or a translated track
+  const applyTextFixes = (code, edits) => {
+    const patch = (list, key) => {
+      let hit = 0;
+      const next = list.map((e) => e);
+      edits.forEach((ed) => {
+        const idKey = key === 'id' ? 'id' : 'segment_id';
+        let i = ed.id != null ? next.findIndex((e) => e[idKey] === ed.id) : -1;
+        if (i < 0) i = next.findIndex((e) => Math.abs((e.start_time ?? 0) - ed.start) < 0.05);
+        if (i < 0) return;
+        next[i] = key === 'id' ? { ...next[i], text: ed.text, lines: ed.text.split('\n') } : { ...next[i], transcript: ed.text };
+        hit += 1;
+      });
+      return { next, hit };
+    };
+    if (code === 'editor') {
+      const { next, hit } = patch(p.segments, 'segment_id');
+      if (hit) applyToSegments(next);
+      return hit;
+    }
+    const saved = tracks[code];
+    if (!saved) return 0;
+    const { next, hit } = patch(saved, 'id');
+    if (hit) setTracks((prev) => ({ ...prev, [code]: next }));
+    return hit;
+  };
+
+  const jumpTo = (seg) => { p.setActiveSegmentId(seg.segment_id); p.onPlaySegment(seg.start_time, seg.end_time); };
 
   const notes = (p.notes || []).filter((n) => n !== dismissedNotes);
 
@@ -69,12 +126,14 @@ export default function TranscribeStudio(p) {
         onOpenNotes={p.onOpenNotes} onOpenGuidelines={p.onOpenGuidelines}
         onImportSubtitles={p.onImportSubtitles}
         user={p.user} onOpenLogoutModal={p.onOpenLogoutModal}
+        onOpenTranslate={openTranslate} translateOpen={showTranslate}
+        onOpenQc={() => (showQc ? setShowQc(false) : openQc())} qcOpen={showQc} centroidQcIssues={centroidState.qcIssues}
       />
 
       {p.isTranscribing && (
         <ProgressStrip
           stage={p.progressStage} detail={p.progressDetail} percent={p.progressPercent}
-          stepIndex={p.progressStepIndex} elapsedSeconds={p.elapsedSeconds}
+          estimated={p.progressEstimated} meta={p.progressMeta} stepIndex={p.progressStepIndex} elapsedSeconds={p.elapsedSeconds}
         />
       )}
 
@@ -105,7 +164,15 @@ export default function TranscribeStudio(p) {
             onPlaySegment={p.onPlaySegment} onStopSegment={p.onStopSegment}
             onLint={p.onLint} onSplit={p.onSplit} onMerge={p.onMerge} onAdd={p.onAdd}
             onOpenSrtPreview={p.onOpenSrtPreview}
+            translation={translation} onClearTranslation={() => setActiveTrack(null)}
           />
+          {showQc && (
+            <QcDrawer
+              view={qcView} onView={setQcView} centroidIssues={centroidState.qcIssues} onClose={() => setShowQc(false)}
+              setHost={setQcHost} segments={p.segments} score={p.complianceScore} errors={p.totalErrors} warnings={p.totalWarnings}
+              onJump={jumpTo}
+            />
+          )}
         </div>
       ) : (
         !p.isTranscribing && (
@@ -136,6 +203,26 @@ export default function TranscribeStudio(p) {
           />
         </footer>
       )}
+
+      {/* Kept mounted so translations and QC results survive closing the panels */}
+      <CentroidModal
+        isOpen={showTranslate}
+        onClose={() => setShowTranslate(false)}
+        defaultSourceLang={sourceLangCode}
+        qcHost={showQc && qcView === 'centroid' ? qcHost : null}
+        onOpenQc={() => openQc('centroid')}
+        onOpenTranslate={() => { setShowQc(false); setShowTranslate(true); }}
+        onStateChange={setCentroidState}
+        onJumpToEvent={(id) => { const seg = p.segments.find((s) => s.segment_id === id); if (seg) jumpTo(seg); }}
+        events={events}
+        glossaryTerms={[]}
+        fileName={p.filename || 'transcript'}
+        onApplyTextFixes={applyTextFixes}
+        activeLang={activeTrack}
+        trackLangs={Object.keys(tracks)}
+        onTranslated={({ built }) => { setTracks(built); setActiveTrack(null); }}
+        onShowTrack={({ code, events: cues }) => { setTracks((prev) => ({ ...prev, [code]: cues })); setActiveTrack(code); }}
+      />
 
       <CastModal isOpen={showCast} cast={cast} onSave={updateCast} onClose={() => setShowCast(false)} />
 

@@ -1,5 +1,6 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Play, Square, Scissors, Merge, Trash2, Plus, Search, AlertCircle, AlertTriangle } from 'lucide-react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Play, Square, Scissors, Merge, Trash2, Plus, Search, AlertCircle, AlertTriangle, LocateFixed } from 'lucide-react';
+import { usePlayheadSelector } from '../../utils/usePlayheadSelector';
 import { speakerColor, formatStamp } from './speakerUtils';
 
 const GENDERS = [
@@ -7,6 +8,19 @@ const GENDERS = [
   { value: 'Female', short: 'F' },
   { value: 'Unknown', short: '?' },
 ];
+
+// Segment under the playhead (half-open [start, end)); segments are in time order
+function findPlayingId(segments, t) {
+  let lo = 0, hi = segments.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    const s = segments[mid];
+    if (t < s.start_time) hi = mid - 1;
+    else if (t >= s.end_time) lo = mid + 1;
+    else return s.segment_id;
+  }
+  return null;
+}
 
 function lowConfidenceWords(seg) {
   return (seg.words || []).filter((w) => w.confidence < 0.8);
@@ -37,7 +51,7 @@ function AutoText({ value, onChange }) {
   );
 }
 
-function SegmentRow({ seg, isLast, isActive, color, speakerNames, onActivate, onPlay, onStop, onField, onSplit, onMerge, onDelete }) {
+function SegmentRow({ translated, seg, isLast, isActive, color, speakerNames, onActivate, onPlay, onStop, onField, onSplit, onMerge, onDelete }) {
   const errors = seg.qc_errors || [];
   const issue = errors.some((e) => e.severity === 'error') ? 'error' : errors.length ? 'warning' : undefined;
   const lowWords = lowConfidenceWords(seg);
@@ -118,6 +132,7 @@ function SegmentRow({ seg, isLast, isActive, color, speakerNames, onActivate, on
         <div style={{ paddingTop: 6 }}>
           <AutoText value={seg.transcript || ''} onChange={(v) => onField(seg.segment_id, 'transcript', v)} />
         </div>
+        {translated != null && <div className="ts-translation">{translated}</div>}
         {(lowWords.length > 0 || errors.length > 0) && (
           <div className="flex flex-wrap gap-1.5 mt-2.5">
             {lowWords.map((w, i) => (
@@ -165,6 +180,7 @@ export default function TranscriptList({
   segments, roster, filterSpeaker, setFilterSpeaker,
   activeSegmentId, setActiveSegmentId, setSegments,
   onPlaySegment, onStopSegment, onLint, onSplit, onMerge, onAdd, onOpenSrtPreview,
+  translation, onClearTranslation,
 }) {
   const [query, setQuery] = useState('');
   const [issuesOnly, setIssuesOnly] = useState(false);
@@ -184,12 +200,53 @@ export default function TranscriptList({
     return true;
   }), [segments, filterSpeaker, issuesOnly, minConf, query]);
 
-  // Keep the active line in view when it is chosen from the waveform
+  const [followPlayback, setFollowPlayback] = useState(true);
+  const listRef = useRef(null);
+  const clickedRef = useRef(false);
+
+  // Which line is under the playhead; re-renders only when that changes, not every frame
+  const playingId = usePlayheadSelector((t) => findPlayingId(segments, t), [segments]);
+
+  const isEditingInList = () => {
+    const el = document.activeElement;
+    const tag = el?.tagName?.toLowerCase();
+    return Boolean(el && listRef.current?.contains(el) && (tag === 'textarea' || tag === 'input'));
+  };
+
+  // Short hops glide, long jumps snap, so the list never trails behind the audio. `center` keeps the playing line
+  // in the middle with the next ones visible; a line the user just clicked is only nudged into view.
+  const scrollToId = useCallback((id, center = false) => {
+    const box = listRef.current;
+    const el = box?.querySelector(`#seg-row-${id}`);
+    if (!el) return;
+    const b = box.getBoundingClientRect();
+    const r = el.getBoundingClientRect();
+    let delta;
+    if (center) delta = (r.top + r.height / 2) - (b.top + b.height / 2);
+    else if (r.top < b.top) delta = r.top - b.top;
+    else if (r.bottom > b.bottom) delta = Math.min(r.bottom - b.bottom, r.top - b.top);
+    else return;
+    if (Math.abs(delta) < 2) return;
+    box.scrollTo({ top: box.scrollTop + delta, behavior: Math.abs(delta) < b.height * 1.5 ? 'smooth' : 'auto' });
+  }, []);
+
+  // Playback selects the line under the playhead (unless the user is typing in the list)
   useEffect(() => {
-    if (activeSegmentId == null) return;
-    const el = document.getElementById(`seg-row-${activeSegmentId}`);
-    if (el && !el.contains(document.activeElement)) el.scrollIntoView({ block: 'nearest' });
-  }, [activeSegmentId]);
+    if (!followPlayback || playingId == null || playingId === activeSegmentId || isEditingInList()) return;
+    setActiveSegmentId(playingId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playingId, followPlayback]);
+
+  // Keep the active line in view, whether it was chosen from the waveform, by playback or by a click
+  useEffect(() => {
+    const clicked = clickedRef.current;
+    clickedRef.current = false;
+    if (activeSegmentId == null || isEditingInList()) return;
+    const fromPlayback = !clicked && activeSegmentId === playingId;
+    if (fromPlayback && !followPlayback) return;
+    scrollToId(activeSegmentId, fromPlayback);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSegmentId, scrollToId]);
 
   // Alt+Up / Alt+Down step through lines and play them
   useEffect(() => {
@@ -248,6 +305,11 @@ export default function TranscriptList({
           <input type="range" min="0" max="95" step="5" value={minConf} onChange={(e) => setMinConf(Number(e.target.value))} style={{ accentColor: 'var(--ts-accent)', width: 90 }} />
           <span className="ts-mono" style={{ minWidth: 32 }}>{minConf ? `${minConf}%` : 'All'}</span>
         </label>
+        {translation && (
+          <button type="button" className="ts-chip ts-chip-accent" onClick={onClearTranslation}>
+            Showing {translation.code.toUpperCase()} translation · hide
+          </button>
+        )}
         {filterSpeaker && (
           <button type="button" className="ts-chip ts-chip-accent" onClick={() => setFilterSpeaker(null)}>
             Showing {filterSpeaker} · clear
@@ -255,13 +317,20 @@ export default function TranscriptList({
         )}
         <span className="flex-1" />
         <span style={{ color: 'var(--ts-muted)', fontSize: 12 }}>{visible.length} of {segments.length} lines</span>
+        <button
+          type="button" className={`ts-btn ts-btn-sm ${followPlayback ? 'ts-chip-accent' : ''}`} aria-pressed={followPlayback}
+          title={followPlayback ? 'Selecting and scrolling with the audio (click to stop)' : 'Select and scroll the list with the audio'}
+          onClick={() => setFollowPlayback((v) => !v)}
+        >
+          <LocateFixed size={13} /> Follow
+        </button>
         <button type="button" className="ts-btn ts-btn-sm" onClick={onOpenSrtPreview}>SRT preview</button>
         <button type="button" className="ts-btn ts-btn-sm ts-btn-primary" onClick={() => onAdd(segments.length ? segments[segments.length - 1].end_time + 0.1 : 0)}>
           <Plus size={13} /> Add line
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto">
+      <div ref={listRef} className="flex-1 overflow-y-auto">
         {visible.length === 0 ? (
           <p style={{ color: 'var(--ts-muted)', padding: 48, textAlign: 'center' }}>No lines match the current filters.</p>
         ) : (
@@ -269,11 +338,12 @@ export default function TranscriptList({
             <SegmentRow
               key={seg.segment_id}
               seg={seg}
+              translated={translation ? translation.byId.get(seg.segment_id) ?? null : null}
               isLast={seg.segment_id === segments[segments.length - 1]?.segment_id}
               isActive={seg.segment_id === activeSegmentId}
               color={colorOf[seg.speaker] || speakerColor(seg.speaker)}
               speakerNames={speakerNames}
-              onActivate={setActiveSegmentId}
+              onActivate={(id) => { clickedRef.current = true; setActiveSegmentId(id); }}
               onPlay={(s) => { setActiveSegmentId(seg.segment_id); onPlaySegment(s.start_time, s.end_time); }}
               onStop={(s) => onStopSegment(s.start_time)}
               onField={setField}

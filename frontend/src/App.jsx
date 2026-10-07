@@ -28,6 +28,7 @@ import { ThemeProvider } from './context/ThemeContext';
 import AppearanceHost from './theme/AppearanceHost';
 import AuthScreen from './auth_views/AuthScreen';
 import Lenis from 'lenis';
+import { xhrPostForm, formatBytes, formatSpeed, formatEta } from './utils/xhrUpload';
 
 export default function App() {
   return (
@@ -560,6 +561,8 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
   const [progressDetail, setProgressDetail] = useState('');
   const [progressStepIndex, setProgressStepIndex] = useState(1);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [progressEstimated, setProgressEstimated] = useState(false);
+  const [progressMeta, setProgressMeta] = useState('');
   const progressTimerRef = useRef(null);
   const elapsedTimerRef = useRef(null);
 
@@ -717,76 +720,81 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
     }
   };
 
-  const startProgressSimulation = () => {
-    setProgressPercent(5);
-    setProgressStage('1. Ingesting & Audio Waveform Inspection');
-    setProgressDetail('Reading audio headers, RMS loudness and channel properties...');
-    setProgressStepIndex(1);
-    setElapsedSeconds(0);
+  // Transcription progress. Upload bytes are measured (XMLHttpRequest). The server then runs one long request, so the
+  // wait is an estimate from the audio length and this server's own measured speed (learned from earlier runs), shown
+  // as "≈" and never reaching 100% before the result arrives.
+  // Audio length from the media's own metadata (used to estimate the server wait)
+  const probeDuration = (url) => new Promise((resolve) => {
+    if (!url) return resolve(0);
+    const a = new Audio();
+    const done = (v) => { a.src = ''; resolve(v); };
+    a.preload = 'metadata';
+    a.onloadedmetadata = () => done(Number.isFinite(a.duration) ? a.duration : 0);
+    a.onerror = () => done(0);
+    setTimeout(() => done(0), 4000);
+    a.src = url;
+  });
 
-    if (progressTimerRef.current) clearInterval(progressTimerRef.current);
-    if (elapsedTimerRef.current) clearInterval(elapsedTimerRef.current);
+  const SPEED_KEY = 'transcribe_speed_ratio'; // seconds of processing per second of audio
 
-    const startTime = Date.now();
-    elapsedTimerRef.current = setInterval(() => {
-      setElapsedSeconds(parseFloat(((Date.now() - startTime) / 1000).toFixed(1)));
-    }, 100);
-
-    progressTimerRef.current = setInterval(() => {
-      setProgressPercent((prev) => {
-        if (prev < 18) {
-          setProgressStage('1. Ingesting Audio & Header Analysis');
-          setProgressDetail('Analyzing audio acoustic envelope & format headers...');
-          setProgressStepIndex(1);
-          return prev + 3;
-        } else if (prev < 38) {
-          setProgressStage('2. Uploading Audio to ElevenLabs Scribe v2');
-          setProgressDetail('Streaming audio to ElevenLabs Scribe v2 speech-to-text engine...');
-          setProgressStepIndex(2);
-          return prev + 2.5;
-        } else if (prev < 65) {
-          setProgressStage('3. Speaker Separation & Verbatim Transcription');
-          setProgressDetail('Separating every distinct speaker & recognizing verbatim speech...');
-          setProgressStepIndex(3);
-          return prev + 1.2;
-        } else if (prev < 82) {
-          setProgressStage('4. Speaker Gender Detection');
-          setProgressDetail('Listening to each line to detect gender and split mixed speakers...');
-          setProgressStepIndex(4);
-          return prev + 0.8;
-        } else if (prev < 92) {
-          setProgressStage('5. Word-Level Confidence Heatmap Computation');
-          setProgressDetail('Evaluating acoustic clarity scores for each transcribed token...');
-          setProgressStepIndex(5);
-          return prev + 0.5;
-        } else if (prev < 98) {
-          setProgressStage('6. Karya QA Linter & Final Verification');
-          setProgressDetail('Linting script compliance, numbers in words, and punctuation rules...');
-          setProgressStepIndex(6);
-          return prev + 0.3;
-        }
-        return prev;
-      });
-    }, 400);
+  const stopProgressTimers = () => {
+    if (progressTimerRef.current) { clearInterval(progressTimerRef.current); progressTimerRef.current = null; }
+    if (elapsedTimerRef.current) { clearInterval(elapsedTimerRef.current); elapsedTimerRef.current = null; }
   };
 
-  const stopProgressSimulation = (success = true) => {
-    if (progressTimerRef.current) {
-      clearInterval(progressTimerRef.current);
-      progressTimerRef.current = null;
-    }
-    if (elapsedTimerRef.current) {
-      clearInterval(elapsedTimerRef.current);
-      elapsedTimerRef.current = null;
-    }
+  const startElapsedTimer = (startTime) => {
+    if (elapsedTimerRef.current) clearInterval(elapsedTimerRef.current);
+    elapsedTimerRef.current = setInterval(() => setElapsedSeconds((Date.now() - startTime) / 1000), 250);
+  };
+
+  const beginUploadProgress = () => {
+    stopProgressTimers();
+    setProgressStepIndex(1);
+    setProgressStage('Uploading audio');
+    setProgressDetail(selectedFile?.name || '');
+    setProgressPercent(0);
+    setProgressEstimated(false);
+    setProgressMeta('');
+    setElapsedSeconds(0);
+    startElapsedTimer(Date.now());
+  };
+
+  const onUploadProgress = ({ percent, loaded, total, speed, eta }) => {
+    setProgressPercent(percent);
+    setProgressMeta([`${formatBytes(loaded)} of ${formatBytes(total)}`, formatSpeed(speed), formatEta(eta)].filter(Boolean).join(' · '));
+  };
+
+  const beginServerProgress = (audioSeconds) => {
+    const startedAt = Date.now();
+    let ratio = 0.15;
+    try { ratio = parseFloat(localStorage.getItem(SPEED_KEY)) || ratio; } catch {}
+    const expected = Math.max(8, (audioSeconds || 60) * ratio);
+    setProgressStepIndex(2);
+    setProgressStage('Transcribing');
+    setProgressDetail('Speech recognition, speakers, gender and Karya checks on the server');
+    setProgressEstimated(true);
+    setProgressPercent(0);
+    if (progressTimerRef.current) clearInterval(progressTimerRef.current);
+    progressTimerRef.current = setInterval(() => {
+      const t = (Date.now() - startedAt) / 1000;
+      // Approaches 95% as time passes the expected duration, never reaches it
+      const pct = 95 * (1 - Math.exp(-1.6 * t / expected));
+      setProgressPercent(pct);
+      const left = Math.max(0, Math.round(expected - t));
+      setProgressMeta(t < expected ? `about ${left >= 60 ? `${Math.floor(left / 60)} min ${left % 60} s` : `${left} s`} left` : 'taking longer than usual');
+    }, 400);
+    return startedAt;
+  };
+
+  const finishProgress = (success, startedAt, audioSeconds) => {
+    stopProgressTimers();
     if (success) {
+      if (startedAt && audioSeconds > 5) {
+        try { localStorage.setItem(SPEED_KEY, String(((Date.now() - startedAt) / 1000 / audioSeconds).toFixed(4))); } catch {}
+      }
+      setProgressStepIndex(3);
+      setProgressEstimated(false);
       setProgressPercent(100);
-      setProgressStage('✓ Completed Successfully!');
-      setProgressDetail('All segments, confidence heatmap & Karya QA linting ready.');
-      setProgressStepIndex(6);
-      setTimeout(() => {
-        setProgressPercent(0);
-      }, 1000);
     } else {
       setProgressPercent(0);
     }
@@ -795,7 +803,10 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
   const handleStartTranscribe = async () => {
     if (!selectedFile) return;
     setIsTranscribing(true);
-    startProgressSimulation();
+    beginUploadProgress();
+    let serverStartedAt = 0;
+    let audioSeconds = 0;
+    try { audioSeconds = await probeDuration(audioUrl || videoUrl); } catch {}
 
     const formData = new FormData();
     formData.append('file', selectedFile);
@@ -807,13 +818,13 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
     } catch {}
 
     try {
-      const res = await fetch(`${API_BASE}/api/transcribe`, {
-        method: 'POST',
-        body: formData
+      const res = await xhrPostForm(`${API_BASE}/api/transcribe`, formData, {
+        onProgress: onUploadProgress,
+        onSent: () => { serverStartedAt = beginServerProgress(audioSeconds); },
       });
 
       if (res.ok) {
-        const data = await res.json();
+        const data = res.data || {};
         setTranscriptionResult(data);
         const segs = data.segments || [];
         setSegments(segs);
@@ -826,23 +837,14 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
         if (segs.length > 0) {
           setActiveSegmentId(segs[0].segment_id);
         }
-        stopProgressSimulation(true);
+        finishProgress(true, serverStartedAt, audioSeconds);
       } else {
-        stopProgressSimulation(false);
-        let errorMsg = 'Failed to process audio';
-        try {
-          const errData = await res.json();
-          errorMsg = errData.detail || errorMsg;
-        } catch (e) {
-          try {
-            const errText = await res.text();
-            if (errText) errorMsg = errText;
-          } catch (textErr) {}
-        }
+        finishProgress(false);
+        let errorMsg = res.data?.detail || res.text || 'Failed to process audio';
         alert(`Transcription error: ${errorMsg}`);
       }
     } catch (err) {
-      stopProgressSimulation(false);
+      finishProgress(false);
       console.error("Transcribe failed:", err);
       alert(`Transcription request failed: ${err.message || err}`);
     } finally {
@@ -1367,6 +1369,9 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
         isExtractingAudio={isExtractingAudio}
         extractionNotice={extractionNotice}
         progressPercent={progressPercent}
+        progressEstimated={progressEstimated}
+        detectedLanguage={transcriptionResult?.language || ''}
+        progressMeta={progressMeta}
         progressStage={progressStage}
         progressDetail={progressDetail}
         progressStepIndex={progressStepIndex}
