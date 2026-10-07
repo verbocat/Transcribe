@@ -1,4 +1,5 @@
 import React from 'react';
+import { Square } from 'lucide-react';
 
 const mmss = (sec) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
 
@@ -6,7 +7,7 @@ const mmss = (sec) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).pa
  * Slim one-row progress strip, same as Subtitle Studio's. Upload bytes are measured; the server wait is an
  * estimate and is marked with "≈". A null percent shows a moving bar with no number.
  */
-export default function ProgressStrip({ stage, detail, percent, estimated, meta, stepIndex, stepCount, elapsedSeconds }) {
+export default function ProgressStrip({ stage, detail, percent, estimated, meta, stepIndex, stepCount, elapsedSeconds, onCancel }) {
   const determinate = typeof percent === 'number' && Number.isFinite(percent);
   const pct = determinate ? Math.max(0, Math.min(100, percent)) : 0;
   const shown = determinate ? (pct >= 99.5 ? '100' : pct < 10 ? pct.toFixed(1) : String(Math.round(pct))) : null;
@@ -31,6 +32,11 @@ export default function ProgressStrip({ stage, detail, percent, estimated, meta,
           >
             {estimated ? '≈' : ''}{shown}%
           </span>
+        )}
+        {onCancel && (
+          <button type="button" className="ts-btn ts-btn-sm" onClick={onCancel} title="Stop transcribing. Nothing is changed.">
+            <Square size={11} /> Cancel
+          </button>
         )}
       </div>
       <div

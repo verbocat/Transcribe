@@ -11,6 +11,7 @@
 import { FFmpeg } from '@ffmpeg/ffmpeg';
 import { toBlobURL } from '@ffmpeg/util';
 import { computeWaveformPeaks } from './audioExtractor';
+import { CancelledError } from './cancellable';
 
 const CORE_BASE = '/ffmpeg';
 let ffmpegPromise = null;
@@ -61,8 +62,15 @@ function wavDataRegion(bytes) {
  * Returns the same shape as the server path in extractAudioFromMedia().
  * onProgress receives { stage, percent, loaded?, total?, detail } with measured values only.
  */
-export async function extractAudioInBrowser(file, onProgress) {
+export async function extractAudioInBrowser(file, onProgress, signal) {
+  if (signal?.aborted) throw new CancelledError();
   const ffmpeg = await loadEngine(onProgress);
+  if (signal?.aborted) throw new CancelledError();
+
+  // The wasm worker cannot be interrupted politely: terminating it is how a running extraction is stopped.
+  // The next extraction loads a fresh engine (the files are cached by the browser).
+  const onAbort = () => { ffmpegPromise = null; try { ffmpeg.terminate(); } catch (_) { /* already gone */ } };
+  signal?.addEventListener('abort', onAbort, { once: true });
 
   const ext = (file.name.match(/\.[A-Za-z0-9]{1,5}$/) || ['.bin'])[0].toLowerCase();
   const inputName = `input${ext}`;
@@ -91,6 +99,7 @@ export async function extractAudioInBrowser(file, onProgress) {
     await ffmpeg.mount('WORKERFS', { files: [new File([file], inputName)] }, mountDir);
     // Same arguments as the server: drop video, 16-bit PCM, 16 kHz, mono
     const code = await ffmpeg.exec(['-i', `${mountDir}/${inputName}`, '-vn', '-acodec', 'pcm_s16le', '-ar', '16000', '-ac', '1', '-y', outName]);
+    if (signal?.aborted) throw new CancelledError();
     if (code !== 0) throw new Error(`FFmpeg exited with code ${code}`);
 
     const data = await ffmpeg.readFile(outName);
@@ -117,7 +126,11 @@ export async function extractAudioInBrowser(file, onProgress) {
       sampleRate,
       audioUrl: URL.createObjectURL(audioBlob),
     };
+  } catch (err) {
+    if (signal?.aborted) throw new CancelledError();
+    throw err;
   } finally {
+    signal?.removeEventListener('abort', onAbort);
     ffmpeg.off('progress', onFFmpegProgress);
     try { await ffmpeg.deleteFile(outName); } catch (_) { /* nothing to delete */ }
     try { await ffmpeg.unmount(mountDir); } catch (_) { /* not mounted */ }

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { UploadCloud, Sparkles, Loader2 } from 'lucide-react';
+import { UploadCloud, Sparkles, Loader2, Square } from 'lucide-react';
 import { LANGUAGES, SCRIPTS } from './TopBar';
 
 /**
@@ -7,7 +7,7 @@ import { LANGUAGES, SCRIPTS } from './TopBar';
  * compact summary with the language choice and a single Start button.
  */
 export default function EmptyState({
-  filename, isExtractingAudio, extractionNotice, onDropFile, onTranscribe, onOpenProjects, video,
+  filename, isExtractingAudio, extractionNotice, onCancelExtract, onDropFile, onTranscribe, onOpenProjects, video,
   language, setLanguage, script, setScript,
 }) {
   const [dragging, setDragging] = useState(false);
@@ -52,6 +52,12 @@ export default function EmptyState({
               {SCRIPTS.map(([v, l]) => <option key={v} value={v}>Script: {l}</option>)}
             </select>
           </div>
+
+          {isExtractingAudio && onCancelExtract && (
+            <button type="button" className="ts-btn" onClick={onCancelExtract} style={{ width: '100%', height: 42, fontSize: 14, marginTop: 12 }}>
+              <Square size={14} /> Cancel
+            </button>
+          )}
 
           <button type="button" className="ts-btn ts-btn-primary" disabled={!ready} onClick={onTranscribe} style={{ width: '100%', height: 42, fontSize: 14, marginTop: 12 }}>
             <Sparkles size={16} /> Start transcription

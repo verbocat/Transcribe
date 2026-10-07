@@ -1,5 +1,6 @@
 import React, { useMemo, useRef, useState } from 'react';
-import { Check, Download, Eye, EyeOff, FileUp, Search, Trash2, Upload, RotateCcw, X } from 'lucide-react';
+import { Check, Download, Eye, EyeOff, FileUp, Search, Square, Trash2, Upload, RotateCcw, X } from 'lucide-react';
+import { startJob, jobHeaders } from '../../../utils/cancellable';
 import { API_BASE, setCustomApiBase, cleanUrl } from '../../../config';
 import { Button, Segmented, Section, Row, SwitchRow, Slider, Select, TextInput, Badge, Kbd } from '../ui/controls';
 import { SHORTCUT_GROUPS } from '../shortcuts';
@@ -217,6 +218,7 @@ export function GlossaryPage({ c }) {
   const [filter, setFilter] = useState('');
   const [msg, setMsg] = useState('');
   const [busy, setBusy] = useState(false);
+  const importJob = useRef(null);
   const fileRef = useRef(null);
   const terms = c.glossaryTerms;
 
@@ -233,17 +235,20 @@ export function GlossaryPage({ c }) {
     e.target.value = '';
     if (!file) return;
     setBusy(true);
+    const job = startJob(API_BASE);
+    importJob.current = job;
     try {
       const form = new FormData();
       form.append('file', file);
-      const res = await fetch(`${(API_BASE || '').replace(/\/$/, '')}/api/subtitle/extract_glossary_file`, { method: 'POST', body: form });
+      const res = await fetch(`${(API_BASE || '').replace(/\/$/, '')}/api/subtitle/extract_glossary_file`, { method: 'POST', body: form, signal: job.signal, headers: jobHeaders(job) });
       if (!res.ok) throw new Error(`Server returned ${res.status}`);
       const data = await res.json();
       if (data.terms?.length) {
         c.setGlossaryTerms(Array.from(new Set([...terms, ...data.terms])));
         flash(`Imported ${data.terms.length} terms from ${file.name}`);
       } else flash(`No terms found in ${file.name}`);
-    } catch (_) {
+    } catch (cancelErr) {
+      if (job.cancelled) { flash('Import cancelled'); return; }
       try {
         const text = await file.text();
         const parts = text.split(/[\r\n,;\t|]+/).map((w) => w.trim().replace(/^["'`]|["'`]$/g, '')).filter((w) => w.length >= 2 && w.length <= 80);
@@ -255,6 +260,7 @@ export function GlossaryPage({ c }) {
         flash(`Failed to read file: ${err.message}`);
       }
     } finally {
+      if (importJob.current === job) importJob.current = null;
       setBusy(false);
     }
   };
@@ -270,7 +276,9 @@ export function GlossaryPage({ c }) {
       <div className="p-3 flex gap-2">
         <TextInput value={word} onChange={(e) => setWord(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); add(); } }} placeholder="Add terms, separated by commas, then press Enter" aria-label="New glossary term" />
         <Button variant="primary" onClick={add} disabled={!word.trim()}>Add</Button>
-        <Button icon={FileUp} onClick={() => fileRef.current?.click()} disabled={busy} title="Import from Word, Excel, CSV or TXT">{busy ? 'Importing…' : 'Import'}</Button>
+        {busy
+          ? <Button icon={Square} onClick={() => importJob.current?.cancel()} title="Stop importing">Cancel import</Button>
+          : <Button icon={FileUp} onClick={() => fileRef.current?.click()} title="Import from Word, Excel, CSV or TXT">Import</Button>}
         <input ref={fileRef} type="file" accept=".docx,.xlsx,.xls,.csv,.txt,.tsv,.json" onChange={importFile} className="hidden" />
       </div>
       {msg && <p className="px-4 py-2 text-[12px] text-[var(--ss-accent)] flex items-center gap-1.5" role="status"><Check size={12} />{msg}</p>}

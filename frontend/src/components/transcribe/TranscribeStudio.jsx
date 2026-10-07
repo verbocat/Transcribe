@@ -186,7 +186,7 @@ export default function TranscribeStudio(p) {
         canUndo={p.canUndo} canRedo={p.canRedo} onUndo={p.onUndo} onRedo={p.onRedo}
         isSaving={p.isSaving} onSave={p.onSave}
         exportFormats={p.exportFormats} onToggleFormat={p.onToggleFormat}
-        onDownload={p.onDownload} onDubbing={p.onDubbing} isExporting={p.isExporting}
+        onDownload={p.onDownload} onDubbing={p.onDubbing} isExporting={p.isExporting} onCancelExport={p.onCancelExport}
         onOpenProjects={p.onOpenProjects} onOpenStats={p.onOpenStats} onOpenDiff={p.onOpenDiff}
         onOpenNotes={p.onOpenNotes} onOpenGuidelines={p.onOpenGuidelines}
         onImportSubtitles={p.onImportSubtitles}
@@ -199,6 +199,7 @@ export default function TranscribeStudio(p) {
         <ProgressStrip
           stage={p.progressStage} detail={p.progressDetail} percent={p.progressPercent}
           estimated={p.progressEstimated} stepCount={p.progressStepCount} meta={p.progressMeta} stepIndex={p.progressStepIndex} elapsedSeconds={p.elapsedSeconds}
+          onCancel={p.onCancelTranscribe}
         />
       )}
 
@@ -242,7 +243,7 @@ export default function TranscribeStudio(p) {
       ) : (
         !p.isTranscribing && (
           <EmptyState
-            filename={p.canTranscribe ? p.filename : null} isExtractingAudio={p.isExtractingAudio} extractionNotice={p.extractionNotice}
+            filename={p.canTranscribe ? p.filename : null} isExtractingAudio={p.isExtractingAudio} extractionNotice={p.extractionNotice} onCancelExtract={p.onCancelExtract}
             onDropFile={(file) => p.onFileSelect({ target: { files: [file] } })}
             onTranscribe={p.onTranscribe} onOpenProjects={p.onOpenProjects} video={video}
             language={p.language} setLanguage={p.setLanguage} script={p.script} setScript={p.setScript}

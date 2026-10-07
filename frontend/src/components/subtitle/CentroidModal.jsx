@@ -2,9 +2,10 @@ import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom';
 import {
   X, Languages, ShieldCheck, Download, Check, AlertTriangle, Wand2, Loader2, ChevronDown,
-  ChevronRight, Package, FileInput, ArrowLeftRight, BadgeCheck, Eye, EyeOff, Crosshair, Plus, Pencil, Sparkles,
+  ChevronRight, Package, FileInput, ArrowLeftRight, BadgeCheck, Eye, EyeOff, Crosshair, Plus, Pencil, Sparkles, Square,
 } from 'lucide-react';
 import { API_BASE } from '../../config';
+import { startJob, jobHeaders, isCancelError } from '../../utils/cancellable';
 import { parseSrtText, cuesToSrt, downloadBlob, buildZip } from '../../utils/centroidSrt';
 import { Button, IconButton, Segmented, Select, TextInput, Switch, Badge } from './ui/controls';
 import { COMMON_LANGS, OTHER_LANGS, ALL_LANGS, langName } from './languages';
@@ -71,8 +72,8 @@ const fmtTime = (s) => {
   return `${String(Math.floor(t / 60)).padStart(2, '0')}:${(t % 60).toFixed(1).padStart(4, '0')}`;
 };
 
-async function api(path, body) {
-  const res = await fetch(`${API_BASE}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+async function api(path, body, job) {
+  const res = await fetch(`${API_BASE}${path}`, { method: 'POST', headers: jobHeaders(job, { 'Content-Type': 'application/json' }), body: JSON.stringify(body), signal: job?.signal });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.detail || data.error || `Request failed (${res.status})`);
   return data;
@@ -210,6 +211,13 @@ export default function CentroidModal({
   const [failedLangs, setFailedLangs] = useState({});
   const [previewLang, setPreviewLang] = useState(null);
   const fileRef = useRef(null);
+  // The running request of each kind, so its Cancel button can stop it
+  const analyzeJob = useRef(null);
+  const qcJob = useRef(null);
+  const translateJob = useRef(null);
+  const cancelJob = (ref) => ref.current?.cancel();
+  // Leaving the modal open is not an excuse to keep paying for work nobody is waiting for
+  useEffect(() => () => { [analyzeJob, qcJob, translateJob].forEach((r) => r.current?.cancel()); }, []);
 
   // ---- QC ----
   const [qcTarget, setQcTarget] = useState(''); // 'editor' | lang code
@@ -319,11 +327,13 @@ export default function CentroidModal({
     setAnalyzeNote('');
     if (!sourceCues.length) { setError('There are no subtitles to read yet.'); return; }
     setAnalyzing(true);
+    const job = startJob(API_BASE);
+    analyzeJob.current = job;
     try {
       const data = await api('/api/centroid/analyze', {
         events: sourceCues.map((c) => ({ start_time: c.start_time ?? c.start, end_time: c.end_time ?? c.end, text: c.text })),
         source_lang: sourceLang, target_langs: targets, context: buildContext(),
-      });
+      }, job);
       const next = { ...ctx };
       ['title', 'genre', 'audience', 'setting', 'synopsis'].forEach((k) => { if (!String(next[k]).trim() && known(data[k])) next[k] = data[k]; });
       if (!next.content_type && TYPE_FROM_ANALYSIS[data.content_type]) next.content_type = TYPE_FROM_ANALYSIS[data.content_type];
@@ -361,8 +371,10 @@ export default function CentroidModal({
       setOpen((o) => ({ ...o, ctx: true, gloss: lines.length ? true : o.gloss }));
       setAnalyzeNote(`Centroid read ${data.cues_read} of ${data.cues_total} subtitles and drafted the briefing: ${(data.characters || []).length} characters, ${(data.names || []).length} names${exampleCount ? `, ${exampleCount} example lines` : ''}. Please check the genders, name spellings and example lines. Correct them if they are wrong, because Centroid follows them strictly.`);
     } catch (e) {
-      setError(e.message);
+      if (isCancelError(e)) setAnalyzeNote('Cancelled. Nothing was changed.');
+      else setError(e.message);
     } finally {
+      if (analyzeJob.current === job) analyzeJob.current = null;
       setAnalyzing(false);
     }
   };
@@ -390,15 +402,18 @@ export default function CentroidModal({
     if (pe) { setQcError(pe); return; }
     const lang = code === 'editor' ? targets[0] || sourceLang : code;
     setQcBusy(true);
+    const job = startJob(API_BASE);
+    qcJob.current = job;
     try {
       const data = await api('/api/centroid/qc', {
         cues: pairs, source_lang: sourceLang, target_lang: lang,
         context: buildContext(), glossary: buildGlossary(), constraints: buildLimits(),
-      });
+      }, job);
       setQc({ ...data, target: code, issues: (data.issues || []).map((i, n) => ({ ...i, key: `${i.index}-${i.category}-${n}`, status: 'open' })) });
     } catch (e) {
-      setQcError(e.message);
+      setQcError(isCancelError(e) ? 'Cancelled. Run the check again whenever you like.' : e.message);
     } finally {
+      if (qcJob.current === job) qcJob.current = null;
       setQcBusy(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -409,12 +424,14 @@ export default function CentroidModal({
     if (!sourceCues.length) { setError('There are no subtitles to translate. Generate or import subtitles, or upload an SRT.'); return; }
     if (!targets.length) { setError('Pick a target language that differs from the source.'); return; }
     setBusy(true);
+    const job = startJob(API_BASE);
+    translateJob.current = job;
     try {
       const data = await api('/api/centroid/translate', {
         events: sourceCues.map((c) => ({ start_time: c.start_time ?? c.start, end_time: c.end_time ?? c.end, text: c.text })),
         source_lang: sourceLang, target_langs: targets, context: buildContext(), glossary: buildGlossary(), constraints: buildLimits(),
         quality,
-      });
+      }, job);
       const snap = sourceCues.map((c, i) => ({ id: i + 1, editorId: c.id ?? c.event_id, start_time: c.start_time ?? c.start, end_time: c.end_time ?? c.end, text: c.text }));
       const res = data.results || {};
       setSnapshot(snap);
@@ -432,8 +449,10 @@ export default function CentroidModal({
       onTranslated?.({ sourceLang, built });
       if (first && autoQc) runQcFor(first, res, snap);
     } catch (e) {
-      setError(e.message);
+      // Cancelled: the translations and tracks you already had stay exactly as they were
+      setError(isCancelError(e) ? 'Translation cancelled. Your subtitles were not changed.' : e.message);
     } finally {
+      if (translateJob.current === job) translateJob.current = null;
       setBusy(false);
     }
   };
@@ -782,9 +801,11 @@ export default function CentroidModal({
                 <div className="flex-1 min-w-0 text-[11.5px] text-[var(--ss-muted)] leading-snug">
                   The more Centroid knows, the more natural and consistent the translation. Let it read your subtitles and draft the briefing, then correct anything it got wrong. Centroid follows these fields as strict rules.
                 </div>
-                <Button size="sm" variant="primary" icon={analyzing ? Loader2 : Sparkles} disabled={analyzing || notReady || !sourceCues.length} onClick={runAnalyze}>
-                  {analyzing ? 'Reading…' : 'Auto-fill'}
-                </Button>
+                {analyzing ? (
+                  <Button size="sm" variant="secondary" icon={Square} onClick={() => cancelJob(analyzeJob)}>Cancel</Button>
+                ) : (
+                  <Button size="sm" variant="primary" icon={Sparkles} disabled={notReady || !sourceCues.length} onClick={runAnalyze}>Auto-fill</Button>
+                )}
               </div>
               {analyzeNote && <div className="mb-3"><Notice tone="good">{analyzeNote}</Notice></div>}
 
@@ -952,11 +973,14 @@ export default function CentroidModal({
       {/* sticky primary action */}
       {(
         <footer className="shrink-0 px-5 py-3 border-t border-[var(--ss-line)]">
-          <Button variant="primary" size="lg" className="w-full" icon={busy ? Loader2 : Languages} disabled={busy || notReady || !sourceCues.length} onClick={runTranslate}>
-            {busy
-              ? `Translating ${sourceCues.length} subtitles… ${elapsed}s`
-              : hasResults ? `Translate again · ${sourceCues.length} subtitles → ${targetNames || '…'}` : `Translate ${sourceCues.length} subtitles → ${targetNames || '…'}`}
-          </Button>
+          <div className="flex gap-2">
+            <Button variant="primary" size="lg" className="flex-1 min-w-0" icon={busy ? Loader2 : Languages} disabled={busy || notReady || !sourceCues.length} onClick={runTranslate}>
+              {busy
+                ? `Translating ${sourceCues.length} subtitles… ${elapsed}s`
+                : hasResults ? `Translate again · ${sourceCues.length} subtitles → ${targetNames || '…'}` : `Translate ${sourceCues.length} subtitles → ${targetNames || '…'}`}
+            </Button>
+            {busy && <Button variant="secondary" size="lg" icon={Square} onClick={() => cancelJob(translateJob)}>Cancel</Button>}
+          </div>
           {!sourceCues.length && <p className="mt-1.5 text-center text-[11.5px] text-[var(--ss-faint)]">Generate or import subtitles first, or upload an SRT above.</p>}
         </footer>
       )}

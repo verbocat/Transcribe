@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   ArrowLeft, Sparkles, Upload, Undo2, Redo2, Download, Save, MoreHorizontal, Loader2, Check,
-  FolderOpen, BarChart2, GitCompare, StickyNote, BookOpen, FileUp, Clapperboard, Languages, Palette, ShieldCheck
+  FolderOpen, BarChart2, GitCompare, StickyNote, BookOpen, FileUp, Clapperboard, Languages, Palette, ShieldCheck, Square
 } from 'lucide-react';
 import NotificationBellDropdown from '../NotificationBellDropdown';
 import AccountMenuDropdown from '../AccountMenuDropdown';
@@ -41,8 +41,15 @@ function usePopover() {
   return { open, setOpen, ref };
 }
 
-function ExportMenu({ formats, onToggle, onDownload, onDubbing, isExporting, hasSegments }) {
+function ExportMenu({ formats, onToggle, onDownload, onDubbing, isExporting, hasSegments, onCancelExport }) {
   const { open, setOpen, ref } = usePopover();
+  if (isExporting && onCancelExport) {
+    return (
+      <button type="button" className="ts-btn" onClick={onCancelExport} title="Stop the export">
+        <Square size={14} /> Cancel export
+      </button>
+    );
+  }
   return (
     <div className="relative" ref={ref}>
       <button type="button" className="ts-btn" disabled={!hasSegments} onClick={() => setOpen(!open)} aria-expanded={open} aria-haspopup="menu">
@@ -188,7 +195,7 @@ export default function TopBar(p) {
 
       <ExportMenu
         formats={p.exportFormats} onToggle={p.onToggleFormat} onDownload={p.onDownload}
-        onDubbing={p.onDubbing} isExporting={p.isExporting} hasSegments={hasSegments}
+        onDubbing={p.onDubbing} isExporting={p.isExporting} hasSegments={hasSegments} onCancelExport={p.onCancelExport}
       />
 
       <input ref={importRef} type="file" accept=".srt,.vtt,.txt" className="hidden"

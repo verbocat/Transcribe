@@ -23,6 +23,7 @@ import LogoutConfirmModal from './components/LogoutConfirmModal';
 import ReloadConfirmModal from './components/ReloadConfirmModal';
 import { parseSubtitles } from './utils/subtitleParser';
 import { API_BASE } from './config';
+import { startJob, jobHeaders, isCancelError, sleepCancellable } from './utils/cancellable';
 const BUILD_ID = typeof __APP_BUILD__ !== 'undefined' ? __APP_BUILD__ : 'dev';
 if (typeof window !== 'undefined') window.__TRANSCRIBE_BUILD__ = BUILD_ID;
 import { extractAudioFromMedia } from './utils/audioExtractor';
@@ -556,6 +557,10 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
   const [isExporting, setIsExporting] = useState(false);
   const [selectedExportFormats, setSelectedExportFormats] = useState(['csv', 'docx', 'xlsx', 'srt', 'json']);
   const [isExtractingAudio, setIsExtractingAudio] = useState(false);
+  // Running requests, so each Cancel button can stop its own work (browser request and server job)
+  const extractJobRef = useRef(null);
+  const transcribeJobRef = useRef(null);
+  const exportJobRef = useRef(null);
   const [extractionNotice, setExtractionNotice] = useState('');
 
   // Detailed Progress Bar State with Live Elapsed Time
@@ -701,13 +706,15 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
       if (isVideo || needsServerDecode) {
         setIsExtractingAudio(true);
         setExtractionNotice(isVideo ? 'Extracting audio track from video...' : 'Converting WMA audio for playback...');
+        const extractJob = startJob(API_BASE);
+        extractJobRef.current = extractJob;
         try {
           // Audio is extracted ON THIS COMPUTER (WebAssembly FFmpeg), so only ~2 MB per minute of audio is ever
           // uploaded instead of the whole video. Falls back to the server (with live progress) on any problem.
           const extracted = await extractAudioFromMedia(file, (p) => {
             const pct = typeof p.percent === 'number' && Number.isFinite(p.percent) ? ` ${Math.round(p.percent)}%` : '';
             setExtractionNotice(`${p.detail || 'Preparing audio'}${pct}`);
-          }, API_BASE);
+          }, API_BASE, { signal: extractJob.signal, job: extractJob });
           const isBlob = !extracted.audioUrl || extracted.audioUrl.startsWith('blob:');
           setAudioUrl(extracted.audioUrl || URL.createObjectURL(extracted.audioBlob));
           extractedAudioFileRef.current = extracted.audioFile || null;
@@ -717,9 +724,17 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
           setExtractionNotice('Audio extracted successfully ✓');
           setTimeout(() => setExtractionNotice(''), 3000);
         } catch (err) {
-          console.warn("Video audio extraction fallback:", err);
-          setAudioUrl(URL.createObjectURL(file));
+          if (extractJob.cancelled || isCancelError(err)) {
+            // Cancelled: keep the file loaded and playable from the original, just without the prepared audio
+            setAudioUrl(URL.createObjectURL(file));
+            setExtractionNotice('Audio preparation cancelled');
+            setTimeout(() => setExtractionNotice(''), 3000);
+          } else {
+            console.warn("Video audio extraction fallback:", err);
+            setAudioUrl(URL.createObjectURL(file));
+          }
         } finally {
+          if (extractJobRef.current === extractJob) extractJobRef.current = null;
           setIsExtractingAudio(false);
         }
       } else {
@@ -824,10 +839,9 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
   };
 
   // Poll a /api/transcribe_async job: the strip shows the server's own stage, step and percent
-  const pollTranscribeJob = async (jobId) => {
-    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const pollTranscribeJob = async (jobId, signal) => {
     for (;;) {
-      const res = await fetch(`${API_BASE}/api/transcribe_status/${jobId}`);
+      const res = await fetch(`${API_BASE}/api/transcribe_status/${jobId}`, { signal });
       if (!res.ok) throw new Error(res.status === 404 ? 'The transcription job expired or the server restarted.' : `Status check failed (${res.status}).`);
       const job = await res.json();
       if (job.stage === 'error') throw new Error(job.error || 'Transcription failed.');
@@ -841,7 +855,7 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
       // The speech engine answers once, so its share of the bar is the server's estimate
       setProgressEstimated(job.stage === 'transcribing');
       setProgressMeta(job.stage_percent != null && job.stage !== 'transcribing' ? `${Math.round(job.stage_percent)}% of this step` : '');
-      await sleep(700);
+      await sleepCancellable(700, signal);
     }
   };
 
@@ -866,6 +880,8 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
       return fd;
     };
 
+    const job = startJob(API_BASE);
+    transcribeJobRef.current = job;
     try {
       let data = null;
       // Preferred: background job with real stages. Reuse the audio already extracted for the waveform when we have it.
@@ -878,11 +894,13 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
       console.info('[transcribe] POST /api/transcribe_async', { build: BUILD_ID, uploading: reuse ? 'nothing (audio already on server)' : localWav ? `audio ${formatBytes(localWav.size)}` : `original file ${formatBytes(selectedFile.size)}` });
       const start = await xhrPostForm(`${API_BASE}/api/transcribe_async`, fd, {
         onProgress: onUploadProgress,
+        signal: job.signal,
+        headers: jobHeaders(job),
         onSent: () => { setProgressStepCount(0); setProgressStage('Starting'); setProgressDetail(''); setProgressMeta(''); setProgressPercent(null); },
       });
       if (start.ok && start.data?.job_id) {
         setProgressStepCount(0);
-        data = await pollTranscribeJob(start.data.job_id);
+        data = await pollTranscribeJob(start.data.job_id, job.signal);
         finishProgress(true);
       } else if (start.status === 404 || start.status === 405) {
         // Older backend without the job API: the blocking endpoint, with an estimated wait
@@ -890,6 +908,8 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
         beginUploadProgress();
         const res = await xhrPostForm(`${API_BASE}/api/transcribe`, build(localWav || selectedFile), {
           onProgress: onUploadProgress,
+          signal: job.signal,
+          headers: jobHeaders(job),
           onSent: () => { serverStartedAt = beginServerProgress(audioSeconds); },
         });
         if (!res.ok) throw new Error(res.data?.detail || res.text || 'Failed to process audio');
@@ -901,9 +921,16 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
       applyTranscriptionResult(data);
     } catch (err) {
       finishProgress(false);
-      console.error("Transcribe failed:", err);
-      alert(`Transcription error: ${err.message || err}`);
+      if (job.cancelled || isCancelError(err)) {
+        // Cancelled on purpose: whatever was on screen stays, the media stays loaded
+        setAutoSaveStatus('Transcription cancelled');
+        setTimeout(() => setAutoSaveStatus(''), 3000);
+      } else {
+        console.error("Transcribe failed:", err);
+        alert(`Transcription request failed: ${err.message || err}`);
+      }
     } finally {
+      if (transcribeJobRef.current === job) transcribeJobRef.current = null;
       setIsTranscribing(false);
     }
   };
@@ -955,11 +982,14 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
   const handleDubbingExport = async () => {
     if (segments.length === 0) return;
     setIsExporting(true);
+    const job = startJob(API_BASE);
+    exportJobRef.current = job;
     try {
       const filename = selectedFile ? selectedFile.name : (transcriptionResult?.filename || 'audio_transcript.wav');
       const res = await fetch(`${API_BASE}/api/export/dubbing`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        signal: job.signal,
+        headers: jobHeaders(job, { 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           result: {
             filename,
@@ -983,9 +1013,12 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
       document.body.removeChild(a);
       window.URL.revokeObjectURL(url);
     } catch (err) {
-      console.error("Dubbing export failed:", err);
-      alert("Export failed: " + err);
+      if (!(job.cancelled || isCancelError(err))) {
+        console.error("Dubbing export failed:", err);
+        alert("Export failed: " + err);
+      }
     } finally {
+      if (exportJobRef.current === job) exportJobRef.current = null;
       setIsExporting(false);
     }
   };
@@ -993,6 +1026,8 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
   const handleMultiExport = async () => {
     if (segments.length === 0) return;
     setIsExporting(true);
+    const job = startJob(API_BASE);
+    exportJobRef.current = job;
 
     try {
       const payloadResult = {
@@ -1016,7 +1051,8 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
 
       const res = await fetch(`${API_BASE}/api/export/multi`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        signal: job.signal,
+        headers: jobHeaders(job, { 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           result: payloadResult,
           formats: selectedExportFormats
@@ -1043,9 +1079,12 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
         alert("Failed to export deliverables.");
       }
     } catch (err) {
-      console.error("Multi export failed:", err);
-      alert("Export failed: " + err);
+      if (!(job.cancelled || isCancelError(err))) {
+        console.error("Multi export failed:", err);
+        alert("Export failed: " + err);
+      }
     } finally {
+      if (exportJobRef.current === job) exportJobRef.current = null;
       setIsExporting(false);
     }
   };
@@ -1435,6 +1474,9 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
         elapsedSeconds={elapsedSeconds}
         onFileSelect={handleFileSelect}
         onTranscribe={handleStartTranscribe}
+        onCancelTranscribe={() => transcribeJobRef.current?.cancel()}
+        onCancelExtract={() => extractJobRef.current?.cancel()}
+        onCancelExport={() => exportJobRef.current?.cancel()}
         segments={segments}
         setSegments={setSegments}
         pushToHistory={pushToHistory}
