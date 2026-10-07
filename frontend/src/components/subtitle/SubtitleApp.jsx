@@ -9,7 +9,7 @@ import {
   Bold, Italic, Underline, Strikethrough, AlignLeft, AlignCenter, AlignRight,
   Highlighter, Palette, RotateCcw, User, Wand2, Languages, LayoutDashboard,
   Command, Keyboard, FolderOpen, Save, Replace, ListOrdered, ArrowRightLeft, CaseSensitive,
-  Eraser, SkipBack, SkipForward, Maximize, Users, BookText, StepBack, StepForward, AlignJustify
+  Eraser, SkipBack, SkipForward, Maximize, Users, BookText, StepBack, StepForward, AlignJustify, BadgeCheck
 } from 'lucide-react';
 import { API_BASE } from '../../config';
 import { publishPlayhead, getPlayhead, subscribePlayhead } from '../../utils/playheadBus';
@@ -31,7 +31,7 @@ import CommandPalette from './CommandPalette';
 import LanguageTracks from './LanguageTracks';
 import { langName } from './languages';
 import { ShiftTimingsDialog, GoToDialog, FindReplaceDialog } from './ToolDialogs';
-import { Button, IconButton, Kbd } from './ui/controls';
+import { Button, IconButton, Kbd, Segmented } from './ui/controls';
 import { useStudioPrefs, formatTimecode, loadPrefs } from './prefs';
 import { SETTINGS_GROUPS } from './SubtitleSettingsModal';
 import * as tools from './subtitleTools';
@@ -497,17 +497,13 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
   const [tracks, setTracks] = useState({});          // { [languageCode]: events[] } (the active track is saved on switch)
   const [activeTrack, setActiveTrack] = useState(null);
   const [sourceTrack, setSourceTrack] = useState(null);
-  const [centroidTab, setCentroidTab] = useState('translate');
-  const [centroidNonce, setCentroidNonce] = useState(0);
   const [centroidState, setCentroidState] = useState({ hasResults: false, qcIssues: null });
   // Context for the transcript (speakers, key terms, writing style): saved per video file, sent with every Generate
   const [showContextPanel, setShowContextPanel] = useState(false);
   const [genContext, setGenContext] = useState(() => loadContext(null));
   const [contextRun, setContextRun] = useState(null); // what the last generation corrected using the context
   const [progressMeta, setProgressMeta] = useState({ step: 1, steps: 1, estimated: false, eta: null });
-  const openCentroid = useCallback((tab = 'translate') => {
-    setCentroidTab(tab);
-    setCentroidNonce((n) => n + 1);
+  const openCentroid = useCallback(() => {
     setShowContextPanel(false);
     setShowCentroidModal(true);
   }, []);
@@ -528,6 +524,12 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
   const [apiKeyModalError, setApiKeyModalError] = useState(null);
   const [serverHasElevenLabsKey, setServerHasElevenLabsKey] = useState(false);
   const [showQcDrawer, setShowQcDrawer] = useState(false);
+  const [qcView, setQcView] = useState('guideline'); // 'guideline' | 'centroid': the two panels of the single QC view
+  const [qcHost, setQcHost] = useState(null); // DOM slot the Centroid QC panel renders into
+  const openQc = useCallback((view) => {
+    if (view) setQcView(view);
+    setShowQcDrawer(true);
+  }, []);
   const [showSettingsDropdown, setShowSettingsDropdown] = useState(false);
   const [showFileDropdown, setShowFileDropdown] = useState(false);
   const [activeMenu, setActiveMenu] = useState(null); // 'file' | 'edit' | 'subtitle' | 'tools' | 'view' | 'settings' | null
@@ -2708,12 +2710,11 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
         { label: 'Fix QC issues with Gemini…', icon: Wand2, disabled: !hasEvents, onSelect: handleGeminiFix },
         { label: 'Re-break all line breaks', icon: AlignJustify, disabled: !hasEvents, onSelect: handleRebreakAll },
         { label: 'Context…', icon: BookText, onSelect: openContext },
-        { label: 'Translate subtitles…', icon: Languages, onSelect: () => openCentroid('translate') },
-        ...(centroidState.hasResults ? [{ label: 'Centroid QC…', icon: ShieldCheck, onSelect: () => openCentroid('qc') }] : []),
+        { label: 'Translate subtitles…', icon: Languages, onSelect: () => openCentroid() },
         { type: 'separator' },
         { label: 'Speakers…', icon: Users, disabled: !hasEvents, onSelect: () => setShowSpeakerModal(true) },
         { label: 'Glossary…', icon: BookText, onSelect: () => openSettings('glossary') },
-        { label: 'Netflix QC report', icon: ShieldCheck, onSelect: () => setShowQcDrawer(true) },
+        { label: 'Quality check (QC)…', icon: ShieldCheck, onSelect: () => openQc() },
       ],
     },
     {
@@ -2725,7 +2726,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
         { label: 'Timeline', checked: layout.timelinePos !== 'hidden', onSelect: () => toggleLayoutKey('timelinePos', 'bottom', 'hidden') },
         { label: 'Tool rail', checked: layout.sidebar !== 'hidden', onSelect: () => toggleLayoutKey('sidebar', 'left', 'hidden') },
         { label: 'Status bar', checked: layout.showFooter, onSelect: () => patchLayout({ showFooter: !layout.showFooter }) },
-        { label: 'QC report', checked: showQcDrawer, onSelect: () => setShowQcDrawer((v) => !v) },
+        { label: 'QC panel', checked: showQcDrawer, onSelect: () => setShowQcDrawer((v) => !v) },
         { type: 'separator' },
         { type: 'heading', label: 'Focus' },
         { label: 'Focus on video', checked: layout.maximize === 'video', onSelect: () => patchLayout({ maximize: layout.maximize === 'video' ? 'none' : 'video' }) },
@@ -2955,31 +2956,23 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
       >
         {layout.sidebar !== 'hidden' && (
         <Sidebar
-          activeTab={showQcDrawer ? 'qa' : showExportModal ? 'export' : null}
+          qcOpen={showQcDrawer}
           isGenerating={isGenerating}
           canGenerate={Boolean(selectedFile || currentVideoId)}
           onTabChange={(tabId) => {
-            if (tabId === 'media') fileInputRef.current?.click();
-            if (tabId === 'import') srtImportRef.current?.click();
             if (tabId === 'generate') {
               confirmGenerate();
             }
             if (tabId === 'context') { if (showContextPanel) setShowContextPanel(false); else openContext(); }
-            if (tabId === 'qa') setShowQcDrawer(true);
-            if (tabId === 'export') setShowExportModal(true);
-            if (tabId === 'translate') { if (showCentroidModal && centroidTab === 'translate') setShowCentroidModal(false); else openCentroid('translate'); }
-            if (tabId === 'centroid-qc') openCentroid('qc');
+            if (tabId === 'qc') { if (showQcDrawer) setShowQcDrawer(false); else openQc(); }
+            if (tabId === 'translate') { if (showCentroidModal) setShowCentroidModal(false); else openCentroid(); }
           }}
-          onOpenLayout={() => openSettings('layout')}
-          layoutOpen={showSettingsModal && settingsPage === 'layout'}
           translateOpen={showCentroidModal}
           contextOpen={showContextPanel}
           contextActive={Object.keys(contextForRequest(genContext)).some((k) => !['strict', 'writing_style', 'fillers', 'stutters', 'numbers', 'profanity'].includes(k))}
-          hasTranslation={centroidState.hasResults}
           centroidQcCount={centroidState.qcIssues}
           position={layout.sidebar}
           showLabels={layout.sidebarLabels}
-          onOpenHelp={() => openSettings('shortcuts')}
         />
         )}
 
@@ -3094,6 +3087,30 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
                 : 'shrink-0 min-h-0 min-w-0 flex flex-col p-4 border-[var(--kt-s4)] bg-[var(--ss-panel)] text-slate-200 overflow-hidden ' + (layout.qcDock === 'bottom' ? 'border-t' : layout.qcDock === 'left' ? 'border-r' : 'border-l')}
               style={layout.qcDock === 'overlay' ? undefined : (layout.qcDock === 'bottom' ? { height: layout.qcSize, order: 2 } : { width: layout.qcSize, order: layout.qcDock === 'left' ? 0 : 2 })}
             >
+            <div className="shrink-0 flex items-center gap-2 pb-3">
+              <div className="flex-1 min-w-0">
+                <Segmented
+                  label="QC panel"
+                  value={qcView}
+                  onChange={setQcView}
+                  options={[
+                    { value: 'guideline', label: 'Guideline QC', icon: ShieldCheck },
+                    { value: 'centroid', label: centroidState.qcIssues != null ? `Centroid QC · ${centroidState.qcIssues}` : 'Centroid QC', icon: BadgeCheck },
+                  ]}
+                />
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowQcDrawer(false)}
+                className="p-1 rounded-none hover:bg-[var(--ss-hover)] text-slate-400 hover:text-white transition-colors cursor-pointer"
+                title="Close QC"
+                aria-label="Close QC"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            {qcView === 'centroid' && <div ref={setQcHost} className="flex-1 min-h-0 flex flex-col" />}
+            {qcView === 'guideline' && (
             <NetflixQCPanel
               qcUnavailable={qcUnavailable}
               complianceScore={complianceScore}
@@ -3117,8 +3134,8 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
                 handlePlayEvent(id);
                 if (layout.qcDock === 'overlay') setShowQcDrawer(false);
               }}
-              onClose={() => setShowQcDrawer(false)}
             />
+            )}
             </div>
           )}
         </div>
@@ -3324,8 +3341,9 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
         isOpen={showCentroidModal}
         onClose={() => setShowCentroidModal(false)}
         defaultSourceLang={language}
-        startTab={centroidTab}
-        startTabNonce={centroidNonce}
+        qcHost={showQcDrawer && qcView === 'centroid' ? qcHost : null}
+        onOpenQc={() => openQc('centroid')}
+        onOpenTranslate={() => { setShowQcDrawer(false); openCentroid(); }}
         onStateChange={setCentroidState}
         onJumpToEvent={(id) => { setActiveEventId(id); handlePlayEvent(id); }}
         events={events}
