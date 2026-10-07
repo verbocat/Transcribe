@@ -177,3 +177,15 @@ select.ts-field { padding-right: 4px; }
     animation-duration: 0.01ms !important; transition-duration: 0.01ms !important;
   }
 }
+
+/* Tokens the shared Subtitle Studio timeline reads (same values as studio.css) */
+.transcribe-studio {
+  --ss-bg: var(--kt-s0); --ss-panel: var(--kt-s1); --ss-raised: var(--kt-s2); --ss-hover: var(--kt-s3);
+  --ss-selected: var(--kt-selected); --ss-line: var(--kt-s4); --ss-line-soft: var(--kt-s2);
+  --ss-text: var(--kt-text); --ss-muted: var(--kt-muted); --ss-faint: var(--kt-faint);
+  --ss-accent: var(--kt-accent); --ss-accent-hover: var(--kt-accent-soft); --ss-accent-ink: var(--kt-accent-ink);
+  --ss-danger: var(--kt-danger); --ss-warn: var(--kt-warn);
+  --ss-font-script: var(--kt-font-script); --ss-font-mono: var(--kt-font-mono);
+}
+.transcribe-studio .ss-script { font-family: var(--ss-font-script); letter-spacing: 0; }
+.transcribe-studio .font-mono, .transcribe-studio .tabular-nums { font-family: var(--ss-font-mono); font-variant-numeric: tabular-nums; }
