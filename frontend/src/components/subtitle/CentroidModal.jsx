@@ -26,11 +26,6 @@ const ENGLISH_USAGE = [
   { value: 'pure', label: 'Pure target language' },
   { value: 'heavy', label: 'Heavy English mix' },
 ];
-const ADDRESS_FORMS = [
-  { value: 'by_character', label: 'Per character (use the character list)' },
-  { value: 'informal', label: 'Informal “you” (tum / tu)' },
-  { value: 'polite', label: 'Polite “you” (aap)' },
-];
 const PROFANITY = [
   { value: 'keep', label: 'Keep as in the source' },
   { value: 'soften', label: 'Soften' },
@@ -43,19 +38,6 @@ const AUDIENCE_AGES = [
   { value: 'teens', label: 'Teenagers' },
   { value: 'adults', label: 'Adults' },
   { value: 'everyone', label: 'Everyone / family' },
-];
-const HUMOUR = [
-  { value: 'adapt', label: 'Adapt jokes so they are funny in the target language' },
-  { value: 'literal', label: 'Translate jokes faithfully' },
-];
-const CULTURE = [
-  { value: 'localise', label: 'Localise references (food, festivals, idioms)' },
-  { value: 'keep', label: 'Keep the original references' },
-];
-const BREVITY = [
-  { value: 'balanced', label: 'Balanced' },
-  { value: 'short', label: 'Short and quick to read' },
-  { value: 'full', label: 'Complete and faithful' },
 ];
 const NUMBERS = [
   { value: 'guide', label: '1 to 10 in words, 11+ as digits' },
@@ -70,8 +52,8 @@ const GENDERS = [
 ];
 const EMPTY_CTX = {
   title: '', content_type: '', genre: '', audience: '', setting: '',
-  tone: 'Natural everyday conversation', english_usage: 'natural', address_form: 'by_character', profanity: 'keep',
-  audience_age: '', dialect: '', humour: 'adapt', culture: 'localise', brevity: 'balanced', numbers: 'guide',
+  tone: 'Natural everyday conversation', english_usage: 'natural', profanity: 'keep',
+  audience_age: '', numbers: 'guide',
   synopsis: '', scene_notes: '', series_notes: '', style_examples: '', characters: [], dos: '', donts: '', notes: '', strict: true,
 };
 const TYPE_FROM_ANALYSIS = {
@@ -286,6 +268,7 @@ export default function CentroidModal({
   const buildContext = () => {
     const out = {};
     Object.entries(ctx).forEach(([k, v]) => {
+      if (!(k in EMPTY_CTX)) return; // options removed from the form may still sit in older saved drafts
       if (k === 'characters') {
         const rows = (v || []).filter((c) => (c.name || '').trim());
         if (rows.length) out.characters = rows;
@@ -743,12 +726,7 @@ export default function CentroidModal({
               <SubGroup title="How it should sound" hint={ctx.tone || 'Not set'} defaultOpen>
                 <div className="grid grid-cols-2 gap-3">
                   <Field label="Tone / register" className="col-span-2"><Select label="Tone" value={ctx.tone} onChange={(v) => patchCtx('tone', v)} options={[{ value: '', label: 'Not specified' }, ...TONES.map((t) => ({ value: t, label: t }))]} className="w-full" /></Field>
-                  <Field label="Language variety (optional)" className="col-span-2"><TextInput value={ctx.dialect} onChange={(e) => patchCtx('dialect', e.target.value)} placeholder="e.g. everyday Mumbai Hindi, standard Hindi, Hinglish" /></Field>
                   <Field label="English words"><Select label="English words" value={ctx.english_usage} onChange={(v) => patchCtx('english_usage', v)} options={ENGLISH_USAGE} className="w-full" /></Field>
-                  <Field label="Forms of address"><Select label="Forms of address" value={ctx.address_form} onChange={(v) => patchCtx('address_form', v)} options={ADDRESS_FORMS} className="w-full" /></Field>
-                  <Field label="Humour and wordplay"><Select label="Humour" value={ctx.humour} onChange={(v) => patchCtx('humour', v)} options={HUMOUR} className="w-full" /></Field>
-                  <Field label="Cultural references"><Select label="Cultural references" value={ctx.culture} onChange={(v) => patchCtx('culture', v)} options={CULTURE} className="w-full" /></Field>
-                  <Field label="Length"><Select label="Length" value={ctx.brevity} onChange={(v) => patchCtx('brevity', v)} options={BREVITY} className="w-full" /></Field>
                   <Field label="Numbers"><Select label="Numbers" value={ctx.numbers} onChange={(v) => patchCtx('numbers', v)} options={NUMBERS} className="w-full" /></Field>
                   <Field label="Profanity" className="col-span-2"><Select label="Profanity" value={ctx.profanity} onChange={(v) => patchCtx('profanity', v)} options={PROFANITY} className="w-full" /></Field>
                 </div>

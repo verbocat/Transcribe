@@ -2035,7 +2035,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
       setProgressPercent(null);
       setProgressMeta({ step: 1, steps: 1, estimated: false, eta: null });
       setProgressStage('Starting AI Subtitle Stream');
-      setProgressDetail('Connecting to ElevenLabs Scribe v2 transcription pipeline...');
+      setProgressDetail('Connecting to the transcription pipeline...');
 
       console.log(
         '%c[Subtitle Studio]%c Starting Generation Pipeline for Video ID: ' + videoId,
@@ -2105,7 +2105,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
 
         setProgressPercent(null);
         setProgressStage('Starting AI Subtitle Stream');
-        setProgressDetail('Connecting to ElevenLabs Scribe v2 pipeline with active session...');
+        setProgressDetail('Connecting to the transcription pipeline with active session...');
         console.log(`[Subtitle Studio] Retrying stream for new Video ID: ${videoId}`);
 
         streamRes = await fetch(`${API_BASE}/api/subtitle/generate_stream`, {
@@ -2212,7 +2212,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
 
               const totalSec = ((Date.now() - startTimer) / 1000).toFixed(2);
               console.log(
-                '%c[Subtitle Studio]%c Generated ' + finalEvents.length + ' Netflix-compliant subtitle cards with ' + score + '% compliance in ' + totalSec + 's!',
+                '%c[Subtitle Studio]%c Generated ' + finalEvents.length + ' guideline-compliant subtitle cards with ' + score + '% compliance in ' + totalSec + 's!',
                 'background: #16a34a; color: white; padding: 3px 8px; border-radius: 4px; font-weight: bold;',
                 'color: #16a34a; font-weight: bold;'
               );
@@ -2261,10 +2261,10 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
               if (finalEvents.length === 0) {
                 setProgressStage('No Dialogue Detected');
                 setProgressDetail(res.error || '0 subtitles found across recording.');
-                alert(res.error || `No Subtitles Generated: No audible dialogue was transcribed.\n\nTip: Ensure the audio has audible speech and your ElevenLabs API key / quota is active in Settings.`);
+                alert(res.error || `No Subtitles Generated: No audible dialogue was transcribed.\n\nTip: Ensure the audio has audible speech and your speech engine API key / quota is active in Settings.`);
               } else {
                 setProgressStage('Complete');
-                setProgressDetail(`All ${finalEvents.length} subtitles generated following Netflix guidelines!`);
+                setProgressDetail(`All ${finalEvents.length} subtitles generated following the subtitle guidelines!`);
               }
             } else if (data.type === 'error' || data.type === 'stream_error') {
               console.error(
@@ -2272,7 +2272,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
                 'background: #dc2626; color: white; padding: 2px 6px; border-radius: 3px; font-weight: bold;',
                 'color: #dc2626; font-weight: bold;'
               );
-              const errMsg = data.message || data.error || 'ElevenLabs transcription failed';
+              const errMsg = data.message || data.error || 'Transcription failed';
               if (
                 errMsg.toLowerCase().includes('api key') ||
                 errMsg.toLowerCase().includes('401') ||
@@ -2379,11 +2379,11 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
         setTotalErrors(data.total_errors || 0);
         setTotalWarnings(data.total_warnings || 0);
         setCpsStats(data.cps_stats || null);
-        setAutoSaveStatus('Gemini Auto-Fix Applied ✓');
+        setAutoSaveStatus('AI auto-fix applied ✓');
         setTimeout(() => setAutoSaveStatus(''), 3000);
       }
     } catch (err) {
-      console.error("Gemini fix failed:", err);
+      console.error("AI fix failed:", err);
     } finally {
       setIsFixingWithGemini(false);
     }
@@ -2617,7 +2617,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
     else document.documentElement.requestFullscreen?.().catch(() => {});
   };
   const confirmGenerate = () => {
-    if (hasEvents && prefs.confirmGenerate && !window.confirm('Generate new subtitles with ElevenLabs? This replaces the current subtitles (you can undo) and uses ElevenLabs credits.')) return;
+    if (hasEvents && prefs.confirmGenerate && !window.confirm('Generate new subtitles? This replaces the current subtitles (you can undo) and uses transcription credits.')) return;
     handleGenerate();
   };
   const exportSubs = () => { if (hasEvents) setShowExportModal(true); else flashStatus('Nothing to export yet. Generate or import subtitles first.'); };
@@ -2705,9 +2705,9 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
       id: 'tools',
       label: 'Tools',
       items: [
-        { label: 'Generate subtitles (ElevenLabs)…', icon: Sparkles, disabled: isGenerating || !(selectedFile || currentVideoId), onSelect: confirmGenerate },
+        { label: 'Generate subtitles…', icon: Sparkles, disabled: isGenerating || !(selectedFile || currentVideoId), onSelect: confirmGenerate },
         { label: 'Re-sync timings to speech…', icon: Volume2, disabled: !hasEvents || !currentVideoId, onSelect: handleAcousticSync },
-        { label: 'Fix QC issues with Gemini…', icon: Wand2, disabled: !hasEvents, onSelect: handleGeminiFix },
+        { label: 'Fix QC issues with AI…', icon: Wand2, disabled: !hasEvents, onSelect: handleGeminiFix },
         { label: 'Re-break all line breaks', icon: AlignJustify, disabled: !hasEvents, onSelect: handleRebreakAll },
         { label: 'Context…', icon: BookText, onSelect: openContext },
         { label: 'Translate subtitles…', icon: Languages, onSelect: () => openCentroid() },
@@ -2969,7 +2969,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
           }}
           translateOpen={showCentroidModal}
           contextOpen={showContextPanel}
-          contextActive={Object.keys(contextForRequest(genContext)).some((k) => !['strict', 'writing_style', 'fillers', 'stutters', 'numbers', 'profanity'].includes(k))}
+          contextActive={Object.keys(contextForRequest(genContext)).some((k) => !['strict', 'writing_style'].includes(k))}
           centroidQcCount={centroidState.qcIssues}
           position={layout.sidebar}
           showLabels={layout.sidebarLabels}
@@ -3210,13 +3210,13 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
           <div 
             onClick={() => setShowQcDrawer(true)} 
             className="flex items-center gap-1.5 cursor-pointer hover:underline"
-            title="Click to open Netflix QC Report Drawer"
+            title="Click to open the QC panel"
           >
             <div className={`w-2 h-2 rounded-none ${
               totalErrors > 0 ? 'bg-rose-500 animate-pulse' : totalWarnings > 0 ? 'bg-amber-400' : 'bg-emerald-400'
             }`} />
             <span className="font-semibold">
-              {qcUnavailable ? 'Netflix QC: unavailable (backend offline)' : `Netflix QC: ${complianceScore.toFixed(0)}%`}
+              {qcUnavailable ? 'Guideline QC: unavailable (backend offline)' : `Guideline QC: ${complianceScore.toFixed(0)}%`}
             </span>
             {!qcUnavailable && totalErrors > 0 && <span className="text-rose-400 font-bold">({totalErrors} Err)</span>}
           </div>

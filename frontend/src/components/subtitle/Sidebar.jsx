@@ -36,7 +36,7 @@ export default function Sidebar({
         id: 'generate',
         label: isGenerating ? 'Working' : 'Generate',
         icon: isGenerating ? Loader2 : Sparkles,
-        title: !canGenerate ? 'Open a video or audio file first' : isGenerating ? 'Generating subtitles…' : 'Generate subtitles with ElevenLabs Scribe',
+        title: !canGenerate ? 'Open a video or audio file first' : isGenerating ? 'Generating subtitles…' : 'Generate subtitles',
         disabled: !canGenerate || isGenerating,
         spin: isGenerating,
         accent: true,

@@ -600,7 +600,7 @@ export default function VideoPlayer({
             type="button"
             onClick={() => setShowTitleSafe(v => !v)}
             className="flex items-center gap-2 cursor-pointer"
-            title="Show the Netflix action-safe / title-safe guides"
+            title="Show the action-safe / title-safe guides"
           >
             <div className={`w-8 h-4 rounded-full p-0.5 transition-colors ${showTitleSafe ? 'bg-[var(--ss-accent)]' : 'bg-[var(--ss-line)]'}`}>
               <div className={`w-3 h-3 rounded-full bg-white transition-transform ${showTitleSafe ? 'translate-x-4' : 'translate-x-0'}`} />
