@@ -575,7 +575,8 @@ export default function CentroidModal({
               <Stat label="Warnings" value={qc.summary.warning_count} tone={qc.summary.warning_count ? 'warn' : 'good'} />
               <Stat label="Clean cues" value={`${qc.summary.clean_percentage}%`} tone="good" />
             </div>
-            {!qc.summary.ai_checked && <Notice tone="warn">The AI review didn’t complete for part of the file, so only rule-based checks are shown for it. Run QC again to retry.</Notice>}
+            {qc.centroid_error && <Notice tone="warn">Centroid’s AI review could not run this time, so only the built-in rule checks are shown. Run QC again to retry.</Notice>}
+            {!qc.summary.ai_checked && !qc.centroid_error && <Notice tone="warn">The AI review didn’t complete for part of the file, so only rule-based checks are shown for it. Run QC again to retry.</Notice>}
 
             {qcNote && <Notice tone="good">{qcNote}</Notice>}
 
@@ -600,7 +601,8 @@ export default function CentroidModal({
                         <span className="font-mono text-[11.5px] text-[var(--ss-faint)]">#{i.index} · {fmtTime(i.start)}</span>
                         <Badge tone={i.severity === 'error' ? 'danger' : 'warn'}>{i.mqm_severity}</Badge>
                         <span className="font-medium">{i.title}</span>
-                        {i.origin === 'ai' && <span className="text-[11px] text-[var(--ss-faint)]">AI review</span>}
+                        {i.category && <Badge tone="muted">{String(i.category).replace(/-/g, ' ')}</Badge>}
+                        <span className="text-[11px] text-[var(--ss-faint)]">{i.origin === 'ai' ? 'AI review' : 'Rule check'}</span>
                         {jumpId != null && onJumpToEvent && (
                           <IconButton size="sm" icon={Crosshair} label="Show this subtitle in the editor" className="ml-auto" onClick={() => onJumpToEvent(jumpId)} />
                         )}
