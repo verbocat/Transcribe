@@ -243,6 +243,85 @@ _INDIVISIBLE_COLLOCATIONS = {
 }
 
 
+_LATIN_AUXILIARIES = {
+    "am", "is", "are", "was", "were", "be", "been", "being", "do", "does", "did", "have", "has", "had",
+    "will", "would", "shall", "should", "can", "could", "may", "might", "must", "not", "n't", "never",
+    "isn't", "aren't", "wasn't", "weren't", "don't", "doesn't", "didn't", "haven't", "hasn't", "hadn't",
+    "won't", "wouldn't", "can't", "couldn't", "shouldn't", "gonna", "wanna", "gotta",
+    "i'm", "you're", "he's", "she's", "it's", "we're", "they're", "i've", "you've", "we've", "they've",
+    "i'll", "you'll", "he'll", "she'll", "we'll", "they'll", "i'd", "you'd", "he'd", "she'd", "we'd", "they'd",
+}
+
+_LATIN_RELATIVES = {"that", "who", "whom", "whose", "which", "what", "how", "why", "when", "where", "if", "than", "as"}
+
+_LATIN_FUNCTION_WORDS = (
+    _LATIN_ARTICLES | _LATIN_PRONOUNS | _LATIN_PREPOSITIONS | _LATIN_CONJUNCTIONS
+    | _LATIN_AUXILIARIES | _LATIN_RELATIVES
+)
+
+_PUNCT_STRIP = '.,!?;:।॥…—–-"”’)]'
+
+
+def _word_core(raw: str) -> str:
+    return raw.strip().lower().strip(_PUNCT_STRIP + '"“‘([-')
+
+
+def phrase_break_cost(prev_raw: str, next_raw: str) -> float:
+    """
+    Language-neutral grammar cost of cutting between two adjacent words (higher = worse).
+
+    Shared by the card splitter and the two-line breaker so both keep noun phrases
+    ("super crystal"), proper names ("Shadow World"), verb groups ("was a total failure")
+    and clauses together. A break right after punctuation is always free of these costs.
+    """
+    prev_raw = prev_raw.strip()
+    next_raw = next_raw.strip()
+    if not prev_raw or not next_raw:
+        return 0.0
+    if prev_raw[-1] in ',;:।॥—–…' or prev_raw[-1] in '.!?':
+        return 0.0
+    prev = _word_core(prev_raw)
+    nxt = _word_core(next_raw)
+    cost = 0.0
+    latin = prev_raw.isascii() and next_raw.isascii()
+
+    if latin:
+        # Proper name or title split across the break ("Shadow | World")
+        if prev_raw[:1].isupper() and next_raw[:1].isupper() and prev not in {"i"} and nxt not in {"i"}:
+            cost += 400.0
+        # Two content words in a row are almost always one noun phrase or verb + object
+        prev_fn = prev in _LATIN_FUNCTION_WORDS
+        next_fn = nxt in _LATIN_FUNCTION_WORDS
+        if not prev_fn and not next_fn:
+            cost += 220.0
+        # Auxiliary / negation / modal must stay with the verb that follows
+        if prev in _LATIN_AUXILIARIES:
+            cost += 300.0
+        # A dangling conjunction or relative at the end of a line
+        if prev in _LATIN_CONJUNCTIONS or prev in _LATIN_RELATIVES:
+            cost += 260.0
+        # Short adverb / determiner-like word stranded before its head ("still | moping")
+        if prev in {"just", "still", "really", "very", "too", "so", "all", "only", "even", "also", "always", "never", "quite", "almost"}:
+            cost += 150.0
+        # Good places to cut: right before a conjunction, relative, or preposition (clause / PP start)
+        if nxt in _LATIN_CONJUNCTIONS or nxt in _LATIN_RELATIVES:
+            cost -= 60.0
+        elif nxt in _LATIN_PREPOSITIONS and prev not in _LATIN_FUNCTION_WORDS:
+            cost -= 40.0
+    else:
+        if prev in _HINDI_CONJUNCTIONS and prev not in {"भी", "तो", "bhi", "to"}:
+            cost += 260.0
+        if nxt in _HINDI_POSTPOSITIONS or nxt in _HINDI_AUXILIARIES or nxt in {"भी", "तो", "ही", "bhi", "hi", "to"}:
+            cost += 500.0
+        if prev in _HINDI_POSTPOSITIONS:
+            cost += 120.0
+        if prev in {"नहीं", "मत", "न", "nahi", "mat"}:
+            cost += 250.0
+        if nxt in _HINDI_CONJUNCTIONS:
+            cost -= 60.0
+    return cost
+
+
 def filter_diarization_flickers(words: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
     Temporal Diarization Glitch Filter:
@@ -369,6 +448,9 @@ def find_best_split_point(tokens: List[Dict[str, Any]], cpl_limit: int = 42) -> 
             score -= 90.0
         if prev_clean in _LATIN_ARTICLES or prev_clean in _LATIN_PRONOUNS:
             score -= 90.0
+
+        # Phrase integrity: noun phrases, proper names, verb groups, dangling conjunctions
+        score -= phrase_break_cost(prev_txt, next_txt) * 0.5
 
         # High reward for punctuation (comma, semicolon, dash, danda)
         if any(prev_txt.endswith(c) for c in (',', ';', ':', '—', '–', '।', '॥')):
@@ -943,13 +1025,16 @@ def optimize_language_line_breaks(
             score += 300.0
         if first_lower in _HINDI_AUXILIARIES:
             score += 500.0
-        if last_upper in _HINDI_AUXILIARIES and not (last_upper_raw.endswith(profile.sentence_endings) or last_upper_raw.endswith(profile.clause_delimiters)):
+        if last_upper in _HINDI_AUXILIARIES and first_lower not in _HINDI_CONJUNCTIONS and not (last_upper_raw.endswith(profile.sentence_endings) or last_upper_raw.endswith(profile.clause_delimiters)):
             score += 400.0
 
         # Number + Unit protection
         clean_num = last_upper_raw.replace(',', '').replace('.', '').replace('$', '').replace('€', '').replace('₹', '')
         if clean_num.isdigit() and first_lower in _COMMON_UNITS:
             score += 400.0
+
+        # Phrase integrity: never cut a noun phrase, proper name or verb group when a better break exists
+        score += phrase_break_cost(last_upper_raw, first_lower_raw)
 
         # Strict orphan penalty on line 2 (<= 5 chars or single word)
         if lower_len <= 5 or len(words[split_idx:]) == 1:

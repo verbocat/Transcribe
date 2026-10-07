@@ -2195,8 +2195,17 @@ async def centroid_analyze(payload: dict):
 
 @app.post("/api/centroid/qc")
 async def centroid_qc(payload: dict):
-    """Run Centroid linguistic QC on source/target cue pairs; returns issues with suggested fixes."""
+    """
+    Subtitle QC for source/target cue pairs: Centroid's AI review merged with local rule checks.
+
+    Response (unchanged shape, additive fields only):
+      summary: {mqm_score, error_count, warning_count, clean_percentage, ai_checked, local_issue_count, ...}
+      issues:  [{index (1-based), start, end, category, severity "error"|"warning", mqm_severity, title, description,
+                 source, target, suggestion (full replacement text for the cue, or null), origin "ai"|"local"}]
+      centroid_error: present only when Centroid failed; local checks are still returned and ai_checked is false.
+    """
     from app import centroid_client
+    from app.subtitle_qc import run_local_qc, merge_qc
     cues = payload.get("cues") or []
     if not cues or not payload.get("target_lang"):
         raise HTTPException(status_code=400, detail="Provide 'cues' (source + target) and 'target_lang'.")
@@ -2205,7 +2214,30 @@ async def centroid_qc(payload: dict):
         {"start": c.get("start"), "end": c.get("end"), "source": c.get("source", ""), "target": c.get("target", "")}
         for c in cues
     ]
-    return await centroid_client.post("/subtitles/qc", body)
+    local = run_local_qc(
+        body["cues"], payload["target_lang"], payload.get("source_lang"),
+        payload.get("glossary"), payload.get("constraints"),
+    )
+    centroid, err = None, None
+    try:
+        centroid = await centroid_client.post("/subtitles/qc", body)
+    except HTTPException as e:
+        err = str(e.detail)
+    return merge_qc(centroid, local, len(cues), err)
+
+
+@app.post("/api/subtitle/qc")
+async def subtitle_qc_local(payload: dict):
+    """Local-only QC (no Centroid call): same response shape as /api/centroid/qc."""
+    from app.subtitle_qc import run_local_qc, merge_qc
+    cues = payload.get("cues") or []
+    if not cues:
+        raise HTTPException(status_code=400, detail="Provide 'cues'.")
+    local = run_local_qc(
+        cues, payload.get("target_lang") or payload.get("language") or "en", payload.get("source_lang"),
+        payload.get("glossary"), payload.get("constraints"),
+    )
+    return merge_qc(None, local, len(cues))
 
 
 @app.post("/api/subtitle/lint")
