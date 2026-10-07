@@ -46,6 +46,7 @@ import { extractAudioFromMedia, computeWaveformPeaks } from '../../utils/audioEx
 import { xhrPostForm, createRateMeter } from '../../utils/xhrUpload';
 import MediaProgress, { GenerateProgress } from './MediaProgress';
 import ContextPanel, { loadContext, saveContext, contextForRequest } from './ContextPanel';
+import { draftKey, buildDraft, readDraft } from './draftStorage';
 
 function formatTime(seconds) {
   if (isNaN(seconds) || seconds == null) return "00:00.000";
@@ -924,22 +925,16 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
   // One stable timer that reads the latest data, so continuous editing no longer postpones the save.
   const [lastDraftSavedAt, setLastDraftSavedAt] = useState(null);
   const autosaveDataRef = useRef(null);
-  autosaveDataRef.current = { events, complianceScore, totalErrors, totalWarnings, selectedFile, language, contentType, cplLimit, cpsLimit, frameRate, sdhMode };
+  autosaveDataRef.current = { events, tracks, activeTrack, sourceTrack, complianceScore, totalErrors, totalWarnings, selectedFile, language, contentType, cplLimit, cpsLimit, frameRate, sdhMode };
   const lastSavedEventsRef = useRef(null);
+  const lastSavedTracksRef = useRef(null);
   const saveDraftNow = useCallback(() => {
     const d = autosaveDataRef.current;
     if (!d || !d.events || d.events.length === 0) return false;
     try {
-      const fileId = d.selectedFile?.name || 'draft_subtitle';
-      localStorage.setItem(`karya_subtitle_autosave_${fileId}`, JSON.stringify({
-        events: d.events,
-        complianceScore: d.complianceScore,
-        totalErrors: d.totalErrors,
-        totalWarnings: d.totalWarnings,
-        settings: { language: d.language, contentType: d.contentType, cplLimit: d.cplLimit, cpsLimit: d.cpsLimit, frameRate: d.frameRate, sdhMode: d.sdhMode },
-        timestamp: new Date().toISOString()
-      }));
+      localStorage.setItem(draftKey(d.selectedFile?.name), JSON.stringify(buildDraft(d)));
       lastSavedEventsRef.current = d.events;
+      lastSavedTracksRef.current = d.tracks;
       setLastDraftSavedAt(new Date());
       return true;
     } catch (e) {
@@ -951,12 +946,12 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
     if (!prefs.autosaveSec) return undefined;
     const interval = setInterval(() => {
       const d = autosaveDataRef.current;
-      if (!d || !d.events || d.events.length === 0 || d.events === lastSavedEventsRef.current) return;
+      if (!d || !d.events || d.events.length === 0 || d.events === lastSavedEventsRef.current && d.tracks === lastSavedTracksRef.current) return;
       saveDraftNow();
     }, prefs.autosaveSec * 1000);
     return () => clearInterval(interval);
   }, [prefs.autosaveSec, saveDraftNow]);
-  const hasUnsavedDraftChanges = events.length > 0 && events !== lastSavedEventsRef.current;
+  const hasUnsavedDraftChanges = events.length > 0 && (events !== lastSavedEventsRef.current || tracks !== lastSavedTracksRef.current);
 
   // Workspace shortcuts (handlers are read from a ref so the listener is attached once)
   const shortcutRef = useRef({});
@@ -1563,7 +1558,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
       setActiveEventId(null);
 
       // Check if previous autosaved draft exists
-      const saved = localStorage.getItem(`karya_subtitle_autosave_${file.name}`);
+      const saved = localStorage.getItem(draftKey(file.name));
       if (saved) {
         try {
           const data = JSON.parse(saved);
@@ -2925,7 +2920,11 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
           <div className="flex items-center gap-2">
             <button
               onClick={() => {
-                const restoredEvents = pendingDraft.events || [];
+                const restored = readDraft(pendingDraft);
+                const restoredEvents = restored.events;
+                setTracks(restored.tracks);
+                setActiveTrack(restored.activeTrack);
+                setSourceTrack(restored.sourceTrack);
                 setEvents(restoredEvents);
                 setComplianceScore(pendingDraft.complianceScore || 100);
                 setTotalErrors(pendingDraft.totalErrors || 0);
