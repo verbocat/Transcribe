@@ -62,6 +62,8 @@ function buildSourceTextMap(events, sourceEvents) {
 }
 
 const GRID = 'grid grid-cols-[28px_34px_100px_100px_52px_1fr_56px_52px]';
+// Translation review: one time column (in / out stacked), then original and translation side by side
+const GRID_COMPARE = 'grid grid-cols-[24px_28px_96px_minmax(0,1fr)_minmax(0,1fr)_40px_44px] gap-x-2';
 
 // Speaker → color strip for the left side and the timeline
 const SPEAKER_STRIP_COLORS = ['#10b981', '#f59e0b', '#8b5cf6', '#3b82f6', '#ec4899', 'var(--kt-accent)'];
@@ -161,23 +163,14 @@ function ToolButton({ title, onClick, children, danger = false, disabled = false
   );
 }
 
-function LangTag({ children, accent }) {
-  return (
-    <span className={`shrink-0 mt-[3px] px-1 rounded text-[9px] font-bold uppercase tracking-wider leading-[14px] border ${
-      accent ? 'border-[var(--ss-accent)]/40 text-[var(--ss-accent)] bg-[var(--ss-accent)]/10' : 'border-[var(--ss-line)] text-[var(--ss-faint)] bg-[var(--ss-raised)]'
-    }`}>
-      {children}
-    </span>
-  );
-}
-
 /** One cue. Memoized: re-renders only when its own data or state flags change. */
 const SubtitleRow = memo(function SubtitleRow({
   ev, pos, isActive, isPlaying, isSelected, prevEnd, nextStart,
   cpsLimit, cplLimit, minDuration, maxDuration, frameRate,
   currentTime, availableSpeakers, focusOnActivate, actions,
-  sourceText, sourceLabel, targetLabel,
+  sourceText,
 }) {
+  const comparing = sourceText !== undefined;
   const id = idOf(ev);
   const m = getEventMetrics(ev, cpsLimit, cplLimit, minDuration, maxDuration);
   const textareaRef = useRef(null);
@@ -238,7 +231,7 @@ const SubtitleRow = memo(function SubtitleRow({
 
       <div
         onClick={() => actions.activate(id, m.start, false)}
-        className={`${GRID} items-start px-2 py-2 text-xs cursor-pointer group`}
+        className={`${comparing ? GRID_COMPARE : GRID} items-start px-2 ${comparing ? 'py-1.5' : 'py-2'} text-xs cursor-pointer group`}
       >
         <div className="flex items-center justify-center pl-1 pt-1" onClick={(e) => e.stopPropagation()}>
           <input
@@ -254,51 +247,67 @@ const SubtitleRow = memo(function SubtitleRow({
           {pos + 1}
         </div>
 
-        {isActive ? (
-          <div onClick={(e) => e.stopPropagation()}>
-            <TimeInput
-              label="Start time"
-              value={m.start}
-              invalid={m.hasDurErr}
-              onCommit={(s) => { if (s < 0 || s >= m.end) return false; actions.timeChange(id, s, m.end); return true; }}
-            />
+        {comparing ? (
+          <div className="flex flex-col gap-0.5" onClick={isActive ? (e) => e.stopPropagation() : undefined}>
+            {isActive ? (
+              <>
+                <TimeInput label="Start time" value={m.start} invalid={m.hasDurErr}
+                  onCommit={(s) => { if (s < 0 || s >= m.end) return false; actions.timeChange(id, s, m.end); return true; }} />
+                <TimeInput label="End time" value={m.end} invalid={m.hasDurErr}
+                  onCommit={(e) => { if (e <= m.start) return false; actions.timeChange(id, m.start, e); return true; }} />
+              </>
+            ) : (
+              <>
+                <span className="font-mono text-[11px] leading-4 tabular-nums text-slate-300">{toSMPTE(m.start)}</span>
+                <span className={`font-mono text-[11px] leading-4 tabular-nums ${m.hasDurErr ? 'text-rose-400' : 'text-slate-500'}`}>{toSMPTE(m.end)}</span>
+              </>
+            )}
           </div>
         ) : (
-          <div className="font-mono text-[11px] tabular-nums pt-0.5 text-slate-300">{toSMPTE(m.start)}</div>
-        )}
-
-        {isActive ? (
-          <div onClick={(e) => e.stopPropagation()}>
-            <TimeInput
-              label="End time"
-              value={m.end}
-              invalid={m.hasDurErr}
-              onCommit={(e) => { if (e <= m.start) return false; actions.timeChange(id, m.start, e); return true; }}
-            />
-          </div>
-        ) : (
-          <div className={`font-mono text-[11px] tabular-nums pt-0.5 ${m.hasDurErr ? 'text-rose-400' : 'text-slate-400'}`}>{toSMPTE(m.end)}</div>
-        )}
-
-        <div className={`font-mono text-[11px] tabular-nums pt-0.5 ${m.hasDurErr ? 'text-rose-400 font-bold' : 'text-slate-500'}`}>
-          {m.dur.toFixed(2)}s
-        </div>
-
-        {/* Text: plain when idle, the editor itself when selected (never shown twice).
-            While a translation is shown, the source-language text sits above it under the same timestamp. */}
-        <div className="min-w-0">
-        {sourceText !== undefined && (
-          <div className="pr-2 mb-1 flex items-start gap-1.5" title={`${sourceLabel} (original)`}>
-            <LangTag>{sourceLabel}</LangTag>
-            <div className="min-w-0 ss-script text-[13px] leading-[1.45] whitespace-pre-wrap break-words text-[var(--ss-muted)]">
-              {sourceText === null ? <span className="italic text-slate-600">No original subtitle at this time</span> : (stripTags(sourceText) || <span className="italic text-slate-600">Empty subtitle</span>)}
+          <>
+          {isActive ? (
+            <div onClick={(e) => e.stopPropagation()}>
+              <TimeInput
+                label="Start time"
+                value={m.start}
+                invalid={m.hasDurErr}
+                onCommit={(s) => { if (s < 0 || s >= m.end) return false; actions.timeChange(id, s, m.end); return true; }}
+              />
             </div>
+          ) : (
+            <div className="font-mono text-[11px] tabular-nums pt-0.5 text-slate-300">{toSMPTE(m.start)}</div>
+          )}
+
+          {isActive ? (
+            <div onClick={(e) => e.stopPropagation()}>
+              <TimeInput
+                label="End time"
+                value={m.end}
+                invalid={m.hasDurErr}
+                onCommit={(e) => { if (e <= m.start) return false; actions.timeChange(id, m.start, e); return true; }}
+              />
+            </div>
+          ) : (
+            <div className={`font-mono text-[11px] tabular-nums pt-0.5 ${m.hasDurErr ? 'text-rose-400' : 'text-slate-400'}`}>{toSMPTE(m.end)}</div>
+          )}
+
+          <div className={`font-mono text-[11px] tabular-nums pt-0.5 ${m.hasDurErr ? 'text-rose-400 font-bold' : 'text-slate-500'}`}>
+            {m.dur.toFixed(2)}s
+          </div>
+
+          </>
+        )}
+
+        {/* While a translation is shown, the original-language text sits in its own column, read-only */}
+        {comparing && (
+          <div className="min-w-0 pt-px ss-script text-[13px] leading-[1.45] whitespace-pre-wrap break-words text-[var(--ss-muted)]">
+            {sourceText === null ? <span className="italic text-slate-600">No original here</span> : (stripTags(sourceText) || <span className="italic text-slate-600">Empty</span>)}
           </div>
         )}
-        <div className={sourceText !== undefined ? 'flex items-start gap-1.5' : ''}>
-        {sourceText !== undefined && <LangTag accent>{targetLabel}</LangTag>}
+
+        {/* Text: plain when idle, the editor itself when selected (never shown twice) */}
         {isActive ? (
-          <div className="pr-2 flex-1 min-w-0" onClick={(e) => e.stopPropagation()}>
+          <div className="pr-2 min-w-0" onClick={(e) => e.stopPropagation()}>
             <textarea
               ref={textareaRef}
               rows={1}
@@ -313,13 +322,13 @@ const SubtitleRow = memo(function SubtitleRow({
               }}
               placeholder="Type subtitle text…"
               aria-label="Subtitle text"
-              className="w-full -my-0.5 bg-[var(--ss-panel)] border border-[var(--ss-line)] focus:border-[var(--ss-accent)] rounded-md px-1.5 py-1 text-white ss-script text-[14px] leading-[1.45] focus:outline-none resize-none overflow-hidden font-medium placeholder-slate-500"
+              className={`w-full -my-0.5 bg-[var(--ss-panel)] border border-[var(--ss-line)] focus:border-[var(--ss-accent)] rounded-md px-1.5 py-1 text-white ss-script ${comparing ? 'text-[13px]' : 'text-[14px]'} leading-[1.45] focus:outline-none resize-none overflow-hidden font-medium placeholder-slate-500`}
             />
           </div>
         ) : (
           <div
             onClick={(e) => { e.stopPropagation(); actions.activate(id, m.start, true); }}
-            className={`pr-2 flex-1 min-w-0 ss-script text-[14px] leading-[1.45] whitespace-pre-wrap break-words cursor-text text-[var(--ss-text)] ${
+            className={`pr-2 min-w-0 ss-script ${comparing ? 'text-[13px]' : 'text-[14px]'} leading-[1.45] whitespace-pre-wrap break-words cursor-text text-[var(--ss-text)] ${
               m.hasCplErr ? 'underline decoration-wavy decoration-rose-400/70 underline-offset-2' : ''
             }`}
             title="Click to edit"
@@ -327,8 +336,6 @@ const SubtitleRow = memo(function SubtitleRow({
             {stripTags(ev.text) || <span className="italic text-slate-600">Empty subtitle</span>}
           </div>
         )}
-        </div>
-        </div>
 
         <div className="flex items-start justify-end pr-1 pt-0.5">
           <CpsBadge cps={m.cps} cpsLimit={cpsLimit} />
@@ -619,7 +626,7 @@ export default function SubtitleTablePanel({
       </div>
 
       {/* ── Column headers ── */}
-      <div className={`${GRID} items-center px-2 py-1.5 text-[10px] font-bold text-slate-500 uppercase tracking-wider border-b border-[var(--ss-line)] bg-[var(--ss-bg)] shrink-0 select-none`}>
+      <div className={`${comparing ? GRID_COMPARE : GRID} items-center px-2 py-1.5 text-[10px] font-bold text-slate-500 uppercase tracking-wider border-b border-[var(--ss-line)] bg-[var(--ss-bg)] shrink-0 select-none`}>
         <div className="flex items-center justify-center">
           <input
             type="checkbox"
@@ -631,10 +638,20 @@ export default function SubtitleTablePanel({
           />
         </div>
         <div className="text-center">#</div>
-        <div>Start</div>
-        <div>End</div>
-        <div>Dur</div>
-        <div>{comparing ? `${langName(sourceLang)} original · ${langName(targetLang)} translation` : 'Text'}</div>
+        {comparing ? (
+          <>
+            <div>Time</div>
+            <div className="truncate" title={`${langName(sourceLang)} (original)`}>{langName(sourceLang)}</div>
+            <div className="truncate text-[var(--ss-accent)]" title={`${langName(targetLang)} (translation, editable)`}>{langName(targetLang)}</div>
+          </>
+        ) : (
+          <>
+            <div>Start</div>
+            <div>End</div>
+            <div>Dur</div>
+            <div>Text</div>
+          </>
+        )}
         <div className="text-right pr-1">CPS</div>
         <div />
       </div>
@@ -680,8 +697,6 @@ export default function SubtitleTablePanel({
                 focusOnActivate={focusOnActivate}
                 actions={actions}
                 sourceText={comparing ? sourceTextById.get(id) : undefined}
-                sourceLabel={sourceLang?.toUpperCase()}
-                targetLabel={targetLang?.toUpperCase()}
               />
             );
           })
