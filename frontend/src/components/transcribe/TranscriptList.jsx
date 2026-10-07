@@ -67,7 +67,7 @@ function SegmentRow({ translated, seg, isLast, isActive, color, speakerNames, on
       onClick={() => onActivate(seg.segment_id)}
     >
       {/* Index + play */}
-      <div className="flex items-center gap-2">
+      <div className="ts-col-play">
         <button
           type="button"
           className="ts-playbtn"
@@ -77,12 +77,12 @@ function SegmentRow({ translated, seg, isLast, isActive, color, speakerNames, on
         >
           <Play size={12} fill="currentColor" style={{ marginLeft: 1 }} />
         </button>
-        <span className="ts-mono" style={{ color: 'var(--ts-faint)', fontSize: 12 }}>{seg.segment_id}</span>
+        <span className="ts-mono ts-idx">{seg.segment_id}</span>
       </div>
 
       {/* Time */}
-      <div className="flex flex-col gap-1.5">
-        <div className="flex items-center gap-1.5">
+      <div className="ts-col-time">
+        <div className="flex items-center gap-1">
           <input
             type="number" step="0.05" min="0" className="ts-time" data-bad={badTime}
             value={Number(seg.start_time.toFixed(3))} aria-label="Start time in seconds"
@@ -97,14 +97,14 @@ function SegmentRow({ translated, seg, isLast, isActive, color, speakerNames, on
             onChange={(e) => onField(seg.segment_id, 'end_time', parseFloat(e.target.value) || 0)}
           />
         </div>
-        <span className="ts-mono" style={{ color: badTime || duration > 20 || duration < 0.5 ? 'var(--ts-danger)' : 'var(--ts-faint)', fontSize: 12 }}>
+        <span className="ts-mono ts-stamp" data-warn={badTime || duration > 20 || duration < 0.5}>
           {formatStamp(seg.start_time)} · {badTime ? 'invalid' : `${duration.toFixed(2)}s`}
         </span>
       </div>
 
       {/* Speaker + gender */}
-      <div className="ts-col-speaker flex flex-col gap-1.5" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center gap-2">
+      <div className="ts-col-speaker" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center gap-1.5">
           <span className="ts-spkdot" style={{ background: color }} />
           <select
             className="ts-field ts-field-sm flex-1" value={seg.speaker}
@@ -115,7 +115,7 @@ function SegmentRow({ translated, seg, isLast, isActive, color, speakerNames, on
             <option value={`Speaker ${speakerNames.length + 1}`}>+ New speaker</option>
           </select>
         </div>
-        <div className="ts-seg" role="group" aria-label="Gender" style={{ alignSelf: 'flex-start' }}>
+        <div className="ts-seg" role="group" aria-label="Gender">
           {GENDERS.map((g) => (
             <button
               key={g.value} type="button" aria-pressed={seg.gender === g.value} title={g.value}
@@ -127,14 +127,12 @@ function SegmentRow({ translated, seg, isLast, isActive, color, speakerNames, on
         </div>
       </div>
 
-      {/* Text */}
-      <div className="ts-col-text min-w-0" onClick={(e) => e.stopPropagation()}>
-        <div style={{ paddingTop: 6 }}>
-          <AutoText value={seg.transcript || ''} onChange={(v) => onField(seg.segment_id, 'transcript', v)} />
-        </div>
+      {/* Source and translation, aligned side by side (stacked when narrow) */}
+      <div className="ts-col-text min-w-0" data-has-translation={translated != null} onClick={(e) => e.stopPropagation()}>
+        <AutoText value={seg.transcript || ''} onChange={(v) => onField(seg.segment_id, 'transcript', v)} />
         {translated != null && <div className="ts-translation">{translated}</div>}
         {(lowWords.length > 0 || errors.length > 0) && (
-          <div className="flex flex-wrap gap-1.5 mt-2.5">
+          <div className="ts-chips">
             {lowWords.map((w, i) => (
               <button
                 key={`w${i}`} type="button"
@@ -330,7 +328,7 @@ export default function TranscriptList({
         </button>
       </div>
 
-      <div ref={listRef} className="flex-1 overflow-y-auto">
+      <div ref={listRef} className="ts-list flex-1 overflow-y-auto">
         {visible.length === 0 ? (
           <p style={{ color: 'var(--ts-muted)', padding: 48, textAlign: 'center' }}>No lines match the current filters.</p>
         ) : (
@@ -353,7 +351,7 @@ export default function TranscriptList({
             />
           ))
         )}
-        <div style={{ height: 40 }} />
+        <div style={{ height: 24 }} />
       </div>
     </section>
   );
