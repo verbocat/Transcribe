@@ -7,8 +7,7 @@ import { Button, IconButton, Select, TextInput, Switch, Badge } from './ui/contr
  * Context for the transcript. Speech recognition does not know who is speaking or what the video is about, so it mishears
  * names and terms. The context is used three ways, in this order of strength:
  *   1. key terms and names are sent to the speech engine itself (it hears them correctly),
- *   2. "often misheard -> correct" pairs are applied exactly,
- *   3. an AI proofreading pass fixes real recognition mistakes. It never rewrites, so natural spoken language stays as spoken.
+ *   2. an AI proofreading pass fixes real recognition mistakes. It never rewrites, so natural spoken language stays as spoken.
  * Saved per video file and sent automatically with every Generate.
  */
 
@@ -25,7 +24,7 @@ const WRITING_STYLES = [
 
 export const EMPTY_CONTEXT = {
   title: '', content_type: '', topic: '', summary: '', region: '',
-  key_terms: '', corrections: '',
+  key_terms: '',
   writing_style: 'spoken', fillers: 'keep', stutters: 'keep', numbers: 'guide', profanity: 'keep',
   dos: '', donts: '', notes: '', strict: true,
 };
@@ -132,9 +131,8 @@ export default function ContextPanel({
       ['title', 'topic', 'summary', 'region'].forEach((k) => { if (!String(next[k]).trim() && d[k]) next[k] = d[k]; });
       if (!next.content_type && d.content_type) next.content_type = d.content_type;
       next.key_terms = mergeLines(next.key_terms, d.key_terms);
-      next.corrections = mergeLines(next.corrections, d.corrections);
       onChange(next);
-      setNote({ tone: 'good', text: `Centroid read ${d.lines_read} of ${d.lines_total} subtitles and drafted the context: ${(d.key_terms || []).length} key terms, ${(d.corrections || []).length} spelling fixes. Please check them. They are applied as rules.` });
+      setNote({ tone: 'good', text: `Centroid read ${d.lines_read} of ${d.lines_total} subtitles and drafted the context: ${(d.key_terms || []).length} key terms. Please check them.` });
     } catch (e) {
       setNote({ tone: 'danger', text: e.message });
     } finally {
@@ -151,7 +149,7 @@ export default function ContextPanel({
         events: events.map((e) => ({ id: e.id ?? e.event_id, text: e.text })),
         context: contextForRequest(ctx), glossary: glossaryTerms, language, cpl_limit: cplLimit, max_lines: maxLines,
       });
-      if (d.ai_error) setNote({ tone: 'warn', text: `The AI proofreading could not run (${d.ai_error}). Only your exact “misheard → correct” fixes were applied.` });
+      if (d.ai_error) setNote({ tone: 'warn', text: `The AI proofreading could not run (${d.ai_error}). No changes were made.` });
       if (!d.fixes.length) {
         if (!d.ai_error) setNote({ tone: 'good', text: 'No recognition mistakes found. The subtitles already match your context.' });
         return;
@@ -214,10 +212,6 @@ export default function ContextPanel({
             <textarea rows={4} className={`${AREA} font-mono`} value={ctx.key_terms} onChange={(e) => patch('key_terms', e.target.value)} placeholder={'One per line.\nEldrador\nGanadore\nSuper Crystal'} />
           </Field>
           <p className="mt-1 mb-3 text-[11.5px] text-[var(--ss-faint)]">These are sent to the speech engine, so it hears them correctly in the first place{glossaryTerms.length ? `. Your ${glossaryTerms.length} glossary terms are included too.` : '.'}</p>
-          <Field label="Often misheard: wrong spelling => correct spelling">
-            <textarea rows={4} className={`${AREA} font-mono`} value={ctx.corrections} onChange={(e) => patch('corrections', e.target.value)} placeholder={'One per line.\nEl Rador => Eldrador\nGana door => Ganadore'} />
-          </Field>
-          <p className="mt-1 text-[11.5px] text-[var(--ss-faint)]">Applied exactly, every time, to whole words only.</p>
         </Group>
 
         <Group title="How to write it" hint={WRITING_STYLES.find((w) => w.value === ctx.writing_style)?.label} defaultOpen>

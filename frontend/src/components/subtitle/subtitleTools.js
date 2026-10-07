@@ -251,3 +251,16 @@ export function replaceInEvents(events, find, replacement, opts = {}) {
   });
   return result(next, changed);
 }
+
+/** Guideline rules a one-click QC fix can repair by re-breaking the lines. */
+export const QC_REBREAK_RULES = new Set([
+  'NF-CPL', 'NF-MAX-LINES', 'NF-LINE-BREAK', 'NF-ORPHAN',
+  'NF-LINE-BREAK-ARTICLE', 'NF-LINE-BREAK-PRONOUN', 'NF-LINE-BREAK-TITLE', 'NF-LINE-BREAK-POSTPOSITION', 'NF-LINE-BREAK-NUMBER',
+]);
+
+/** Can the quality check repair this guideline rule with one click? */
+export function isQcFixable(ruleId) {
+  const r = String(ruleId || '').toUpperCase();
+  return r === 'NF-DURATION-SHORT' || r.startsWith('NF-CPS') || r.startsWith('NF-GAP') || r === 'NF-OVERLAP'
+    || r === 'NF-PUNCT-SPACE' || r === 'NF-ELLIPSIS' || QC_REBREAK_RULES.has(r);
+}
