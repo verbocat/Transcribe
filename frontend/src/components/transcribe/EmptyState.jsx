@@ -1,71 +1,67 @@
 import React, { useState } from 'react';
-import { UploadCloud, Sparkles, Loader2, Users, Mic2, ShieldCheck } from 'lucide-react';
+import { UploadCloud, Sparkles, Loader2 } from 'lucide-react';
+import { LANGUAGES, SCRIPTS } from './TopBar';
 
-export default function EmptyState({ filename, isExtractingAudio, extractionNotice, onPickFile, onDropFile, onTranscribe, onOpenProjects, video }) {
+/**
+ * Pre-transcription screen: one centered card. Empty, it is a drop zone; once media is loaded it becomes a
+ * compact summary with the language choice and a single Start button.
+ */
+export default function EmptyState({
+  filename, isExtractingAudio, extractionNotice, onDropFile, onTranscribe, onOpenProjects, video,
+  language, setLanguage, script, setScript,
+}) {
   const [dragging, setDragging] = useState(false);
+  const ready = !!filename && !isExtractingAudio;
+  const drop = {
+    onDragOver: (e) => { e.preventDefault(); setDragging(true); },
+    onDragLeave: () => setDragging(false),
+    onDrop: (e) => { e.preventDefault(); setDragging(false); const f = e.dataTransfer.files?.[0]; if (f) onDropFile(f); },
+  };
+  const card = {
+    width: '100%', maxWidth: 440, borderRadius: 20, background: 'var(--ts-panel)', transition: 'border-color 0.15s, background 0.15s',
+    border: `1px ${filename || isExtractingAudio ? 'solid' : 'dashed'} ${dragging ? 'var(--ts-accent)' : 'var(--ts-line)'}`,
+  };
 
   return (
-    <div className="flex-1 flex items-center justify-center p-8 overflow-y-auto">
-      <div className="w-full" style={{ maxWidth: 640 }}>
-        {video && <div style={{ marginBottom: 16, maxWidth: 520, marginLeft: 'auto', marginRight: 'auto' }}>{video}<p style={{ color: 'var(--ts-faint)', fontSize: 12, marginTop: 8, textAlign: 'center' }}>Preview follows the player below. Use it to check the video before transcribing.</p></div>}
-        <label
-          htmlFor="ts-media-input"
-          onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
-          onDragLeave={() => setDragging(false)}
-          onDrop={(e) => { e.preventDefault(); setDragging(false); const f = e.dataTransfer.files?.[0]; if (f) onDropFile(f); }}
-          className="flex flex-col items-center text-center"
-          style={{
-            cursor: 'pointer', padding: '48px 32px', borderRadius: 16, transition: 'all 0.15s',
-            border: `1.5px dashed ${dragging ? 'var(--ts-accent)' : 'var(--ts-line)'}`,
-            background: dragging ? 'var(--ts-selected)' : 'var(--ts-panel)',
-          }}
-        >
-          {isExtractingAudio ? (
-            <Loader2 size={36} className="animate-spin" style={{ color: 'var(--ts-accent)' }} />
-          ) : (
-            <UploadCloud size={36} style={{ color: 'var(--ts-accent)' }} />
-          )}
-          <h1 style={{ fontSize: 20, fontWeight: 600, marginTop: 16 }}>
-            {filename ? filename : 'Drop a video or audio file'}
-          </h1>
-          <p style={{ color: 'var(--ts-muted)', marginTop: 6 }}>
-            {isExtractingAudio
-              ? extractionNotice || 'Preparing audio'
-              : filename
-              ? 'Media is ready. Choose the language above, then start.'
-              : 'MP4, MKV, MOV, WAV, MP3, M4A, FLAC and more. Or click to browse.'}
-          </p>
+    <div className="flex-1 flex flex-col items-center justify-center p-6 overflow-y-auto" {...drop}>
+      {!filename && !isExtractingAudio ? (
+        <label htmlFor="ts-media-input" className="flex flex-col items-center text-center" style={{ ...card, cursor: 'pointer', padding: '56px 32px', background: dragging ? 'var(--ts-selected)' : card.background }}>
+          <UploadCloud size={32} strokeWidth={1.5} style={{ color: 'var(--ts-accent)' }} />
+          <span style={{ fontSize: 18, fontWeight: 600, marginTop: 14 }}>Drop audio or video</span>
+          <span style={{ color: 'var(--ts-muted)', marginTop: 4 }}>or click to browse</span>
         </label>
-
-        {filename && !isExtractingAudio && (
-          <div className="flex justify-center mt-5">
-            <button type="button" className="ts-btn ts-btn-primary" style={{ height: 40, padding: '0 20px', fontSize: 14 }} onClick={onTranscribe}>
-              <Sparkles size={16} /> Start transcription
-            </button>
-          </div>
-        )}
-
-        <div className="grid grid-cols-3 gap-3 mt-8">
-          {[
-            [Users, 'Every speaker separate', 'Each voice gets its own line and label, never merged.'],
-            [Mic2, 'Gender detected', 'Set per line, correctable for a whole speaker at once.'],
-            [ShieldCheck, 'Checked against Karya rules', 'Live quality score as you edit.'],
-          ].map(([Icon, title, text]) => (
-            <div key={title} style={{ background: 'var(--ts-panel)', border: '1px solid var(--ts-line)', borderRadius: 12, padding: 14 }}>
-              <Icon size={16} style={{ color: 'var(--ts-accent)' }} />
-              <div style={{ fontWeight: 600, marginTop: 8 }}>{title}</div>
-              <div style={{ color: 'var(--ts-muted)', fontSize: 12, marginTop: 2, lineHeight: 1.5 }}>{text}</div>
+      ) : (
+        <div style={{ ...card, padding: 20 }}>
+          <div className="flex items-center gap-4">
+            <div style={{ width: 112, flex: 'none' }}>
+              {video || <div style={{ aspectRatio: '16 / 9', borderRadius: 10, background: 'var(--ts-raised)' }} />}
             </div>
-          ))}
-        </div>
+            <div className="min-w-0" style={{ flex: 1 }}>
+              <div title={filename} style={{ fontWeight: 600, fontSize: 14, lineHeight: 1.35, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', wordBreak: 'break-word' }}>{filename}</div>
+              {isExtractingAudio
+                ? <div className="flex items-center gap-1.5" style={{ color: 'var(--ts-muted)', marginTop: 4 }}><Loader2 size={12} className="animate-spin" /> {extractionNotice || 'Preparing audio'}</div>
+                : <label htmlFor="ts-media-input" style={{ color: 'var(--ts-accent)', cursor: 'pointer', marginTop: 4, display: 'inline-block' }}>Change</label>}
+            </div>
+          </div>
 
-        <p className="text-center mt-6" style={{ color: 'var(--ts-muted)' }}>
-          Already transcribed something?{' '}
-          <button type="button" onClick={onOpenProjects} style={{ color: 'var(--ts-accent)', background: 'none', border: 0, textDecoration: 'underline' }}>
-            Open a saved project
+          <div className="grid grid-cols-2 gap-2" style={{ marginTop: 20 }}>
+            <select className="ts-field" value={language} onChange={(e) => setLanguage(e.target.value)} aria-label="Language" disabled={!ready} style={{ width: '100%' }}>
+              {LANGUAGES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            </select>
+            <select className="ts-field" value={script} onChange={(e) => setScript(e.target.value)} aria-label="Script" disabled={!ready} style={{ width: '100%' }}>
+              {SCRIPTS.map(([v, l]) => <option key={v} value={v}>Script: {l}</option>)}
+            </select>
+          </div>
+
+          <button type="button" className="ts-btn ts-btn-primary" disabled={!ready} onClick={onTranscribe} style={{ width: '100%', height: 42, fontSize: 14, marginTop: 12 }}>
+            <Sparkles size={16} /> Start transcription
           </button>
-        </p>
-      </div>
+        </div>
+      )}
+
+      <button type="button" onClick={onOpenProjects} style={{ color: 'var(--ts-muted)', background: 'none', border: 0, marginTop: 20 }}>
+        Open saved project
+      </button>
     </div>
   );
 }
