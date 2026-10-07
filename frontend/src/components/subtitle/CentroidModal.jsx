@@ -176,7 +176,7 @@ export default function CentroidModal({
   isOpen, onClose, events = [], glossaryTerms = [], cplLimit = 42, maxLines = 2, cpsLimit = 20,
   fileName = 'subtitles', defaultSourceLang = 'en', qcHost = null, onOpenQc, onOpenTranslate,
   activeLang = null, trackLangs = [],
-  onTranslated, onShowTrack, onUpdateEvent, onJumpToEvent, onStateChange,
+  onTranslated, onShowTrack, onApplyTextFixes, onJumpToEvent, onStateChange,
 }) {
   const [status, setStatus] = useState(null);
 
@@ -215,7 +215,9 @@ export default function CentroidModal({
   const [qcTarget, setQcTarget] = useState(''); // 'editor' | lang code
   const [qcBusy, setQcBusy] = useState(false);
   const [qc, setQc] = useState(null); // {summary, issues, target}
-    const [qcError, setQcError] = useState('');
+  const [qcError, setQcError] = useState('');
+  const [qcNote, setQcNote] = useState('');
+  const [showResolved, setShowResolved] = useState(false);
 
   useEffect(() => {
     if (!isOpen && !qcHost) return;
@@ -256,7 +258,7 @@ export default function CentroidModal({
 
   const resultLangs = Object.keys(results);
   const hasResults = resultLangs.length > 0;
-  useEffect(() => { onStateChange?.({ hasResults, qcIssues: qc ? qc.issues.length : null }); }, [hasResults, qc, onStateChange]);
+  useEffect(() => { onStateChange?.({ hasResults, qcIssues: qc ? qc.issues.filter((i) => i.status === 'open').length : null }); }, [hasResults, qc, onStateChange]);
 
   const sourceCues = useMemo(() => {
     const raw = sourceMode === 'upload' ? uploaded.cues : events;
@@ -380,6 +382,7 @@ export default function CentroidModal({
 
   const runQcFor = useCallback(async (code, res, snap) => {
     setQcError('');
+    setQcNote('');
     onOpenQc?.();
     setQcTarget(code);
     setQc(null);
@@ -392,7 +395,7 @@ export default function CentroidModal({
         cues: pairs, source_lang: sourceLang, target_lang: lang,
         context: buildContext(), glossary: buildGlossary(), constraints: buildLimits(),
       });
-      setQc({ ...data, target: code, issues: (data.issues || []).map((i, n) => ({ ...i, key: `${i.index}-${i.category}-${n}` })) });
+      setQc({ ...data, target: code, issues: (data.issues || []).map((i, n) => ({ ...i, key: `${i.index}-${i.category}-${n}`, status: 'open' })) });
     } catch (e) {
       setQcError(e.message);
     } finally {
@@ -480,36 +483,55 @@ export default function CentroidModal({
   // ---- QC actions ----
   const qcPairs = useMemo(() => pairsFor(qcTarget, results, snapshot), [pairsFor, qcTarget, results, snapshot]);
 
-  const dropIssue = (key) => setQc((q) => (q ? { ...q, issues: q.issues.filter((i) => i.key !== key) } : q));
+  const setIssueStatus = (key, status) => setQc((q) => (q ? { ...q, issues: q.issues.map((i) => (i.key === key ? { ...i, status } : i)) } : q));
+  const dropIssue = (key) => setIssueStatus(key, 'dismissed');
 
-  const applyFix = useCallback((issue) => {
-    if (!issue.suggestion) return;
-    if (qc?.target === 'editor') {
-      const pair = qcPairs.pairs.find((p) => p.id === issue.index);
-      if (pair && onUpdateEvent) onUpdateEvent(pair.editorId, 'text', issue.suggestion);
-    } else {
+  /** Write the suggested text into the subtitles (and the language result), then mark the issues as fixed. */
+  const applyFixes = useCallback((issues) => {
+    if (!qc) return;
+    // One fix per cue: the first suggestion wins, the others were written against the old text
+    const byCue = new Map();
+    issues.filter((i) => i.suggestion && i.status === 'open').forEach((i) => { if (!byCue.has(i.index)) byCue.set(i.index, i); });
+    if (!byCue.size) return;
+    const chosen = [...byCue.values()];
+    const edits = chosen.map((i) => {
+      const pair = qcPairs.pairs.find((p) => p.id === i.index);
+      return { id: pair?.editorId, index: i.index, start: pair?.start ?? i.start, text: i.suggestion };
+    });
+    const applied = onApplyTextFixes ? onApplyTextFixes(qc.target, edits) : 0;
+    if (qc.target !== 'editor') {
+      // keep the result (and the SRT you can download) in step with the track
       setResults((prev) => {
         const r = prev[qc.target];
         if (!r) return prev;
-        const cues = r.cues.map((c) => (c.index === issue.index ? { ...c, target: issue.suggestion } : c));
+        const cues = r.cues.map((c, n) => { const e = edits.find((x) => x.index === (c.index ?? n + 1)); return e ? { ...c, target: e.text } : c; });
         return { ...prev, [qc.target]: { ...r, cues, srt: cuesToSrt(cues.map((c) => ({ ...c, text: c.target || c.source })), 'text') } };
       });
     }
-    // Other issues on the same cue were written against the old text.
-    setQc((q) => (q ? { ...q, issues: q.issues.filter((i) => i.key !== issue.key && !(i.index === issue.index && i.suggestion)) } : q));
-  }, [qc, qcPairs, onUpdateEvent]);
+    const doneKeys = new Set(chosen.map((i) => i.key));
+    setQc((q) => (q ? { ...q, issues: q.issues
+      .filter((i) => doneKeys.has(i.key) || !(byCue.has(i.index) && i.suggestion && i.status === 'open'))
+      .map((i) => (doneKeys.has(i.key) ? { ...i, status: 'fixed' } : i)) } : q));
+    const word = chosen.length === 1 ? 'fix' : 'fixes';
+    setQcNote(applied > 0 || qc.target !== 'editor'
+      ? `Applied ${chosen.length} ${word}. The subtitle text is updated${applied ? ' in the editor' : ''}. Ctrl+Z undoes it in the editor.`
+      : `Could not find these subtitles in the editor. Open the ${langName(qc.target)} track and try again.`);
+  }, [qc, qcPairs, onApplyTextFixes]);
 
-  const applyAll = () => {
-    const seen = new Set();
-    (qc?.issues || []).filter((i) => i.suggestion).forEach((i) => {
-      if (seen.has(i.index)) return;
-      seen.add(i.index);
-      applyFix(i);
-    });
+  const openIssues = (qc?.issues || []).filter((i) => i.status === 'open');
+  const fixedIssues = (qc?.issues || []).filter((i) => i.status === 'fixed');
+  const fixable = openIssues.filter((i) => i.suggestion).length;
+  const applyAll = () => applyFixes(openIssues);
+  const issueGroups = [
+    { key: 'error', title: 'Errors', tone: 'danger', items: openIssues.filter((i) => i.severity === 'error').sort((x, y) => x.index - y.index) },
+    { key: 'warning', title: 'Warnings', tone: 'warn', items: openIssues.filter((i) => i.severity !== 'error').sort((x, y) => x.index - y.index) },
+  ].filter((g) => g.items.length);
+  const jumpIdFor = (i) => {
+    const pair = qcPairs.pairs.find((p) => p.id === i.index);
+    if (qc?.target === 'editor') return pair?.editorId ?? null;
+    if (activeLang && qc?.target === activeLang) { const e = events[i.index - 1]; return e ? (e.id ?? e.event_id) : null; }
+    return null;
   };
-
-  const shownIssues = qc?.issues || [];
-  const fixable = (qc?.issues || []).filter((i) => i.suggestion).length;
 
   const notReady = status && (!status.configured || !status.reachable);
   const qcBody = (
@@ -555,47 +577,70 @@ export default function CentroidModal({
             </div>
             {!qc.summary.ai_checked && <Notice tone="warn">The AI review didn’t complete for part of the file, so only rule-based checks are shown for it. Run QC again to retry.</Notice>}
 
+            {qcNote && <Notice tone="good">{qcNote}</Notice>}
+
             <div className="flex items-center gap-2">
-              <span className="text-[12px] text-[var(--ss-muted)]">{qc.issues.length} translation {qc.issues.length === 1 ? 'issue' : 'issues'}</span>
+              <span className="text-[12px] text-[var(--ss-muted)]">{openIssues.length} to review{fixedIssues.length ? ` · ${fixedIssues.length} fixed` : ''}</span>
               <span className="flex-1" />
               {fixable > 0 && <Button variant="primary" icon={Wand2} onClick={applyAll}>Apply all {fixable} fixes</Button>}
             </div>
 
-            {qc.issues.length === 0 && <Notice tone="good">No issues left. The translation passed Centroid QC.</Notice>}
+            {openIssues.length === 0 && <Notice tone="good">{fixedIssues.length ? 'All issues are fixed. Run QC again to confirm.' : 'No issues found. The translation passed Centroid QC.'}</Notice>}
 
-            <div className="space-y-2.5">
-              {shownIssues.map((i) => {
-                const pair = qc.target === 'editor' ? qcPairs.pairs.find((p) => p.id === i.index) : null;
-                return (
-                  <article key={i.key} className="rounded-xl border border-[var(--ss-line)] bg-[var(--ss-raised)]/50 p-3 text-[12.5px] space-y-2">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-mono text-[11.5px] text-[var(--ss-faint)]">#{i.index} · {fmtTime(i.start)}</span>
-                      <Badge tone={i.severity === 'error' ? 'danger' : 'warn'}>{i.mqm_severity}</Badge>
-                      <span className="font-medium">{i.title}</span>
-                      {i.origin === 'ai' && <span className="text-[11px] text-[var(--ss-faint)]">AI review</span>}
-                      {pair && onJumpToEvent && (
-                        <IconButton size="sm" icon={Crosshair} label="Show this subtitle in the editor" className="ml-auto" onClick={() => onJumpToEvent(pair.editorId)} />
-                      )}
-                    </div>
-                    <p className="text-[var(--ss-muted)] leading-snug">{i.description}</p>
-                    <div className="grid grid-cols-2 gap-2">
-                      <div><div className="text-[11px] text-[var(--ss-faint)]">Source</div><div className="whitespace-pre-wrap">{i.source}</div></div>
-                      <div><div className="text-[11px] text-[var(--ss-faint)]">Current</div><div className="whitespace-pre-wrap text-[var(--ss-danger)]">{i.target || '(empty)'}</div></div>
-                    </div>
-                    {i.suggestion && (
-                      <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 px-2.5 py-2">
-                        <div className="text-[11px] text-emerald-400">Suggested fix</div>
-                        <div className="whitespace-pre-wrap text-emerald-100">{i.suggestion}</div>
+            {issueGroups.map((g) => (
+              <section key={g.key} className="space-y-2.5">
+                <h4 className="flex items-center gap-2 text-[12px] font-semibold text-[var(--ss-text)]">
+                  <Badge tone={g.tone}>{g.items.length}</Badge>{g.title}
+                </h4>
+                {g.items.map((i) => {
+                  const jumpId = jumpIdFor(i);
+                  return (
+                    <article key={i.key} className="rounded-xl border border-[var(--ss-line)] bg-[var(--ss-raised)]/50 p-3 text-[12.5px] space-y-2">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-mono text-[11.5px] text-[var(--ss-faint)]">#{i.index} · {fmtTime(i.start)}</span>
+                        <Badge tone={i.severity === 'error' ? 'danger' : 'warn'}>{i.mqm_severity}</Badge>
+                        <span className="font-medium">{i.title}</span>
+                        {i.origin === 'ai' && <span className="text-[11px] text-[var(--ss-faint)]">AI review</span>}
+                        {jumpId != null && onJumpToEvent && (
+                          <IconButton size="sm" icon={Crosshair} label="Show this subtitle in the editor" className="ml-auto" onClick={() => onJumpToEvent(jumpId)} />
+                        )}
                       </div>
-                    )}
-                    <div className="flex gap-2">
-                      {i.suggestion && <Button size="sm" variant="primary" icon={Check} onClick={() => applyFix(i)}>Apply fix</Button>}
-                      <Button size="sm" variant="ghost" onClick={() => dropIssue(i.key)}>Dismiss</Button>
-                    </div>
-                  </article>
-                );
-              })}
-            </div>
+                      <p className="text-[var(--ss-muted)] leading-snug">{i.description}</p>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div><div className="text-[11px] text-[var(--ss-faint)]">Source</div><div className="whitespace-pre-wrap">{i.source}</div></div>
+                        <div><div className="text-[11px] text-[var(--ss-faint)]">Current</div><div className="whitespace-pre-wrap text-[var(--ss-danger)]">{i.target || '(empty)'}</div></div>
+                      </div>
+                      {i.suggestion && (
+                        <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 px-2.5 py-2">
+                          <div className="text-[11px] text-emerald-400">Suggested fix</div>
+                          <div className="whitespace-pre-wrap text-emerald-100">{i.suggestion}</div>
+                        </div>
+                      )}
+                      <div className="flex gap-2">
+                        {i.suggestion && <Button size="sm" variant="primary" icon={Check} onClick={() => applyFixes([i])}>Apply fix</Button>}
+                        <Button size="sm" variant="ghost" onClick={() => dropIssue(i.key)}>Dismiss</Button>
+                      </div>
+                    </article>
+                  );
+                })}
+              </section>
+            ))}
+
+            {fixedIssues.length > 0 && (
+              <section className="rounded-xl border border-emerald-500/25 bg-emerald-500/5">
+                <button type="button" aria-expanded={showResolved} onClick={() => setShowResolved((v) => !v)} className="w-full h-9 px-3 flex items-center gap-2 text-[12px] text-emerald-300 cursor-pointer">
+                  {showResolved ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                  <Check size={13} /> Fixed ({fixedIssues.length})
+                </button>
+                {showResolved && (
+                  <ul className="px-3 pb-2 space-y-1.5 text-[12px]">
+                    {fixedIssues.map((i) => (
+                      <li key={i.key}><span className="font-mono text-[11px] text-[var(--ss-faint)]">#{i.index}</span> <span className="whitespace-pre-wrap text-emerald-100">{i.suggestion}</span></li>
+                    ))}
+                  </ul>
+                )}
+              </section>
+            )}
 
             {qc.target !== 'editor' && results[qc.target] && (
               <div className="flex gap-2 pt-1">

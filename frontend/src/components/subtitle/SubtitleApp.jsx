@@ -1113,6 +1113,38 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
     loadTrackEvents(evs);
   }, [loadTrackEvents]);
 
+  /** Centroid QC "Apply fix": write new text into the subtitles on screen, or into another language's saved track. Returns how many changed. */
+  const applyTextFixes = useCallback((code, edits) => {
+    const patch = (list) => {
+      const next = [...list];
+      let hit = 0;
+      edits.forEach((ed) => {
+        let i = -1;
+        if (ed.id != null) i = next.findIndex((e) => (e.id ?? e.event_id) === ed.id);
+        else {
+          const near = (e) => e && Math.abs((e.start_time ?? e.start ?? 0) - ed.start) < 0.05;
+          i = near(next[ed.index - 1]) ? ed.index - 1 : next.findIndex(near);
+        }
+        if (i < 0) return;
+        const e = next[i];
+        next[i] = { ...e, text: ed.text, lines: ed.text.split('\n'), ...(e.qc_errors?.some((x) => x.rule_id === 'TRANSLATION-ALIGN') ? { align_resolved: true } : {}) };
+        editedEventIdsRef.current.add(e.id ?? e.event_id);
+        hit += 1;
+      });
+      return { next, hit };
+    };
+    if (code === 'editor' || code === activeTrackRef.current) {
+      const { next, hit } = patch(eventsNowRef.current);
+      if (hit) { setEvents(next); pushToHistory(next); handleLint(next); }
+      return hit;
+    }
+    const saved = tracksRef.current[code];
+    if (!saved) return 0;
+    const { next, hit } = patch(saved);
+    if (hit) setTracks((prev) => ({ ...prev, [code]: next }));
+    return hit;
+  }, [pushToHistory, handleLint]);
+
   const lintDebounceRef = useRef(null);
   const debouncedLint = useCallback((updatedEvents) => {
     if (lintDebounceRef.current) clearTimeout(lintDebounceRef.current);
@@ -1695,7 +1727,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
       const next = prev.map(e => {
         if (e.id === id || e.event_id === id) {
           if (typeof field === 'object' && field !== null) {
-            return { ...e, ...field };
+            return { ...e, ...field, ...('text' in field && e.qc_errors?.some(x => x.rule_id === 'TRANSLATION-ALIGN') ? { align_resolved: true } : {}) };
           }
           return { ...e, [field]: value, ...(field === 'text' && e.qc_errors?.some(x => x.rule_id === 'TRANSLATION-ALIGN') ? { align_resolved: true } : {}) };
         }
@@ -1876,6 +1908,81 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
       alert(`Could not re-break lines: ${err.message || err}`);
     }
   };
+
+  // ── Quality check: one-click fixes for single issues (and "fix all") ──
+  // Each fix works on a copy of the subtitles, so a whole batch is one undo step and one re-check.
+  const applyQcFixes = useCallback(async (items) => {
+    // items: [{ key, eventId, ruleId }]  ->  [{ key, ok, message }]
+    const rebreakIds = new Set(items.filter(i => tools.QC_REBREAK_RULES.has(i.ruleId)).map(i => i.eventId));
+    let rebroke = new Map();
+    if (rebreakIds.size) {
+      try {
+        const res = await fetch(`${API_BASE}/api/subtitle/rebreak`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ events: events.filter(e => rebreakIds.has(e.id ?? e.event_id)), max_cpl: cplLimit })
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        rebroke = new Map((data.events || []).map(e => [e.id ?? e.event_id, e.text]));
+      } catch (err) {
+        console.error('QC rebreak failed:', err);
+      }
+    }
+    const fps = frameRate || 24;
+    const gap = 2 / fps;
+    const round = (v) => Math.round(v * 1000) / 1000;
+    let work = events.map(e => ({ ...e }));
+    const results = [];
+    for (const item of items) {
+      const idx = work.findIndex(e => (e.id ?? e.event_id) === item.eventId);
+      if (idx < 0) { results.push({ key: item.key, ok: false, message: 'This subtitle no longer exists.' }); continue; }
+      const e = work[idx];
+      const start = e.start_time ?? e.start ?? 0;
+      const end = e.end_time ?? e.end ?? start;
+      const next = work.reduce((best, o, j) => {
+        if (j === idx) return best;
+        const os = o.start_time ?? o.start ?? 0;
+        return os > start + 1e-6 && (!best || os < (best.start_time ?? best.start)) ? o : best;
+      }, null);
+      const roomEnd = next ? (next.start_time ?? next.start) - gap : Infinity;
+      const setEnd = (newEnd) => { work[idx] = { ...e, end_time: newEnd, end: newEnd, duration: round(newEnd - start) }; };
+      const rule = String(item.ruleId || '').toUpperCase();
+      if (rule === 'NF-DURATION-SHORT' || rule.startsWith('NF-CPS')) {
+        const chars = (e.text || '').replace(/<[^>]*>/g, '').replace(/\n/g, '').length;
+        const needed = rule === 'NF-DURATION-SHORT' ? minDuration : Math.max(minDuration, chars / Math.max(1, cpsLimit - 0.1));
+        const target = round(Math.min(start + needed, start + maxDuration, roomEnd));
+        if (target <= end + 0.005) { results.push({ key: item.key, ok: false, message: 'No room to extend before the next subtitle. Shorten the text or merge.' }); continue; }
+        setEnd(target);
+        const full = target >= start + needed - 0.005;
+        results.push({ key: item.key, ok: true, message: `Now ${(target - start).toFixed(2)}s long${full ? '' : ' (as far as the next subtitle allows)'}` });
+      } else if (rule === 'NF-GAP-MISSING' || rule === 'NF-GAP-FLASH' || rule === 'NF-OVERLAP' || rule.startsWith('NF-GAP')) {
+        const target = round(roomEnd);
+        if (!next || target < start + 0.1) { results.push({ key: item.key, ok: false, message: 'Cannot close the gap without making this subtitle too short.' }); continue; }
+        setEnd(target);
+        results.push({ key: item.key, ok: true, message: 'Ends 2 frames before the next subtitle' });
+      } else if (tools.QC_REBREAK_RULES.has(rule)) {
+        const t = rebroke.get(item.eventId);
+        if (t === undefined || t === e.text) { results.push({ key: item.key, ok: false, message: 'The lines could not be re-balanced. Edit the text or split the subtitle.' }); continue; }
+        work[idx] = { ...e, text: t, lines: t.split('\n') };
+        results.push({ key: item.key, ok: true, message: 'Lines re-broken to fit' });
+      } else if (rule === 'NF-PUNCT-SPACE' || rule === 'NF-ELLIPSIS') {
+        const fixed = tools.tidyWhitespace([e]).events[0];
+        if (!fixed || fixed.text === e.text) { results.push({ key: item.key, ok: false, message: 'Fix this one by hand in the editor.' }); continue; }
+        work[idx] = { ...e, ...fixed, lines: String(fixed.text).split('\n') };
+        results.push({ key: item.key, ok: true, message: 'Spacing tidied' });
+      } else {
+        results.push({ key: item.key, ok: false, message: 'This one needs a manual edit.' });
+      }
+    }
+    if (results.some(r => r.ok)) {
+      items.forEach((i, n) => { if (results[n]?.ok) editedEventIdsRef.current.add(i.eventId); });
+      setEvents(work);
+      pushToHistory(work);
+      handleLint(work);
+    }
+    return results;
+  }, [events, frameRate, cplLimit, cpsLimit, minDuration, maxDuration, pushToHistory, handleLint]);
 
   // Add Manual Subtitle
   const handleAddSubtitle = (atTime = null, customEndTime = null) => {
@@ -3124,6 +3231,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
               cpsLimit={cpsLimit}
               onAutoFix={handleAutoFix}
               onRebreakAll={handleRebreakAll}
+              onApplyFixes={applyQcFixes}
               onGeminiFix={handleGeminiFix}
               isFixingWithGemini={isFixingWithGemini}
               onAcousticSync={handleAcousticSync}
@@ -3352,7 +3460,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
         cpsLimit={cpsLimit}
         maxLines={maxLines}
         fileName={selectedFile?.name || 'subtitles'}
-        onUpdateEvent={handleUpdateEvent}
+        onApplyTextFixes={applyTextFixes}
         activeLang={activeTrack}
         trackLangs={Object.keys(tracks)}
         onTranslated={handleTranslated}
