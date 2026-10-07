@@ -10,6 +10,8 @@ and non-speech audio event tagging across 90+ languages.
 import os
 import re
 import json
+import math
+import time
 import asyncio
 import mimetypes
 import logging
@@ -186,6 +188,32 @@ def get_elevenlabs_api_key(override_key: Optional[str] = None) -> str:
     return key
 
 
+UPLOAD_FLAC_MIN_BYTES = 4 * 1024 * 1024
+UPLOAD_AS_FLAC = os.getenv("SCRIBE_UPLOAD_FLAC", "1").strip().lower() not in ("0", "false", "no")
+
+
+def _prepare_upload(file_p: Path, mime_type: str):
+    """Return (path, name, mime, is_temp). Big WAVs are re-encoded to FLAC (lossless, ~half the bytes),
+    so the upload to the speech engine is faster without touching accuracy. Falls back to the original."""
+    if not UPLOAD_AS_FLAC or file_p.suffix.lower() != ".wav" or file_p.stat().st_size < UPLOAD_FLAC_MIN_BYTES:
+        return str(file_p), file_p.name, mime_type, False
+    try:
+        import subprocess, tempfile
+        from app.video_processor import get_ffmpeg_path
+        fd, tmp = tempfile.mkstemp(suffix=".flac", dir=str(file_p.parent))
+        os.close(fd)
+        res = subprocess.run(
+            [get_ffmpeg_path(), "-y", "-loglevel", "error", "-i", str(file_p), "-c:a", "flac", "-compression_level", "0", tmp],
+            capture_output=True, timeout=600,
+        )
+        if res.returncode == 0 and Path(tmp).stat().st_size > 1000 and Path(tmp).stat().st_size < file_p.stat().st_size:
+            return tmp, file_p.stem + ".flac", "audio/flac", True
+        os.unlink(tmp)
+    except Exception as exc:
+        logger.warning(f"FLAC upload encode skipped: {exc}")
+    return str(file_p), file_p.name, mime_type, False
+
+
 async def transcribe_with_scribe_v2(
     audio_path: str,
     language: Optional[str] = None,
@@ -195,10 +223,16 @@ async def transcribe_with_scribe_v2(
     api_key: Optional[str] = None,
     model_id: str = DEFAULT_MODEL_ID,
     keyterms: Optional[List[str]] = None,
+    progress_cb=None,
+    expected_sec: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
     Transcribe an audio file using ElevenLabs Scribe v2.
     `keyterms` (names, brands, technical terms) bias the engine towards the correct spelling.
+
+    `progress_cb(stage, percent, detail)` (optional) reports "uploading" with the real share of bytes sent,
+    then "transcribing" with an estimate (the engine returns one response, so there is nothing to measure).
+    `expected_sec` is the audio duration, used only to pace that estimate.
 
     Returns:
         Dict containing:
@@ -220,7 +254,6 @@ async def transcribe_with_scribe_v2(
         raise FileNotFoundError(f"Audio file not found: {audio_path}")
 
     from app.terminal_logger import log_terminal
-    import time
 
     lang_code = resolve_language_code(language)
     file_size_mb = round(file_p.stat().st_size / (1024 * 1024), 2)
@@ -269,14 +302,44 @@ async def transcribe_with_scribe_v2(
         # ElevenLabs Scribe v2 requires multipart file upload
         st_time = time.time()
         log_terminal("ELEVENLABS-API", f"Uploading audio stream to {ELEVENLABS_STT_ENDPOINT}...")
+        upload_path, upload_name, upload_mime, tmp_upload = await asyncio.to_thread(_prepare_upload, file_p, mime_type)
+        total_bytes = max(1, Path(upload_path).stat().st_size)
+        state = {"sent": 0, "uploaded_at": None}
+
+        def _emit(stage, pct, detail):
+            if progress_cb:
+                try:
+                    progress_cb(stage, pct, detail)
+                except Exception:
+                    pass
+
+        class _CountingFile:
+            """File wrapper that reports how many bytes httpx has pushed to the socket."""
+            def __init__(self, fh):
+                self._fh = fh
+            def read(self, size=-1):
+                chunk = self._fh.read(size)
+                state["sent"] += len(chunk)
+                if state["sent"] >= total_bytes and state["uploaded_at"] is None:
+                    state["uploaded_at"] = time.time()
+                    _emit("transcribing", 0.0, "Upload complete, the speech engine is transcribing")
+                elif state["uploaded_at"] is None:
+                    _emit("uploading", min(99.0, 100.0 * state["sent"] / total_bytes),
+                          f"Uploading audio ({state['sent'] // (1024 * 1024)} of {max(1, total_bytes // (1024 * 1024))} MB)")
+                return chunk
+            def __getattr__(self, name):
+                return getattr(self._fh, name)
+
         def _post_upload(with_keyterms: bool = True) -> httpx.Response:
             # Blocking client in a worker thread: large uploads never touch the asyncio socket
             # transport (the Windows SelectorEventLoop used by `uvicorn --reload` can spin forever
             # with "Data should not be empty" mid-upload), and the event loop stays responsive.
+            state["sent"] = 0
+            state["uploaded_at"] = None
             with httpx.Client(timeout=httpx.Timeout(900.0, connect=60.0)) as client:
-                with open(file_p, "rb") as f:
+                with open(upload_path, "rb") as f:
                     files = {
-                        "file": (file_p.name, f, mime_type)
+                        "file": (upload_name, _CountingFile(f), upload_mime)
                     }
                     payload = dict(data_payload)
                     if with_keyterms and clean_terms:
@@ -288,14 +351,37 @@ async def transcribe_with_scribe_v2(
                         files=files,
                     )
 
+        async def _tick_transcribing():
+            # The engine answers once, so progress while it works is an estimate paced by audio length
+            # (Scribe typically needs ~10% of the audio duration). It never claims 100% before the reply.
+            est = max(8.0, float(expected_sec or 0.0) * 0.10)
+            while True:
+                await asyncio.sleep(1.0)
+                t0 = state["uploaded_at"]
+                if t0 is None:
+                    continue
+                el = time.time() - t0
+                _emit("transcribing", round(min(95.0, 100.0 * (1.0 - math.exp(-el / est))), 1),
+                      "Speech engine is transcribing and identifying speakers")
+
+        ticker = asyncio.create_task(_tick_transcribing()) if progress_cb else None
+
         try:
             response = await asyncio.to_thread(_post_upload)
         except httpx.TimeoutException:
+            if ticker:
+                ticker.cancel()
+            if tmp_upload:
+                Path(upload_path).unlink(missing_ok=True)
             log_terminal("ELEVENLABS-API", "ElevenLabs Scribe v2 request timed out after 900s", level="ERROR")
             raise RuntimeError(
                 "ElevenLabs Scribe v2 request timed out. The audio file may be unusually large."
             )
         except httpx.RequestError as exc:
+            if ticker:
+                ticker.cancel()
+            if tmp_upload:
+                Path(upload_path).unlink(missing_ok=True)
             log_terminal("ELEVENLABS-API", f"Connection error to ElevenLabs API: {exc}", level="ERROR")
             raise RuntimeError(f"Connection error to ElevenLabs API: {exc}")
 
@@ -306,6 +392,13 @@ async def transcribe_with_scribe_v2(
         elif clean_terms:
             log_terminal("ELEVENLABS-API", f"Sent {len(clean_terms)} key terms to bias the transcription.")
 
+        if ticker:
+            ticker.cancel()
+        if tmp_upload:
+            try:
+                os.unlink(upload_path)
+            except OSError:
+                pass
         elapsed_sec = round(time.time() - st_time, 2)
         log_terminal("ELEVENLABS-API", f"ElevenLabs responded with HTTP {response.status_code} in {elapsed_sec}s")
 

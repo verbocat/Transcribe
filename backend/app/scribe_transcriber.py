@@ -54,6 +54,17 @@ SENTENCE_SPLIT_MIN_SEC = 3.0   # split after sentence-final punctuation once a s
 MERGE_MAX_GAP_SEC = 1.0        # max gap when merging a too-short segment into a same-speaker neighbour
 SEGMENT_GAP_SEC = 0.050        # breathing room enforced between consecutive segments
 
+# Overall-progress window of each pipeline stage (the speech engine dominates the wall time)
+STAGE_RANGES = {
+    "preparing": (10.0, 13.0),
+    "uploading": (13.0, 25.0),
+    "transcribing": (25.0, 85.0),
+    "script": (85.0, 88.0),
+    "segmenting": (88.0, 90.0),
+    "gender": (90.0, 98.0),
+    "linting": (98.0, 100.0),
+}
+
 _SENTENCE_END_RE = re.compile(r'[.?!।]["\']?$')
 _AUTO_VALUES = {"", "auto", "auto-detect", "autodetect", "none"}
 
@@ -396,13 +407,30 @@ async def process_audio_file(
     script: str = "Auto-Detect",
     elevenlabs_api_key: Optional[str] = None,
     video_path: Optional[str] = None,
+    progress_cb=None,
 ) -> TranscriptionResult:
-    """Complete Karya transcription pipeline powered by ElevenLabs Scribe v2."""
+    """Complete Karya transcription pipeline powered by ElevenLabs Scribe v2.
+
+    `progress_cb(stage, percent, detail)` receives overall progress (0-100) at each step.
+    """
+    def report(stage: str, stage_pct: Optional[float], detail: str = ""):
+        if not progress_cb:
+            return
+        lo, hi = STAGE_RANGES.get(stage, (0.0, 100.0))
+        overall = lo if stage_pct is None else lo + (hi - lo) * max(0.0, min(100.0, stage_pct)) / 100.0
+        try:
+            progress_cb(stage, round(overall, 1), detail, stage_pct)
+        except Exception:
+            pass
+
     audio_id = str(uuid.uuid4())[:8]
     filename = Path(audio_path).name
 
-    audio_info_dict = await asyncio.to_thread(inspect_audio, audio_path)
-    dual_ch_info = await asyncio.to_thread(detect_dual_channel_layout, audio_path)
+    report("preparing", 0.0, "Reading the audio")
+    audio_info_dict, dual_ch_info = await asyncio.gather(
+        asyncio.to_thread(inspect_audio, audio_path),
+        asyncio.to_thread(detect_dual_channel_layout, audio_path),
+    )
     if dual_ch_info.get("is_dual_channel"):
         audio_info_dict["channels"] = 2
     audio_info = AudioAnalysis(**audio_info_dict)
@@ -418,25 +446,32 @@ async def process_audio_file(
         tag_audio_events=False,
         num_speakers=KARYA_NUM_SPEAKERS,
         api_key=elevenlabs_api_key,
+        progress_cb=lambda st, pct, detail: report(st, pct, detail),
+        expected_sec=audio_info.duration,
     )
 
     resolved_language = _resolve_language_name(language, stt_result.get("language_code"))
     resolved_script = _resolve_script_name(script, resolved_language)
 
+    report("script", 0.0, "Fixing script and loanwords")
     tokens = _extract_scribe_tokens(stt_result)
     _assign_speakers(tokens)
     tokens = await _enforce_target_script(tokens, resolved_language, script)
 
+    report("segmenting", 0.0, "Building subtitle segments")
     runs = _group_into_segments(tokens)
     segments = await asyncio.to_thread(_build_segments, runs, audio_path, resolved_language, audio_info.duration)
+    report("gender", 0.0, "Detecting speaker gender")
     processing_notes = await asyncio.to_thread(assign_genders_and_split_speakers, audio_path, segments, video_path)
     roster = sorted({(s.speaker, s.gender) for s in segments}, key=lambda x: int(x[0].split()[-1]))
     log_terminal("ELEVENLABS-STT", f"[OK] Speakers: {', '.join(f'{n} ({g})' for n, g in roster)}")
     log_terminal("ELEVENLABS-STT", f"[OK] Built {len(segments)} Karya segments from {sum(1 for t in tokens if t['type'] == 'word')} words | Language: {resolved_language} | Script: {resolved_script}")
 
-    linted_segments, score, errors_count, warnings_count = lint_dataset(
-        segments, language=resolved_language, script=resolved_script
+    report("linting", 0.0, "Checking Karya rules")
+    linted_segments, score, errors_count, warnings_count = await asyncio.to_thread(
+        lint_dataset, segments, language=resolved_language, script=resolved_script
     )
+    report("linting", 100.0, "Done")
 
     # English words left in Latin script mean the transliteration pass could not run (Gemini unavailable)
     latin_lines = sum(1 for s in linted_segments if any("Code-mixed English script" in e.message for e in s.qc_errors))
