@@ -23,6 +23,9 @@ import LogoutConfirmModal from './components/LogoutConfirmModal';
 import ReloadConfirmModal from './components/ReloadConfirmModal';
 import { parseSubtitles } from './utils/subtitleParser';
 import { API_BASE } from './config';
+const BUILD_ID = typeof __APP_BUILD__ !== 'undefined' ? __APP_BUILD__ : 'dev';
+if (typeof window !== 'undefined') window.__TRANSCRIBE_BUILD__ = BUILD_ID;
+import { extractAudioFromMedia } from './utils/audioExtractor';
 import { AuthProvider, useAuth } from './auth_views/AuthContext';
 import { ThemeProvider } from './context/ThemeContext';
 import AppearanceHost from './theme/AppearanceHost';
@@ -566,6 +569,7 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
   const [extractedAudioName, setExtractedAudioName] = useState('');
   const [extractedForFile, setExtractedForFile] = useState('');
   const [progressMeta, setProgressMeta] = useState('');
+  const extractedAudioFileRef = useRef(null); // small WAV made on this computer; uploaded instead of the video
   const progressTimerRef = useRef(null);
   const elapsedTimerRef = useRef(null);
 
@@ -693,26 +697,25 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
 
       setVideoUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return isVideo ? URL.createObjectURL(file) : null; });
 
+      extractedAudioFileRef.current = null;
       if (isVideo || needsServerDecode) {
         setIsExtractingAudio(true);
         setExtractionNotice(isVideo ? 'Extracting audio track from video...' : 'Converting WMA audio for playback...');
         try {
-          const formData = new FormData();
-          formData.append('file', file);
-          const res = await fetch(`${API_BASE}/api/audio/extract`, {
-            method: 'POST',
-            body: formData
-          });
-          if (res.ok) {
-            const data = await res.json();
-            setAudioUrl(`${API_BASE}${data.audio_url}`);
-            setExtractedAudioName(data.audio_filename || '');
-            setExtractedForFile(file.name);
-            setExtractionNotice('Audio extracted successfully ✓');
-            setTimeout(() => setExtractionNotice(''), 3000);
-          } else {
-            setAudioUrl(URL.createObjectURL(file));
-          }
+          // Audio is extracted ON THIS COMPUTER (WebAssembly FFmpeg), so only ~2 MB per minute of audio is ever
+          // uploaded instead of the whole video. Falls back to the server (with live progress) on any problem.
+          const extracted = await extractAudioFromMedia(file, (p) => {
+            const pct = typeof p.percent === 'number' && Number.isFinite(p.percent) ? ` ${Math.round(p.percent)}%` : '';
+            setExtractionNotice(`${p.detail || 'Preparing audio'}${pct}`);
+          }, API_BASE);
+          const isBlob = !extracted.audioUrl || extracted.audioUrl.startsWith('blob:');
+          setAudioUrl(extracted.audioUrl || URL.createObjectURL(extracted.audioBlob));
+          extractedAudioFileRef.current = extracted.audioFile || null;
+          // A server-made WAV already sits on the server: reuse it by name instead of uploading it again
+          setExtractedAudioName(isBlob ? '' : (extracted.audioFile?.name || ''));
+          setExtractedForFile(file.name);
+          setExtractionNotice('Audio extracted successfully ✓');
+          setTimeout(() => setExtractionNotice(''), 3000);
         } catch (err) {
           console.warn("Video audio extraction fallback:", err);
           setAudioUrl(URL.createObjectURL(file));
@@ -847,12 +850,13 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
     setIsTranscribing(true);
     beginUploadProgress();
     let serverStartedAt = 0;
+    let localWav = null;
     let audioSeconds = 0;
     try { audioSeconds = await probeDuration(audioUrl || videoUrl); } catch {}
 
-    const build = (withFile) => {
+    const build = (fileToSend) => {
       const fd = new FormData();
-      if (withFile) fd.append('file', selectedFile);
+      if (fileToSend) fd.append('file', fileToSend);
       fd.append('language', targetLanguage);
       fd.append('script', targetScript);
       try {
@@ -865,10 +869,13 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
     try {
       let data = null;
       // Preferred: background job with real stages. Reuse the audio already extracted for the waveform when we have it.
-      const reuse = extractedAudioName && selectedFile.name === extractedForFile;
-      const fd = build(!reuse);
+      const sameFile = selectedFile.name === extractedForFile;
+      const reuse = sameFile && extractedAudioName;
+      localWav = sameFile && !reuse ? extractedAudioFileRef.current : null;
+      const fd = build(reuse ? null : (localWav || selectedFile));
       if (reuse) fd.append('audio_filename', extractedAudioName);
       else setProgressStepCount(0);
+      console.info('[transcribe] POST /api/transcribe_async', { build: BUILD_ID, uploading: reuse ? 'nothing (audio already on server)' : localWav ? `audio ${formatBytes(localWav.size)}` : `original file ${formatBytes(selectedFile.size)}` });
       const start = await xhrPostForm(`${API_BASE}/api/transcribe_async`, fd, {
         onProgress: onUploadProgress,
         onSent: () => { setProgressStepCount(0); setProgressStage('Starting'); setProgressDetail(''); setProgressMeta(''); setProgressPercent(null); },
@@ -879,8 +886,9 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
         finishProgress(true);
       } else if (start.status === 404 || start.status === 405) {
         // Older backend without the job API: the blocking endpoint, with an estimated wait
+        console.warn('[transcribe] /api/transcribe_async returned', start.status, '- falling back to the old blocking endpoint (no real-time progress). The backend is not running the new code.');
         beginUploadProgress();
-        const res = await xhrPostForm(`${API_BASE}/api/transcribe`, build(true), {
+        const res = await xhrPostForm(`${API_BASE}/api/transcribe`, build(localWav || selectedFile), {
           onProgress: onUploadProgress,
           onSent: () => { serverStartedAt = beginServerProgress(audioSeconds); },
         });

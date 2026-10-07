@@ -65,6 +65,9 @@ export default function EmptyState({ filename, isExtractingAudio, extractionNoti
             Open a saved project
           </button>
         </p>
+        <p className="text-center ts-mono" style={{ color: 'var(--ts-faint)', fontSize: 11, marginTop: 12 }}>
+          build {typeof window !== 'undefined' ? window.__TRANSCRIBE_BUILD__ : ''}
+        </p>
       </div>
     </div>
   );

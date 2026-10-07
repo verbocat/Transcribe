@@ -2,9 +2,16 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
+import { execSync } from 'node:child_process'
+
+let sha = 'nogit'
+try { sha = execSync('git rev-parse --short HEAD').toString().trim() } catch {}
+const BUILD_ID = `${sha} ${new Date().toISOString().slice(0, 16).replace('T', ' ')}Z`
+
 const backendTarget = process.env.VITE_BACKEND_URL || 'http://127.0.0.1:8000'
 
 export default defineConfig({
+  define: { __APP_BUILD__: JSON.stringify(BUILD_ID) },
   plugins: [
     react(),
     tailwindcss(),
