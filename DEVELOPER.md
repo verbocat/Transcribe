@@ -1,6 +1,6 @@
 # Developer Setup & Server Deployment Guide
 
-This guide provides complete instructions for developers to install, run, test, and deploy the **Subtitle Studio & AI Audio Transcription Pipeline** both on a local machine (`localhost`) and on a production server (Linux VPS / Cloud).
+How to install, run, test and deploy the **Karya Transcription & Subtitle Studio** on a local machine and on a Linux server. For what the app does and how to use it, see [README.md](README.md).
 
 ---
 
@@ -8,26 +8,43 @@ This guide provides complete instructions for developers to install, run, test, 
 
 ```mermaid
 graph TD
-    Client[Web Browser / React Frontend] -->|HTTP / SSE / REST| Nginx[Nginx Reverse Proxy]
-    Nginx -->|Static Assets| ViteDist[Vite React SPA Build]
-    Nginx -->|Proxy /api| FastAPI[FastAPI Backend :8000]
-    
-    FastAPI --> Gemini[Google Gemini 2.5 Flash / Pro API]
-    FastAPI --> Whisper[Local Whisper Engine - CPU / GPU]
-    FastAPI --> VAD[Silero Neural VAD - PyTorch]
-    FastAPI --> FFmpeg[FFmpeg dynaudnorm & Audio Slicer]
-    FastAPI --> DB[(Neon PostgreSQL Database)]
+    Client[React SPA - Vercel or Nginx] -->|REST + SSE| FastAPI[FastAPI backend :8000]
+
+    FastAPI --> Scribe[ElevenLabs Scribe v2 API - words, speakers, audio events]
+    FastAPI --> Engine[Local Netflix engine - card building, QC audit]
+    FastAPI --> Gemini[Google Gemini API - proofreading, QC fixes, context helpers]
+    FastAPI --> Centroid[Centroid API - translation and translation QC, optional]
+    FastAPI --> FFmpeg[FFmpeg - audio extraction, shot detection]
+    FastAPI --> AuthDB[(SQLite - users, sessions, audit logs)]
+    FastAPI --> ProjDB[(Neon PostgreSQL - saved projects, optional)]
+    FastAPI --> Brevo[Brevo - verification and OTP email]
 ```
 
-* **Frontend:** React 18, Vite, Tailwind CSS, WaveSurfer.js, Lucide React Icons.
-* **Backend:** Python 3.13+, FastAPI, Uvicorn, SQLAlchemy ORM, Pydantic v2.
-* **Database:** Neon Serverless PostgreSQL (with automatic connection pooling and schema initialization).
-* **AI & Acoustic Stack:**
-  * **Google GenAI SDK (`google-genai`):** Multimodal audio-to-text generation via Gemini 2.5 Flash / Pro.
-  * **OpenAI Whisper (`openai-whisper`):** Word-level acoustic timestamp extraction.
-  * **Silero VAD:** Deep neural network voice activity detection for speech boundary detection.
-  * **FFmpeg (`imageio-ffmpeg`):** Audio extraction, dynamic range normalization (`dynaudnorm`), and lossless slicing.
-  * **NumPy DTW:** Global monotonic Dynamic Time Warping alignment engine.
+* **Frontend:** React 19, Vite 8, Tailwind CSS 4, WaveSurfer.js 7, Lucide icons, ffmpeg.wasm for in-browser audio extraction. Linted with oxlint. Deployed to Vercel (`frontend/vercel.json`).
+* **Backend:** Python 3.13, FastAPI, Uvicorn, SQLAlchemy 2, Pydantic v2, httpx.
+* **Speech and timing:** ElevenLabs Scribe v2 (`app/elevenlabs_service.py`) provides word-level timestamps, diarization and audio-event tags for the whole file in one request. There is no Whisper model, DTW aligner or fixed-length batching any more.
+* **Subtitle building and QC:** the local Netflix engine (`app/netflix_engine.py`, `app/netflix_linter.py`) turns Scribe words into cards and audits CPS, CPL, line count, duration, gaps and shot changes.
+* **Gemini (`google-genai`):** optional context proofreading, "Fix QC issues with Gemini", glossary extraction and context auto-fill. Transcription itself does not need Gemini.
+* **Databases:** a SQLite file for accounts, sessions, quotas and audit logs (always on), and an optional Neon PostgreSQL database for saved projects (`DATABASE_URL`).
+* **Silero VAD (optional):** `app/vad_processor.py` loads `backend/models/silero_vad.jit` with PyTorch to refine Karya segment boundaries. PyTorch is not in `requirements.txt`; without it the app runs and skips VAD refinement.
+
+### Subtitle pipeline (`POST /api/subtitle/generate_stream`)
+
+Implemented in `app/scribe_subtitle_generator.py` and streamed to the browser as Server-Sent Events:
+
+1. Read media info and extract 16 kHz mono WAV with FFmpeg (`app/video_processor.py`); detect shot changes.
+2. Transcribe with Scribe v2, passing Context and glossary terms as key terms.
+3. Smooth diarization flickers and relabel speakers.
+4. Enforce the native script for the target language (`app/transliteration_service.py`).
+5. Build Netflix-conformant cards from the words (`build_netflix_subtitles_from_words`).
+6. Optionally apply Context corrections and Gemini proofreading (`app/context_polisher.py`).
+7. Audit compliance (`audit_netflix_compliance`) and emit the final result.
+
+`POST /api/subtitle/acoustic_sync` re-aligns existing cards to Scribe words (cached per session after the first call).
+
+### Transcription pipeline (`POST /api/transcribe`)
+
+Implemented in `app/scribe_transcriber.py`: Scribe v2 transcription, Karya segmentation (`app/audio_processor.py`), speaker gender detection (`app/segment_gender.py`, local models, with extra Gemini votes when `GEMINI_ASSIST=true`), and the Karya linter (`app/linter_engine.py`).
 
 ---
 
@@ -35,160 +52,190 @@ graph TD
 
 ### Prerequisites
 
-Ensure your local development machine has the following installed:
+1. **Python** 3.13 (3.10+ should work)
+2. **Node.js** 22 (18+) with `npm`
+3. **Git**
+4. An **ElevenLabs API key** with Scribe access. A Gemini API key is optional but needed for the AI features.
 
-1. **Python:** Version `3.13.x` (or `3.10+`)
-2. **Node.js:** Version `22.x` (or `18+`) with `npm`
-3. **FFmpeg:** System FFmpeg or Python -ffmpeg`
-4. **Git**
+FFmpeg does not need to be installed separately: the backend uses the binary bundled with `imageio-ffmpeg` and adds it to `PATH` at startup.
 
 ---
 
 ### Step 1: Repository Structure
 
-Verify your directory layout:
-
 ```text
 Transcribe/
 ├── backend/
 │   ├── app/
-│   │   ├── main.py                     # FastAPI application & API endpoints
-│   │   ├── config.py                   # Environment & configuration settings
-│   │   ├── db.py                       # SQLAlchemy models & Neon DB connection
-│   │   ├── gemini_subtitle_generator.py # Batch streaming & Gemini 2.5 pipeline
-│   │   ├── whisper_aligner.py          # Whisper word extraction & alignment
-│   │   ├── dtw_aligner.py              # Monotonic Dynamic Time Warping engine
-│   │   ├── vad_processor.py            # Silero Neural VAD & 90s cut-point finder
-│   │   ├── audio_processor.py          # FFmpeg dynaudnorm & audio slicing
-│   │   ├── netflix_linter.py           # Netflix Timed Text quality control linter
-│   │   └── gemini_qc_fixer.py          # Gemini AI self-correction pass
-│   ├── requirements.txt                # Python dependencies
-│   ├── .env                            # Backend environment variables
-│   └── venv/                           # Python virtual environment
+│   │   ├── main.py                       # FastAPI app and API endpoints
+│   │   ├── config.py                     # Environment and settings
+│   │   ├── auth_module/                  # Sign-up, login, OTP, sessions (SQLite) and Brevo email
+│   │   ├── admin_routes.py               # /api/admin endpoints: users, quotas, audit logs
+│   │   ├── db.py                         # Neon PostgreSQL models for saved projects
+│   │   ├── elevenlabs_service.py         # ElevenLabs Scribe v2 client
+│   │   ├── scribe_subtitle_generator.py  # Subtitle Studio pipeline (SSE)
+│   │   ├── scribe_transcriber.py         # Transcription Studio pipeline
+│   │   ├── netflix_engine.py             # Card building, alignment and compliance audit
+│   │   ├── netflix_linter.py             # Netflix QC rules and rule-based auto-fix
+│   │   ├── gemini_qc_fixer.py            # Gemini QC fix pass
+│   │   ├── context_polisher.py           # Context corrections and Gemini proofreading
+│   │   ├── transliteration_service.py    # Native script enforcement
+│   │   ├── centroid_client.py            # Centroid translation and QC client
+│   │   ├── video_processor.py            # FFmpeg extraction, metadata, shot detection
+│   │   ├── audio_processor.py            # Karya segmentation
+│   │   ├── vad_processor.py              # Silero VAD (needs PyTorch)
+│   │   ├── linter_engine.py              # Karya transcription linter
+│   │   └── export_service.py             # SRT, VTT, TTML, CSV, DOCX, XLSX exports
+│   ├── models/silero_vad.jit             # Silero VAD weights
+│   ├── tests/                            # pytest suite
+│   ├── requirements.txt
+│   └── .env.example                      # Copy to .env
 ├── frontend/
-│   ├── src/                            # React application source code
-│   ├── package.json                    # Node.js dependencies
-│   └── vite.config.js                  # Vite bundler configuration
-└── run_app.bat                         # 1-Click Windows development launcher
+│   ├── src/                              # React app
+│   ├── scripts/copy-ffmpeg-core.mjs      # Copies ffmpeg.wasm core into public/ before dev/build
+│   ├── package.json
+│   ├── vite.config.js                    # Dev server on 5173, proxies /api to the backend
+│   └── vercel.json
+└── run_app.bat                           # One-click Windows launcher
 ```
+
+Some older modules (`gemini_subtitle_generator.py`, `gemini_subtitle_structurer.py`, `gemini_transcriber.py`, `dialogue_harmonizer.py`) are still in `app/` but are not imported by `main.py`.
 
 ---
 
 ### Step 2: Backend Setup
 
-1. Open a terminal and navigate to the `backend` directory:
+1. Go to the backend directory and create a virtual environment:
 
    ```bash
    cd backend
+   python -m venv venv
+   # Windows
+   venv\Scripts\activate
+   # Linux / macOS
+   source venv/bin/activate
    ```
 
-2. Create and activate a Python virtual environment:
-   * **Windows (PowerShell / Command Prompt):**
-
-     ```cmd
-     python -m venv venv
-     venv\Scripts\activate
-     ```
-
-   * **Linux / macOS:**
-
-     ```bash
-     python3 -m venv venv
-     source venv/bin/activate
-     ```
-
-3. Install required Python packages:
+2. Install dependencies:
 
    ```bash
    pip install --upgrade pip
    pip install -r requirements.txt
+   # Optional, for Silero VAD refinement in Transcription Studio:
+   # pip install torch
    ```
 
-4. Configure the `.env` file in the `backend/` directory:
-   Create or edit `backend/.env` with the following keys:
+3. Copy `backend/.env.example` to `backend/.env` and fill it in. The backend also reads a `.env` in the repository root.
 
    ```env
-   # Google Gemini API
-   GEMINI_API_KEY=your_actual_gemini_api_key_here
-   GEMINI_MODEL=gemini-2.5-flash
+   # ElevenLabs Scribe v2 (required for transcription and subtitle generation).
+   # If empty, users are asked for their own key in the browser.
+   ELEVENLABS_API_KEY=your_elevenlabs_api_key
+   ELEVENLABS_MODEL_ID=scribe_v2
 
-   # Neon PostgreSQL Database Connection String
-   DATABASE_URL=postgresql://user:password@ep-sample-pooler.us-east-2.aws.neon.tech/neondb?sslmode=require
+   # Google Gemini (optional: proofreading, Gemini QC fix, context helpers)
+   GEMINI_API_KEY=your_gemini_api_key
+   GEMINI_MODEL=gemini-3.8-flash
+   # Extra Gemini gender votes in Transcription Studio
+   GEMINI_ASSIST=false
 
-   # Whisper Configuration (options: tiny, base, small, medium)
-   WHISPER_MODEL=base
+   # Defaults when a file has no language/script chosen
+   DEFAULT_LANGUAGE=Hindi
+   DEFAULT_SCRIPT=Devanagari
 
-   # Authentication & Security
-   JWT_SECRET_KEY=generate_a_random_64_char_secret_key_here
-   JWT_ALGORITHM=HS256
-   ACCESS_TOKEN_EXPIRE_MINUTES=1440
+   # Karya segmentation limits
+   MAX_SEGMENT_DURATION=20.0
+   MIN_SEGMENT_DURATION=0.5
+   SEGMENT_BUFFER_SEC=0.3
+   MAX_SILENCE_SEC=4.0
 
-   # Server Port
-   PORT=8000
+   # Accounts database (SQLite). Defaults to backend/data/transcribe_app.db when unset.
+   SERVER_DB_PATH=
+   # Saved projects (Neon PostgreSQL, optional). Project saving is disabled when unset.
+   DATABASE_URL=postgresql://user:password@ep-sample-pooler.neon.tech/neondb?sslmode=require
+
+   # Links in verification emails point here
+   FRONTEND_URL=http://localhost:5173
+
+   # Brevo email. Without a key, verification links and OTPs are printed to the backend console.
+   BREVO_API_KEY=
+   BREVO_SENDER_EMAIL=noreply@verbolabs.com
+   BREVO_SENDER_NAME=VerboLabs Verification
+   OTP_SECRET=a_long_random_secret
+
+   # Centroid translation + QC (optional)
+   CENTROID_API_URL=
+   CENTROID_API_KEY=
    ```
 
-5. Start the FastAPI development server:
+   Other optional settings:
+   * `ALLOWED_ORIGINS`: extra comma-separated CORS origins. Localhost, `*.verbolabs.com` and `transcribe.verbolabs.com` are always allowed; `ALLOWED_ORIGIN_REGEX` replaces the default origin pattern.
+   * `ENABLE_SHOT_DETECTION`: shot detection is on by default locally but **off when `PORT` or `RENDER` is set** (treated as a cloud host). Set `ENABLE_SHOT_DETECTION=true` to force it on.
+   * `CENTROID_TIMEOUT_SEC`: Centroid request timeout, default 600.
+
+4. Start the API:
 
    ```bash
-   venv\Scripts\python -m uvicorn app.main:app --reload --port 8000
+   python -m uvicorn app.main:app --reload --port 8000
    ```
 
-   * The API will be live at: `http://localhost:8000`
-   * Interactive Swagger Documentation: `http://localhost:8000/docs`
+   * API: `http://localhost:8000` (health check at `/api/health`)
+   * Swagger docs: `http://localhost:8000/docs`
 
 ---
 
 ### Step 3: Frontend Setup
 
-1. Open a second terminal and navigate to the `frontend` directory:
+1. In a second terminal:
 
    ```bash
    cd frontend
-   ```
-
-2. Install Node.js packages:
-
-   ```bash
    npm install
-   ```
-
-3. Configure Frontend Environment (Optional):
-   By default, Vite proxies requests or connects to `http://localhost:8000`. You can create `frontend/.env.development`:
-
-   ```env
-   VITE_API_BASE=http://localhost:8000
-   ```
-
-4. Start the Vite development server:
-
-   ```bash
    npm run dev
    ```
 
-   * The React application will be live at: `http://localhost:5173`
+   `npm run dev` first copies the ffmpeg.wasm core into `public/`, then starts Vite on `http://localhost:5173`.
+
+2. Backend URL: on localhost the app probes `http://localhost:8000` and `:8001` and uses whichever answers `/api/health`, so no configuration is needed. To point at another backend, set `VITE_API_URL` (for example in `frontend/.env.local`). The Vite dev proxy for `/api` targets `VITE_BACKEND_URL`, default `http://127.0.0.1:8000`.
+
+3. Lint with `npm run lint`.
+
+On Windows, `run_app.bat` (or `npm start` in the repository root) creates the venv, installs both sides and starts the backend and frontend in separate windows.
 
 ---
 
-### Step 4: Running Automated Tests
+### Step 4: Accounts
 
-To verify all audio processing, VAD, and alignment algorithms:
+Sign-up accepts any valid email address and requires email verification. Without `BREVO_API_KEY`, verification links, password-reset links and login OTPs are printed in the backend console instead of being emailed. Accounts live in the SQLite file (`backend/data/transcribe_app.db` by default). Super-admin accounts are a fixed list in `app/auth_module/routes.py`; admins can manage other users from `/admin`.
+
+---
+
+### Step 5: Running Tests
 
 ```bash
 cd backend
-venv\Scripts\python -m pytest tests/ -v
+python -m pytest tests/ -v
 ```
+
+The suite still contains tests written for the removed Whisper/DTW pipeline. Many of them (for example `test_phase*`, `test_aligner_margin.py`, `test_dtw_extrapolation.py`, `test_real_*`) fail at import because they need `app.whisper_aligner`, `app.dtw_aligner` or PyTorch. The files that import cleanly against the current code are:
+
+```bash
+python -m pytest tests/test_pipeline.py tests/test_elevenlabs_netflix_engine.py tests/test_phonetic_translit.py tests/test_auth_service.py tests/test_all_phases_improvements.py -v
+```
+
+Even these are not fully green yet: `test_auth_service.py` still expects sign-up to be limited to `@verbolabs.com`, `test_all_phases_improvements.py` has Whisper, DTW and batching cases, and `test_gap_chaining` in `test_elevenlabs_netflix_engine.py` fails. There is no CI, so run the suite locally before pushing.
 
 ---
 
 ## 3. Production Server Deployment Guide (Linux / VPS)
 
-This section details how to deploy the entire stack to a Linux server (Ubuntu 22.04 / 24.04 LTS) using **Nginx**, **Systemd**, **Gunicorn/Uvicorn**, and **Let's Encrypt SSL**.
+This section details how to deploy the entire stack to a Linux server (Ubuntu 22.04 / 24.04 LTS) using **Nginx**, **Systemd**, **Uvicorn**, and **Let's Encrypt SSL**. The hosted frontend is deployed to Vercel from `frontend/` instead; in that case set `VITE_API_URL` in the Vercel project to the backend's public URL and skip the frontend and static-file parts below.
 
 ### Server Sizing Recommendations
 
-* **CPU:** 2 to 4 vCPUs (Whisper and audio processing are CPU-bound if no GPU is present).
-* **RAM:** 4 GB minimum (8 GB recommended for concurrent batch processing).
-* **Storage:** 30 GB+ SSD (to accommodate temporary media uploads and Whisper models).
+* **CPU:** 2 vCPUs is enough; transcription runs on ElevenLabs, so the server mainly runs FFmpeg and the Netflix engine.
+* **RAM:** 4 GB minimum (more if you install PyTorch for Silero VAD).
+* **Storage:** 30 GB+ SSD for uploaded media and extracted audio.
 * **OS:** Ubuntu 22.04 LTS or 24.04 LTS.
 
 ---
@@ -240,7 +287,6 @@ cd /var/www/transcribe
    source venv/bin/activate
    pip install --upgrade pip
    pip install -r requirements.txt
-   pip install gunicorn
    ```
 
 2. Configure the production `.env` file:
@@ -249,16 +295,21 @@ cd /var/www/transcribe
    nano /var/www/transcribe/backend/.env
    ```
 
-   Paste your production secrets:
+   Use the same keys as the local `.env` above, with production values:
 
    ```env
+   ELEVENLABS_API_KEY=your_elevenlabs_api_key
    GEMINI_API_KEY=your_gemini_api_key
-   GEMINI_MODEL=gemini-2.5-flash
+   GEMINI_MODEL=gemini-3.8-flash
    DATABASE_URL=postgresql://user:password@ep-pooler.neon.tech/neondb?sslmode=require
-   WHISPER_MODEL=base
-   JWT_SECRET_KEY=your_strong_random_secret_key
-   PORT=8000
+   SERVER_DB_PATH=/var/www/transcribe/backend/data/transcribe_app.db
+   FRONTEND_URL=https://yourdomain.com
+   BREVO_API_KEY=your_brevo_api_key
+   OTP_SECRET=your_strong_random_secret
+   ALLOWED_ORIGINS=https://yourdomain.com
    ```
+
+   Do not set `PORT` in this file unless you also set `ENABLE_SHOT_DETECTION=true`, because `PORT` turns shot detection off.
 
 3. Create the uploads directory and set permissions:
 
@@ -289,7 +340,7 @@ User=ubuntu
 Group=ubuntu
 WorkingDirectory=/var/www/transcribe/backend
 EnvironmentFile=/var/www/transcribe/backend/.env
-ExecStart=/var/www/transcribe/backend/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 2 --timeout-keep-alive 120
+ExecStart=/var/www/transcribe/backend/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1 --timeout-keep-alive 120
 Restart=always
 RestartSec=5
 KillMode=mixed
@@ -298,6 +349,8 @@ TimeoutStopSec=30
 [Install]
 WantedBy=multi-user.target
 ```
+
+Keep a single worker: upload sessions and audio-extraction jobs are held in process memory, so a second worker would not see them.
 
 Enable and start the service:
 
@@ -324,10 +377,10 @@ sudo systemctl status transcribe-backend
    nano .env.production
    ```
 
-   Set the API base URL to your domain (or leave empty if using relative paths):
+   Set the backend URL. Leave it empty when Nginx serves the API on the same domain (the app then calls `/api/...` on the same origin):
 
    ```env
-   VITE_API_BASE=
+   VITE_API_URL=
    ```
 
 3. Install dependencies and build:
@@ -372,28 +425,19 @@ server {
         proxy_pass http://127.0.0.1:8000;
         proxy_http_version 1.1;
 
-        # WebSocket support
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-
-        # Standard headers
+    # Standard headers
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
 
-        # CRITICAL for Server-Sent Events (SSE) Batch Streaming
+        # Required for the Server-Sent Events generation stream
         proxy_buffering off;
         proxy_cache off;
         proxy_read_timeout 600s;
         proxy_send_timeout 600s;
     }
 
-    # 3. Serve Uploaded Audio / Video Previews
-    location /uploads/ {
-        alias /var/www/transcribe/backend/uploads/;
-        add_header Cache-Control "no-cache";
-    }
 }
 ```
 
@@ -449,9 +493,9 @@ cd frontend && npm install && npm run build
 sudo systemctl restart transcribe-backend
 ```
 
-#### Scheduled Cleanup of Temporary Audio Chunks (Optional Cron)
+#### Scheduled Cleanup of Old Uploads (Optional Cron)
 
-To automatically purge leftover audio chunks older than 2 days, add a daily cron job:
+Uploaded media and extracted audio stay in `backend/uploads/` until the user discards them. To purge files older than 2 days, add a daily cron job:
 
 ```bash
 crontab -e
@@ -460,5 +504,5 @@ crontab -e
 Add:
 
 ```bash
-0 3 * * * find /var/www/transcribe/backend/uploads/ -name "temp_*" -type f -mtime +2 -delete
+0 3 * * * find /var/www/transcribe/backend/uploads/ -type f -mtime +2 -delete
 ```

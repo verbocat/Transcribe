@@ -6,45 +6,6 @@ from pathlib import Path
 backend_dir = Path(__file__).parent.parent
 sys.path.insert(0, str(backend_dir))
 
-def test_fix1_whisper_model_defaults():
-    print("\n--- TEST 1: Fix 1 - Whisper Model Defaults (No hardcoded medium) ---")
-    import app.config as config
-    assert config.WHISPER_MODEL in ["base", "tiny"], f"config.WHISPER_MODEL unexpected: {config.WHISPER_MODEL}"
-    print(f"PASS: config.WHISPER_MODEL is '{config.WHISPER_MODEL}' (not 'medium')")
-
-    is_cloud = bool(os.getenv("RENDER") or os.getenv("PORT"))
-    expected_default = "tiny" if is_cloud else "base"
-    resolved = os.getenv("WHISPER_MODEL", expected_default)
-    assert resolved == expected_default, f"Expected default {expected_default}, got {resolved}"
-    print(f"PASS: whisper_aligner defaults to '{expected_default}'")
-
-def test_fix6_batch_cursor_continuity():
-    print("\n--- TEST 2: Fix 6 - Batch Cursor Monotonicity on Errors ---")
-    from app.gemini_subtitle_generator import resolve_batch_timestamps
-
-    # Case A: Normal batch
-    prev_batch_end = 0.0
-    batch1_subs = [
-        {"id": 1, "start_time": 1.0, "end_time": 4.0, "text": "First event"}
-    ]
-    res1 = resolve_batch_timestamps(batch1_subs, chunk_s=0.0, chunk_e=30.0, prev_batch_end=prev_batch_end)
-    prev_batch_end = res1[-1]["end_time"]
-    assert prev_batch_end == 4.0, f"Expected 4.0, got {prev_batch_end}"
-
-    # Case B: Batch 2 fails or is empty (e.g. chunk 30.0s -> 60.0s)
-    # Fix 6 specifies: prev_batch_end = max(prev_batch_end, chunk_e)
-    chunk2_s, chunk2_e = 30.0, 60.0
-    prev_batch_end = max(prev_batch_end, chunk2_e)
-    assert prev_batch_end == 60.0, f"Expected cursor to advance to 60.0, got {prev_batch_end}"
-
-    # Case C: Batch 3 (60.0s -> 90.0s)
-    batch3_subs = [
-        {"id": 1, "start_time": 2.0, "end_time": 5.0, "text": "Third batch event"}
-    ]
-    res3 = resolve_batch_timestamps(batch3_subs, chunk_s=60.0, chunk_e=90.0, prev_batch_end=prev_batch_end)
-    assert res3[0]["start_time"] >= 60.0, f"Timestamp jumped backwards! Got {res3[0]['start_time']}"
-    print(f"PASS: Cursor correctly advanced across empty/failed batch to {res3[0]['start_time']}s without backward jumps")
-
 def test_fix2_acoustic_ground_truth_prompt():
     print("\n--- TEST 3: Fix 2 - Two-Tier Acoustic Ground Truth Prompt ---")
     acoustic_anchors = [
@@ -159,37 +120,6 @@ def test_fix3_speaker_registry_and_lock():
     assert "PREVIOUS CONVERSATION CONTEXT" in context_clause
     print("PASS: Speaker registry and prompt lock clause built and injected properly")
 
-def test_fix5_dtw_acoustic_prefilter():
-    print("\n--- TEST 6: Fix 5 - Acoustic DTW Pre-filter ---")
-    from app.whisper_aligner import _prefilter_words_to_speech_regions
-
-    speech_anchors = [
-        {"start": 1.0, "end": 3.0, "text": "Speech chunk 1"},
-        {"start": 5.0, "end": 7.0, "text": "Speech chunk 2"},
-    ]
-    raw_words = [
-        {"word": "Speech", "start": 1.0, "end": 1.5},
-        {"word": "chunk", "start": 1.6, "end": 2.2},
-        {"word": "1", "start": 2.3, "end": 2.9},
-        {"word": "hallucination_in_silence", "start": 3.8, "end": 4.2},
-        {"word": "Speech", "start": 5.0, "end": 5.5},
-        {"word": "chunk", "start": 5.6, "end": 6.2},
-        {"word": "2", "start": 6.3, "end": 6.9},
-        {"word": "silence_noise", "start": 8.0, "end": 8.5},
-    ]
-
-    filtered = _prefilter_words_to_speech_regions(raw_words, speech_anchors, collar_sec=0.10)
-    filtered_words = [w["word"] for w in filtered]
-
-    assert "Speech" in filtered_words
-    assert "chunk" in filtered_words
-    assert "1" in filtered_words
-    assert "2" in filtered_words
-    assert "hallucination_in_silence" not in filtered_words
-    assert "silence_noise" not in filtered_words
-    assert len(filtered) == 6, f"Expected 6 speech words, got {len(filtered)}"
-    print(f"PASS: Acoustic pre-filter eliminated silence hallucination words ({len(raw_words)} -> {len(filtered)})")
-
 def test_pipeline_a_isolation():
     print("\n--- TEST 7: Pipeline A (Karya Transcription) Total Isolation ---")
     import app.gemini_transcriber as gt
@@ -198,13 +128,10 @@ def test_pipeline_a_isolation():
     print("PASS: Pipeline A (gemini_transcriber) is 100% isolated and functional")
 
 if __name__ == "__main__":
-    test_fix1_whisper_model_defaults()
-    test_fix6_batch_cursor_continuity()
     test_fix2_acoustic_ground_truth_prompt()
     test_fix4_structured_qc_diagnostics()
     test_fix3_speaker_registry_and_lock()
-    test_fix5_dtw_acoustic_prefilter()
     test_pipeline_a_isolation()
     print("\n=======================================================")
-    print(">>> ALL PHASES & ALL 6 FIXES TESTED & VERIFIED 100% PASS! <<<")
+    print(">>> ALL PHASES & ALL REMAINING FIXES TESTED & VERIFIED 100% PASS! <<<")
     print("=======================================================\n")

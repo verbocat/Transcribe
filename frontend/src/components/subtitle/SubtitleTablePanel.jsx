@@ -1,9 +1,11 @@
 import { Button } from './ui/controls';
 import React, { useState, useMemo, useRef, useEffect, useCallback, memo } from 'react';
 import {
-  Search, Play, Trash2, AlertCircle, Plus, Download, ChevronUp, ChevronDown,
-  Bold, Italic, Underline, Scissors, Merge, WrapText, User, LogIn, LogOut, Crosshair
+  Search, Play, Trash2, AlertCircle, Plus, Download,
+  Bold, Italic, Underline, Scissors, Merge, WrapText, User, LogIn, LogOut, Crosshair,
+  AlignLeft, AlignCenter, AlignRight, AlignVerticalJustifyStart, AlignVerticalJustifyCenter, AlignVerticalJustifyEnd
 } from 'lucide-react';
+import { stripFormatting, toggleWrap, getAlignment, setAlignment, alignmentParts, alignmentFromParts, formattedRuns } from './formatTags';
 import { langName } from './languages';
 import { getPlayhead } from '../../utils/playheadBus';
 import { usePlayheadSelector } from '../../utils/usePlayheadSelector';
@@ -31,7 +33,7 @@ function parseSMPTE(str) {
   return null;
 }
 
-const stripTags = (t) => (t || '').replace(/<[^>]+>/g, '');
+const stripTags = stripFormatting;
 const startOf = (ev) => ev.start_time ?? ev.start ?? 0;
 const endOf = (ev) => ev.end_time ?? ev.end ?? 0;
 const idOf = (ev) => ev.id ?? ev.event_id;
@@ -146,17 +148,29 @@ function TimeInput({ value, onCommit, invalid, label }) {
   );
 }
 
-function ToolButton({ title, onClick, children, danger = false, disabled = false }) {
+// Subtitle text with its <b>/<i>/<u> shown as styling instead of raw tags
+function FormattedText({ text }) {
+  return formattedRuns(text).map((r, i) => (
+    <span key={i} className={`${r.bold ? 'font-bold' : ''} ${r.italic ? 'italic' : ''} ${r.underline ? 'underline' : ''}`}>{r.text}</span>
+  ));
+}
+
+function ToolButton({ title, onClick, children, danger = false, disabled = false, active = false }) {
   return (
     <button
       type="button"
       title={title}
       aria-label={title}
       disabled={disabled}
+      aria-pressed={active || undefined}
+      // Keep the text box focused so its selection survives the click
+      onMouseDown={(e) => e.preventDefault()}
       onClick={(e) => { e.stopPropagation(); onClick(); }}
       className={`h-6 min-w-6 px-1 inline-flex items-center justify-center gap-1 rounded-md border text-[10px] font-semibold transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed ${
         danger
           ? 'border-rose-500/30 bg-rose-500/10 text-rose-300 hover:bg-rose-500/20'
+          : active
+          ? 'border-[var(--ss-accent)] bg-[var(--ss-accent)]/15 text-[var(--ss-accent)]'
           : 'border-[var(--ss-line)] bg-[var(--ss-raised)] text-slate-300 hover:text-white hover:border-slate-500'
       }`}
     >
@@ -168,7 +182,7 @@ function ToolButton({ title, onClick, children, danger = false, disabled = false
 /** One cue. Memoized: re-renders only when its own data or state flags change. */
 const SubtitleRow = memo(function SubtitleRow({
   ev, pos, isActive, isPlaying, isSelected, prevEnd, nextStart,
-  cpsLimit, cplLimit, minDuration, maxDuration, frameRate,
+  cpsLimit, cplLimit, minDuration, maxDuration,
   availableSpeakers, focusOnActivate, actions,
   sourceText,
 }) {
@@ -181,7 +195,6 @@ const SubtitleRow = memo(function SubtitleRow({
     [isActive, m.start, m.end]
   );
   const textareaRef = useRef(null);
-  const frame = 1 / (frameRate || 24);
 
   // Focus the editor when this row was opened by clicking its text
   useEffect(() => {
@@ -211,17 +224,24 @@ const SubtitleRow = memo(function SubtitleRow({
     ta.style.height = `${ta.scrollHeight}px`;
   }, [isActive, ev.text]);
 
+  // Bold / italic / underline: wraps the selected words, or the whole subtitle when nothing is selected
   const wrapSelection = (tag) => {
     const ta = textareaRef.current;
+    const value = ev.text || '';
+    const hasSelection = ta && document.activeElement === ta && ta.selectionStart !== ta.selectionEnd;
+    const s = hasSelection ? ta.selectionStart : 0;
+    const e = hasSelection ? ta.selectionEnd : 0;
+    const next = toggleWrap(value, s, e, tag);
+    actions.updateText(id, next.text);
     if (!ta) return;
-    const { selectionStart: s, selectionEnd: e, value } = ta;
-    const next = `${value.slice(0, s)}<${tag}>${value.slice(s, e)}</${tag}>${value.slice(e)}`;
-    actions.updateText(id, next);
     requestAnimationFrame(() => {
       ta.focus();
-      ta.setSelectionRange(s + tag.length + 2, e + tag.length + 2);
+      ta.setSelectionRange(next.start, next.end);
     });
   };
+
+  const alignment = alignmentParts(getAlignment(ev.text));
+  const align = (horizontal, vertical) => actions.updateText(id, setAlignment(ev.text || '', alignmentFromParts(horizontal, vertical)));
 
   const gapIn = prevEnd === null ? null : m.start - prevEnd;
   const gapOut = nextStart === null ? null : nextStart - m.end;
@@ -340,7 +360,7 @@ const SubtitleRow = memo(function SubtitleRow({
             }`}
             title="Click to edit"
           >
-            {stripTags(ev.text) || <span className="italic text-slate-600">Empty subtitle</span>}
+            {stripTags(ev.text) ? <FormattedText text={ev.text} /> : <span className="italic text-slate-600">Empty subtitle</span>}
           </div>
         )}
 
@@ -374,12 +394,8 @@ const SubtitleRow = memo(function SubtitleRow({
         <div className="pl-[62px] pr-3 pb-2 flex flex-wrap items-center gap-x-2 gap-y-1.5 text-[10px]" onClick={(e) => e.stopPropagation()}>
           {/* Timing */}
           <span className="text-slate-500 font-semibold">In</span>
-          <ToolButton title="Start −1 frame" onClick={() => actions.timeChange(id, Math.max(0, m.start - frame), m.end)}><ChevronDown size={11} /></ToolButton>
-          <ToolButton title="Start +1 frame" disabled={m.start + frame >= m.end} onClick={() => actions.timeChange(id, m.start + frame, m.end)}><ChevronUp size={11} /></ToolButton>
           <ToolButton title="Set start to playhead" disabled={playheadZone === 'after'} onClick={() => { const t = getPlayhead(); if (t < m.end) actions.timeChange(id, t, m.end); }}><LogIn size={11} /></ToolButton>
           <span className="text-slate-500 font-semibold ml-1">Out</span>
-          <ToolButton title="End −1 frame" disabled={m.end - frame <= m.start} onClick={() => actions.timeChange(id, m.start, m.end - frame)}><ChevronDown size={11} /></ToolButton>
-          <ToolButton title="End +1 frame" onClick={() => actions.timeChange(id, m.start, m.end + frame)}><ChevronUp size={11} /></ToolButton>
           <ToolButton title="Set end to playhead" disabled={playheadZone === 'before'} onClick={() => { const t = getPlayhead(); if (t > m.start) actions.timeChange(id, m.start, t); }}><LogOut size={11} /></ToolButton>
 
           <span className="font-mono text-slate-500 ml-1">
@@ -398,6 +414,15 @@ const SubtitleRow = memo(function SubtitleRow({
           <ToolButton title="Bold (Ctrl+B)" onClick={() => wrapSelection('b')}><Bold size={11} /></ToolButton>
           <ToolButton title="Italic (Ctrl+I)" onClick={() => wrapSelection('i')}><Italic size={11} /></ToolButton>
           <ToolButton title="Underline (Ctrl+U)" onClick={() => wrapSelection('u')}><Underline size={11} /></ToolButton>
+
+          {/* Alignment, written as an {\anN} tag that SRT players and burn-in honour */}
+          <span className="text-slate-500 font-semibold ml-1">Align</span>
+          <ToolButton title="Align left" active={alignment.horizontal === 'left'} onClick={() => align('left', alignment.vertical)}><AlignLeft size={11} /></ToolButton>
+          <ToolButton title="Align centre" active={alignment.horizontal === 'center'} onClick={() => align('center', alignment.vertical)}><AlignCenter size={11} /></ToolButton>
+          <ToolButton title="Align right" active={alignment.horizontal === 'right'} onClick={() => align('right', alignment.vertical)}><AlignRight size={11} /></ToolButton>
+          <ToolButton title="Place at the top" active={alignment.vertical === 'top'} onClick={() => align(alignment.horizontal, 'top')}><AlignVerticalJustifyStart size={11} /></ToolButton>
+          <ToolButton title="Place in the middle" active={alignment.vertical === 'middle'} onClick={() => align(alignment.horizontal, 'middle')}><AlignVerticalJustifyCenter size={11} /></ToolButton>
+          <ToolButton title="Place at the bottom (default)" active={alignment.vertical === 'bottom'} onClick={() => align(alignment.horizontal, 'bottom')}><AlignVerticalJustifyEnd size={11} /></ToolButton>
           <label className="h-6 inline-flex items-center gap-1 bg-[var(--ss-raised)] border border-[var(--ss-line)] rounded-md px-1.5 text-[11px] text-white" title="Speaker">
             <User size={11} className="text-emerald-400 shrink-0" />
             <select

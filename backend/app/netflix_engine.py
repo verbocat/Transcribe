@@ -570,7 +570,7 @@ def optimize_language_line_breaks(
     5. Bottom-heavy or symmetric pyramid layout.
     6. Strictly forbids orphan words on line 2 (line 2 having <= 4 characters).
     """
-    clean = re.sub(r'<[^>]+>', '', text or '').strip()
+    clean = re.sub(r'<[^>]+>|\{\\an[1-9]\}', '', text or '').strip()
     cpl_limit = custom_cpl or profile.cpl_limit
 
     # Single-line check
@@ -990,7 +990,7 @@ def build_netflix_subtitles_from_words(
         max_possible_end = next_event_start - min_gap_sec
 
         target_duration = max(duration, min_dur)
-        clean_char_len = len(re.sub(r'<[^>]+>', '', formatted_text).replace('\n', ''))
+        clean_char_len = len(re.sub(r'<[^>]+>|\{\\an[1-9]\}', '', formatted_text).replace('\n', ''))
 
         # If CPS is uncomfortably high, pad duration if silence exists
         ideal_duration_for_cps = clean_char_len / max(cps_limit * 0.85, 1.0)
@@ -1143,7 +1143,7 @@ def audit_netflix_compliance(
     for i, ev in enumerate(events):
         qc_errs = []
         dur = ev.duration or (ev.end_time - ev.start_time)
-        clean_text = re.sub(r'<[^>]+>', '', ev.text).replace('\n', '')
+        clean_text = re.sub(r'<[^>]+>|\{\\an[1-9]\}', '', ev.text).replace('\n', '')
         actual_cps = calculate_cps(ev.text, dur)
         actual_cpl = calculate_cpl(ev.text)
         cps_values.append(actual_cps)

@@ -53,11 +53,11 @@ export function minShift(events, fromId = null) {
 const SMALL_WORDS = new Set(['a', 'an', 'and', 'as', 'at', 'but', 'by', 'for', 'in', 'of', 'on', 'or', 'the', 'to', 'vs']);
 
 function caseText(text, mode) {
-  // Leave <i>, <b>, <font …> tags untouched
+  // Leave <i>, <b>, <font …> and {\anN} tags untouched
   return text
-    .split(/(<[^>]+>)/)
+    .split(/(<[^>]+>|\{\\an[1-9]\})/)
     .map((part) => {
-      if (part.startsWith('<') && part.endsWith('>')) return part;
+      if ((part.startsWith('<') && part.endsWith('>')) || /^\{\\an[1-9]\}$/.test(part)) return part;
       if (mode === 'upper') return part.toUpperCase();
       if (mode === 'lower') return part.toLowerCase();
       if (mode === 'sentence') {

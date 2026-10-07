@@ -40,7 +40,7 @@ def calculate_cps(text: str, duration: float) -> float:
     if duration <= 0:
         return 0.0
     
-    clean_text = re.sub(r'<[^>]+>', '', text or '')
+    clean_text = re.sub(r'<[^>]+>|\{\\an[1-9]\}', '', text or '')
     clean_text = clean_text.replace("\n", "")
     
     count = len(clean_text)
@@ -54,7 +54,7 @@ def calculate_cpl(text: str) -> List[int]:
     lines = text.split("\n")
     counts = []
     for line in lines:
-        clean_line = re.sub(r'<[^>]+>', '', line)
+        clean_line = re.sub(r'<[^>]+>|\{\\an[1-9]\}', '', line)
         counts.append(len(clean_line))
     return counts
 

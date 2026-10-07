@@ -119,7 +119,7 @@ VALID_ITALIC_CONTEXTS = {
 
 def _strip_tags(text: str) -> str:
     """Remove HTML/XML tags like <i>, </i>, <b>, </b> from text for character counting."""
-    return re.sub(r'<[^>]+>', '', text)
+    return re.sub(r'<[^>]+>|\{\\an[1-9]\}', '', text)
 
 
 def _strip_music_notes(text: str) -> str:
