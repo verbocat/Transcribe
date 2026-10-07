@@ -128,11 +128,13 @@ select.ts-field { padding-right: 4px; }
 .ts-menu-item:hover:not(:disabled) { background: var(--ts-hover); }
 
 /* ---------- Transcript rows ---------- */
+.ts-list { container-type: inline-size; }
+/* play | times | speaker | source + translation | actions. Meta columns are fixed so every row lines up. */
 .ts-row {
-  display: grid; grid-template-columns: 64px 168px 196px minmax(0, 1fr) 92px; gap: 12px;
-  padding: calc(12px * var(--kt-density)) 16px calc(12px * var(--kt-density)) 13px; border-bottom: 1px solid var(--ts-line-soft);
+  display: grid; grid-template-columns: 52px 132px 164px minmax(0, 1fr) 56px; gap: 4px 12px;
+  padding: calc(8px * var(--kt-density)) 12px calc(8px * var(--kt-density)) 9px; border-bottom: 1px solid var(--ts-line-soft);
   border-left: 3px solid transparent; align-items: start;
-  content-visibility: auto; contain-intrinsic-size: auto calc(92px * var(--kt-density));
+  content-visibility: auto; contain-intrinsic-size: auto calc(66px * var(--kt-density));
 }
 .ts-row:hover { background: rgba(255, 255, 255, 0.018); }
 .ts-row[data-active='true'] { background: var(--ts-selected); border-left-color: var(--ts-accent); }
@@ -140,17 +142,32 @@ select.ts-field { padding-right: 4px; }
 .ts-row[data-issue='warning'] { border-left-color: var(--ts-warn); }
 .ts-row[data-active='true'][data-issue] { border-left-color: var(--ts-accent); }
 
-.ts-text {
-  width: 100%; resize: none; overflow: hidden; background: transparent; border: 1px solid transparent;
-  border-radius: var(--kt-r2); padding: 6px 8px; margin: -6px -8px; width: calc(100% + 16px);
-  font-family: var(--ts-font-script); font-size: var(--kt-transcript-size); line-height: 1.55; color: var(--ts-text);
+.ts-col-play { display: flex; align-items: center; gap: 6px; height: 26px; }
+.ts-idx { color: var(--ts-faint); font-size: 12px; }
+.ts-col-time, .ts-col-speaker { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.ts-col-speaker .ts-seg { align-self: flex-start; }
+.ts-stamp { color: var(--ts-faint); font-size: 11px; line-height: 20px; white-space: nowrap; }
+.ts-stamp[data-warn='true'] { color: var(--ts-danger); }
+
+/* Source and translation share one grid so both start on the same baseline and split the width evenly */
+.ts-col-text { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px 12px; align-items: start; }
+.ts-col-text[data-has-translation='true'] { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.ts-chips { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 4px; }
+.ts-chips .ts-chip { height: 20px; padding: 0 8px; font-size: 11px; }
+
+.ts-text, .ts-translation {
+  width: 100%; min-height: 28px; padding: 3px 8px; border: 1px solid transparent; border-left: 2px solid transparent;
+  border-radius: var(--kt-r2); margin: 0;
+  font-family: var(--ts-font-script); font-size: var(--kt-transcript-size); line-height: 1.5; color: var(--ts-text);
 }
+.ts-text { resize: none; overflow: hidden; background: transparent; }
 .ts-text:hover { background: rgba(255, 255, 255, 0.025); }
 .ts-text:focus { background: var(--ts-panel); border-color: var(--ts-accent); }
 .ts-text::placeholder { color: var(--ts-faint); }
+.ts-translation { border-left-color: var(--ts-accent); background: rgba(var(--ts-accent-rgb), 0.06); border-radius: 0 6px 6px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 
 .ts-time {
-  width: 64px; height: 26px; padding: 0 6px; border-radius: var(--kt-r1); border: 1px solid var(--ts-line);
+  width: 62px; height: 26px; padding: 0 6px; border-radius: var(--kt-r1); border: 1px solid var(--ts-line);
   background: var(--ts-panel); color: var(--ts-text); text-align: center; font-size: 12px;
   font-family: var(--ts-font-mono); font-variant-numeric: tabular-nums;
 }
@@ -160,12 +177,12 @@ select.ts-field { padding-right: 4px; }
 .ts-time::-webkit-inner-spin-button, .ts-time::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 
 .ts-playbtn {
-  width: 28px; height: 28px; border-radius: 50%; border: 1px solid var(--ts-line); background: var(--ts-raised);
+  width: 26px; height: 26px; border-radius: 50%; border: 1px solid var(--ts-line); background: var(--ts-raised);
   color: var(--ts-text); display: inline-flex; align-items: center; justify-content: center;
 }
 .ts-playbtn:hover { background: var(--ts-accent); color: var(--ts-accent-ink); border-color: var(--ts-accent); }
 
-.ts-actions { display: flex; gap: 2px; opacity: 0; transition: opacity 0.12s; justify-content: flex-end; }
+.ts-actions { display: grid; grid-template-columns: 26px 26px; gap: 2px; justify-content: end; opacity: 0; transition: opacity 0.12s; }
 .ts-row:hover .ts-actions, .ts-row[data-active='true'] .ts-actions, .ts-actions:focus-within { opacity: 1; }
 
 .ts-spkdot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
@@ -181,10 +198,15 @@ select.ts-field { padding-right: 4px; }
 .ts-track { height: 4px; background: var(--ts-line); border-radius: 4px; overflow: hidden; }
 .ts-track > div { height: 100%; background: var(--ts-accent); border-radius: 4px; transition: width 0.3s ease-out; }
 
-@media (max-width: 1100px) {
-  .ts-row { grid-template-columns: 52px 150px minmax(0, 1fr) 80px; }
-  .ts-row .ts-col-speaker { grid-column: 2 / 4; grid-row: 2; }
-  .ts-row .ts-col-text { grid-column: 2 / 5; grid-row: 3; }
+/* Narrow list: source and translation stack, and the speaker control moves beside the times */
+@container (max-width: 980px) {
+  .ts-col-text[data-has-translation='true'] { grid-template-columns: minmax(0, 1fr); }
+}
+@container (max-width: 760px) {
+  .ts-row { grid-template-columns: 52px 132px minmax(0, 1fr) 56px; }
+  .ts-row .ts-col-speaker { grid-column: 3; grid-row: 1; }
+  .ts-row .ts-col-text { grid-column: 1 / 4; grid-row: 2; }
+  .ts-row .ts-actions { grid-column: 4; grid-row: 1; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -193,5 +215,4 @@ select.ts-field { padding-right: 4px; }
   }
 }
 
-.ts-translation { margin-top: 6px; padding: 6px 10px; border-left: 2px solid var(--ts-accent); background: rgba(var(--ts-accent-rgb), 0.06); border-radius: 0 6px 6px 0; color: var(--ts-text); font-family: var(--ts-font-script); line-height: 1.5; white-space: pre-wrap; }
 .transcribe-studio .ss-indeterminate { background-image: linear-gradient(90deg, transparent 0%, var(--ss-accent) 50%, transparent 100%); background-size: 40% 100%; background-repeat: no-repeat; animation: ts-indeterminate 1.3s ease-in-out infinite; }
