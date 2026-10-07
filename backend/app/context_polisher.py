@@ -202,11 +202,18 @@ def _flat(text: str) -> str:
     return " ".join((text or "").split())
 
 
+def _is_dual_speaker(text: str) -> bool:
+    lines = [ln.strip() for ln in (text or "").split("\n") if ln.strip()]
+    return len(lines) == 2 and all(ln.startswith(("-", "–", "—")) for ln in lines)
+
+
 def _accept_change(old: str, new: str, language: str, style: str, max_cpl: int, max_lines: int, corrected: bool) -> bool:
     """Safety net: a proofreading fix may touch a few words, never rewrite the line."""
     if not new or not new.strip():
         return False
     lines = [ln for ln in new.split("\n") if ln.strip()]
+    if _is_dual_speaker(old) != _is_dual_speaker(new):
+        return False  # a two-speaker card keeps its "-line / -line" shape, and a one-speaker card never gains it
     if len(lines) > max_lines or any(len(ln) > max_cpl + 4 for ln in lines):
         return False
     fo, fn = _flat(old), _flat(new)
