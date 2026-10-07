@@ -4,6 +4,22 @@
  * entirely inside the browser without requiring backend network calls.
  */
 
+import { stripFormatting, getAlignment, alignmentParts } from '../components/subtitle/formatTags';
+
+const ALIGN_TAGS = /\{\\an[1-9]\}/g;
+
+// WebVTT has no {\anN}; the same placement is expressed as cue settings
+function vttCueSettings(text) {
+  if (!/\{\\an[1-9]\}/.test(text)) return '';
+  const { horizontal, vertical } = alignmentParts(getAlignment(text));
+  const settings = [];
+  if (vertical === 'top') settings.push('line:0');
+  else if (vertical === 'middle') settings.push('line:50%');
+  if (horizontal === 'left') settings.push('align:start');
+  else if (horizontal === 'right') settings.push('align:end');
+  return settings.length ? ` ${settings.join(' ')}` : '';
+}
+
 export function formatTimeSeconds(seconds, separator = ',') {
   if (seconds == null || isNaN(seconds)) return `00:00:00${separator}000`;
   const secNum = Math.max(0, parseFloat(seconds));
@@ -35,9 +51,10 @@ export function exportVttLocally(events) {
   events.forEach((ev, idx) => {
     const s = ev.start_time ?? ev.start ?? 0.0;
     const e = ev.end_time ?? ev.end ?? 0.0;
-    const text = String(ev.text || '').replace(/\.\.\./g, '…');
+    const raw = String(ev.text || '');
+    const text = raw.replace(ALIGN_TAGS, '').replace(/\.\.\./g, '…');
     lines.push(String(idx + 1));
-    lines.push(`${formatTimeSeconds(s, '.')} --> ${formatTimeSeconds(e, '.')}`);
+    lines.push(`${formatTimeSeconds(s, '.')} --> ${formatTimeSeconds(e, '.')}${vttCueSettings(raw)}`);
     lines.push(text);
     lines.push('');
   });
@@ -51,7 +68,7 @@ export function exportTxtLocally(events) {
     const s = formatTimeSeconds(ev.start_time ?? ev.start ?? 0.0, '.');
     const e = formatTimeSeconds(ev.end_time ?? ev.end ?? 0.0, '.');
     const speaker = (ev.speakers && ev.speakers[0]) || ev.speaker || 'Speaker';
-    const text = String(ev.text || '').replace(/\n/g, ' ').replace(/\.\.\./g, '…');
+    const text = stripFormatting(ev.text).replace(/\n/g, ' ').replace(/\.\.\./g, '…');
     lines.push(`[${s} --> ${e}] ${speaker}: ${text}`);
   });
   return lines.join('\n');
@@ -78,6 +95,7 @@ export function exportTtmlLocally(events, language = 'en') {
     const s = formatTimeSeconds(ev.start_time ?? ev.start ?? 0.0, '.');
     const e = formatTimeSeconds(ev.end_time ?? ev.end ?? 0.0, '.');
     let text = String(ev.text || '')
+      .replace(ALIGN_TAGS, '')
       .replace(/\.\.\./g, '…')
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
