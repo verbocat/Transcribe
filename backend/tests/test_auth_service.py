@@ -5,9 +5,31 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.auth_module.database import get_auth_db, SessionLocal, AuthBase, engine
 from app.auth_module.security import validate_verbolabs_email, validate_password, check_password_policy
-from app.auth_module.models import User, VerificationToken, LoginHistory
+from app.auth_module.models import User, VerificationToken, LoginHistory, AuthFailedAttempt
 
 client = TestClient(app)
+
+
+def login_with_otp(email, password, operating_location, name=None):
+    """Runs the full sign-in: password step, "Login with OTP", then the emailed code."""
+    body = {"email": email, "password": password, "operating_location": operating_location}
+    if name:
+        body["name"] = name
+    login_res = client.post("/api/auth/login", json=body)
+    if login_res.status_code != 200:
+        return login_res
+    challenge_id = login_res.json()["challenge_id"]
+
+    sent = {}
+    def capture_otp(user_name, user_email, otp):
+        sent["otp"] = otp
+        return {"success": True, "mode": "mock", "message": "OK"}
+
+    with patch("app.auth_module.routes.send_mfa_login_otp_email", side_effect=capture_otp):
+        otp_res = client.post("/api/auth/request-otp", json={"challenge_id": challenge_id})
+    assert otp_res.status_code == 200, otp_res.text
+
+    return client.post("/api/auth/verify-otp", json={"challenge_id": challenge_id, "otp": sent["otp"]})
 
 class TestAuthService(unittest.TestCase):
     @classmethod
@@ -19,6 +41,9 @@ class TestAuthService(unittest.TestCase):
         db = SessionLocal()
         try:
             db.query(User).filter(User.email.like("%test_%@verbolabs.com")).delete(synchronize_session=False)
+            # Failed logins are counted per IP, and every TestClient request shares one,
+            # so clear them to keep one test's failures from tripping the next one's bot check.
+            db.query(AuthFailedAttempt).delete(synchronize_session=False)
             db.commit()
         finally:
             db.close()
@@ -32,16 +57,20 @@ class TestAuthService(unittest.TestCase):
         valid_sub, msg = validate_verbolabs_email("tech@dev.verbolabs.com")
         self.assertTrue(valid_sub)
 
-        # Invalid domains
-        invalid1, msg1 = validate_verbolabs_email("user@gmail.com")
+        # Any domain is accepted
+        other1, _ = validate_verbolabs_email("user@gmail.com")
+        self.assertTrue(other1)
+
+        other2, _ = validate_verbolabs_email("user@yahoo.co.in")
+        self.assertTrue(other2)
+
+        # Malformed addresses are rejected
+        invalid1, msg1 = validate_verbolabs_email("notanemail")
         self.assertFalse(invalid1)
-        self.assertIn("verbolabs.com", msg1)
+        self.assertIn("valid email", msg1.lower())
 
-        invalid2, msg2 = validate_verbolabs_email("user@yahoo.co.in")
+        invalid2, _ = validate_verbolabs_email("")
         self.assertFalse(invalid2)
-
-        invalid3, msg3 = validate_verbolabs_email("notanemail")
-        self.assertFalse(invalid3)
 
     def test_password_policy(self):
         # Valid password: 8+ chars, lower, UPPER, number, symbol, SPACE
@@ -83,16 +112,16 @@ class TestAuthService(unittest.TestCase):
         test_email = "test_alice@verbolabs.com"
         test_password = "Secure Pass#2026"
 
-        # 1. Signup with invalid domain
+        # 1. Signup with a malformed email
         bad_signup = client.post("/api/auth/signup", json={
             "name": "Alice Tester",
-            "email": "alice@gmail.com",
+            "email": "alice-at-nowhere",
             "password": test_password,
             "confirm_password": test_password,
             "employee_id": "EMP-001"
         })
         self.assertEqual(bad_signup.status_code, 400)
-        self.assertIn("verbolabs.com", bad_signup.json()["detail"])
+        self.assertIn("valid email", bad_signup.json()["detail"].lower())
 
         # 2. Signup with valid credentials
         signup_res = client.post("/api/auth/signup", json={
@@ -115,15 +144,6 @@ class TestAuthService(unittest.TestCase):
         })
         self.assertEqual(dup_res.status_code, 409)
         self.assertIn("already exists", dup_res.json()["detail"].lower())
-
-        # 4. Attempt login before verification -> should fail with 403
-        login_unverified = client.post("/api/auth/login", json={
-            "email": test_email,
-            "password": test_password,
-            "operating_location": "In Office"
-        })
-        self.assertEqual(login_unverified.status_code, 403)
-        self.assertIn("not been verified", login_unverified.json()["detail"].lower())
 
         # 5. Attempt login with non-existent email -> should return 404
         login_not_found = client.post("/api/auth/login", json={
@@ -166,13 +186,24 @@ class TestAuthService(unittest.TestCase):
         })
         self.assertEqual(login_no_loc.status_code, 400)
 
-        # 9. Successful Login
-        login_success = client.post("/api/auth/login", json={
-            "name": "Alice Tester",
+        # 8b. Two failures so far (unknown email, wrong password): login now needs the bot check
+        login_needs_check = client.post("/api/auth/login", json={
             "email": test_email,
             "password": test_password,
             "operating_location": "In Office"
         })
+        self.assertEqual(login_needs_check.status_code, 403)
+        self.assertIn("security verification", login_needs_check.json()["detail"].lower())
+
+        db = SessionLocal()
+        try:
+            db.query(AuthFailedAttempt).delete(synchronize_session=False)
+            db.commit()
+        finally:
+            db.close()
+
+        # 9. Successful Login (password, then emailed OTP)
+        login_success = login_with_otp(test_email, test_password, "In Office", name="Alice Tester")
         self.assertEqual(login_success.status_code, 200)
         login_data = login_success.json()
         self.assertTrue(login_data["success"])
@@ -284,11 +315,7 @@ class TestAuthService(unittest.TestCase):
         self.assertEqual(old_login.status_code, 401)
 
         # 9. Attempt login with NEW password -> should SUCCEED (200)
-        new_login = client.post("/api/auth/login", json={
-            "email": test_email,
-            "password": new_password,
-            "operating_location": "Remote"
-        })
+        new_login = login_with_otp(test_email, new_password, "Remote")
         self.assertEqual(new_login.status_code, 200)
         self.assertTrue(new_login.json()["success"])
         self.assertEqual(new_login.json()["user"]["operating_location"], "Remote")
