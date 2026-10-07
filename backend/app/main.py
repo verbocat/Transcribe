@@ -1117,6 +1117,18 @@ async def extract_audio_status_endpoint(job_id: str):
     return {k: v for k, v in job.items() if k != "updated"}
 
 
+@app.post("/api/speakers/refine")
+async def refine_speakers_endpoint(payload: dict):
+    """AI second pass on speaker labels. Returns suggestions only; the editor applies them (and can undo)."""
+    from app.speaker_refine import lines_from_segments, suggest_corrections
+    segments_raw = [s for s in payload.get("segments", []) if isinstance(s, dict) and "segment_id" in s]
+    if len(segments_raw) < 2:
+        raise HTTPException(status_code=400, detail="Not enough lines to review.")
+    lines = lines_from_segments(segments_raw)
+    plan, notes = await asyncio.to_thread(suggest_corrections, lines, str(payload.get("language") or "Hindi"))
+    return {"speaker_map": plan["speaker_map"], "reassign": {str(k): v for k, v in plan["reassign"].items()}, "notes": notes}
+
+
 @app.post("/api/lint")
 async def lint_segments_endpoint(payload: dict):
     """REL-06: Re-lint segment list after manual edits with resilient schema validation."""

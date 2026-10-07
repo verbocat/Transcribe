@@ -1456,6 +1456,7 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
         activeSegmentId={activeSegmentId}
         setActiveSegmentId={setActiveSegmentId}
         onPlaySegment={(start, end) => setPlayTargetTime({ time: start, endTime: end, loop: true, ts: Date.now() })}
+        onPlayOnce={(start, end) => setPlayTargetTime({ time: start, endTime: end, loop: false, ts: Date.now() })}
         onStopSegment={(start) => setPlayTargetTime({ time: start, endTime: start, loop: false, pause: true, ts: Date.now() })}
         onSplit={handleSplitSegmentAtTime}
         onMerge={handleMergeSegmentWithNext}
