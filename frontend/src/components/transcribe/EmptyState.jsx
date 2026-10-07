@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
-import { UploadCloud, Sparkles, Loader2, Users, Mic2, ShieldCheck } from 'lucide-react';
+import { UploadCloud, Sparkles, Loader2, Users, Mic2, ShieldCheck, Square } from 'lucide-react';
 
-export default function EmptyState({ filename, isExtractingAudio, extractionNotice, onPickFile, onDropFile, onTranscribe, onOpenProjects, video }) {
+export default function EmptyState({ filename, isExtractingAudio, extractionNotice, onCancelExtract, onPickFile, onDropFile, onTranscribe, onOpenProjects, video }) {
   const [dragging, setDragging] = useState(false);
 
   return (
@@ -36,6 +36,14 @@ export default function EmptyState({ filename, isExtractingAudio, extractionNoti
               : 'MP4, MKV, MOV, WAV, MP3, M4A, FLAC and more. Or click to browse.'}
           </p>
         </label>
+
+        {isExtractingAudio && onCancelExtract && (
+          <div className="flex justify-center mt-5">
+            <button type="button" className="ts-btn" style={{ height: 40, padding: '0 20px', fontSize: 14 }} onClick={onCancelExtract}>
+              <Square size={14} /> Cancel
+            </button>
+          </div>
+        )}
 
         {filename && !isExtractingAudio && (
           <div className="flex justify-center mt-5">

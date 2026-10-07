@@ -44,7 +44,8 @@ import NotificationBellDropdown from '../NotificationBellDropdown';
 import { useTheme } from '../../context/ThemeContext';
 import { extractAudioFromMedia, computeWaveformPeaks } from '../../utils/audioExtractor';
 import { xhrPostForm, createRateMeter } from '../../utils/xhrUpload';
-import MediaProgress, { GenerateProgress } from './MediaProgress';
+import MediaProgress, { GenerateProgress, TaskStrip } from './MediaProgress';
+import { startJob, jobHeaders, isCancelError, CancelledError, sleepCancellable, useTaskRunner } from '../../utils/cancellable';
 import ContextPanel, { loadContext, saveContext, contextForRequest } from './ContextPanel';
 
 function formatTime(seconds) {
@@ -65,7 +66,7 @@ function PlayheadTimecode({ format, frameRate }) {
 }
 
 // Sliced multi-part chunked upload for files > 90MB (bypasses Cloudflare 100MB proxy limits)
-async function uploadFileInChunks(file, apiBase, onProgress, onAllSent) {
+async function uploadFileInChunks(file, apiBase, onProgress, onAllSent, signal) {
   const chunkSize = 12 * 1024 * 1024; // 12 MB slices (safe for any proxy/cloud gateway)
   const totalChunks = Math.ceil(file.size / chunkSize);
   const uploadId = 'up_' + Math.random().toString(36).substring(2, 10);
@@ -94,6 +95,7 @@ async function uploadFileInChunks(file, apiBase, onProgress, onAllSent) {
         // Real bytes sent so far across ALL slices (earlier slices + the part of this one already out)
         const res = await xhrPostForm(`${apiBase}/api/subtitle/upload_chunk`, buildForm(), {
           meter,
+          signal,
           baseLoaded: start,
           grandTotal: file.size,
           onProgress: (p) => { if (onProgress) onProgress({ ...p, detail: `Uploading slice ${i + 1} of ${totalChunks}` }); },
@@ -108,13 +110,14 @@ async function uploadFileInChunks(file, apiBase, onProgress, onAllSent) {
         } else {
           lastErr = new Error(res.data?.detail || `Slice ${i + 1}/${totalChunks} failed with status ${res.status}`);
           if (res.status >= 500 || res.status === 429) {
-            await new Promise(r => setTimeout(r, attempt * 1500));
+            await sleepCancellable(attempt * 1500, signal);
             continue;
           } else {
             throw lastErr;
           }
         }
       } catch (fetchErr) {
+        if (isCancelError(fetchErr) || signal?.aborted) throw new CancelledError();
         lastErr = fetchErr;
         if (fetchErr?.status && fetchErr.status >= 400 && fetchErr.status < 500 && fetchErr.status !== 429) throw fetchErr;
         if (attempt < 4) {
@@ -126,7 +129,7 @@ async function uploadFileInChunks(file, apiBase, onProgress, onAllSent) {
               detail: `Connection problem. Retrying slice ${i + 1} of ${totalChunks} (attempt ${attempt + 1}/4)`
             });
           }
-          await new Promise(r => setTimeout(r, attempt * 2500));
+          await sleepCancellable(attempt * 2500, signal);
         }
       }
     }
@@ -248,6 +251,8 @@ async function detectVideoFrameRate(file, apiBase) {
 export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
   // ── Theme State: Unified Acoustic Studio Theme ──
   const { theme, isDark } = useTheme();
+  // Runs short server tasks (QC fix, sync, auto-fix...) so each shows a Cancel button
+  const { tasks, notice: taskNotice, run: runTask, cancel: cancelTask } = useTaskRunner(API_BASE);
 
   // Video & File state
   const [selectedFile, setSelectedFile] = useState(null);
@@ -269,7 +274,29 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
   }, [selectedFile]);
 
   // Robust Client-Side Audio Extractor & Adaptive Upload Coordinator
+  const mediaJobRef = useRef(null); // the running upload/extraction, so its Cancel button can stop it
   const processAndUploadMedia = useCallback(async (fileToProcess, isAudio) => {
+    const mediaJob = startJob(API_BASE);
+    mediaJobRef.current = mediaJob;
+    try {
+      return await uploadMediaCore(fileToProcess, isAudio, mediaJob);
+    } catch (err) {
+      if (mediaJob.cancelled || isCancelError(err)) {
+        // Stopped on purpose: the file stays loaded, nothing is half-applied
+        setAutoSaveStatus('Upload cancelled. The file is still loaded; it uploads when you generate.');
+        setTimeout(() => setAutoSaveStatus(''), 4000);
+        return null;
+      }
+      throw err;
+    } finally {
+      if (mediaJobRef.current === mediaJob) mediaJobRef.current = null;
+      setAudioExtractionStatus(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const uploadMediaCore = async (fileToProcess, isAudio, mediaJob) => {
+    const { signal } = mediaJob;
     let uploadTarget = fileToProcess;
     const isWma = Boolean(
       fileToProcess?.type === 'audio/x-ms-wma' ||
@@ -292,7 +319,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
         uploadTarget = extractedAudioFileRef.current;
       } else {
         try {
-          const extracted = await extractAudioFromMedia(fileToProcess, (p) => report(p), API_BASE, { preferLocal: (() => { const m = loadPrefs().localExtraction; return m === 'always' || (m === 'large' && fileToProcess.size >= 100 * 1024 * 1024); })() });
+          const extracted = await extractAudioFromMedia(fileToProcess, (p) => report(p), API_BASE, { signal, job: mediaJob, preferLocal: (() => { const m = loadPrefs().localExtraction; return m === 'always' || (m === 'large' && fileToProcess.size >= 100 * 1024 * 1024); })() });
           if (extracted.peaks && extracted.peaks.length > 0) {
             setInitialWaveformPeaks(extracted.peaks);
           }
@@ -306,6 +333,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
           uploadTarget = extracted.audioFile || fileToProcess;
           extractedAudioFileRef.current = extracted.audioFile || null;
         } catch (extErr) {
+          if (isCancelError(extErr) || signal.aborted) throw new CancelledError();
           console.warn("Client audio extraction fallback:", extErr);
           uploadTarget = fileToProcess;
         }
@@ -334,7 +362,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
         report({ stage: 'send', percent: 0, loaded: 0, total: uploadTarget.size, detail: 'Uploading the audio to your workspace' });
         const chunkData = await uploadFileInChunks(uploadTarget, API_BASE, (p) => {
           report({ stage: 'send', ...p });
-        }, prepareStage);
+        }, prepareStage, signal);
         if (chunkData?.video_id) {
           setCurrentVideoId(chunkData.video_id);
           if (chunkData.peaks && chunkData.peaks.length > 0) {
@@ -358,6 +386,8 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
           const res = await xhrPostForm(`${API_BASE}/api/subtitle/upload`, formData, {
             onProgress: (p) => report({ stage: 'send', detail: 'Uploading the audio to your workspace', ...p }),
             onSent: prepareStage,
+            signal,
+            headers: jobHeaders(mediaJob),
           });
           if (res.ok) {
             const data = res.data || {};
@@ -384,6 +414,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
             }
           }
         } catch (directErr) {
+          if (isCancelError(directErr) || signal.aborted) throw new CancelledError();
           console.warn("Direct upload failed, falling back to sliced chunk upload:", directErr);
         }
 
@@ -392,7 +423,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
           console.log("[Subtitle Studio] Fallback: uploading media in resilient sliced chunks...");
           const chunkData = await uploadFileInChunks(uploadTarget, API_BASE, (p) => {
             report({ stage: 'send', ...p });
-          }, prepareStage);
+          }, prepareStage, signal);
           if (chunkData?.video_id) {
             setCurrentVideoId(chunkData.video_id);
             if (chunkData.peaks && chunkData.peaks.length > 0) {
@@ -418,7 +449,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
       setAudioExtractionStatus(null);
     }
     return null;
-  }, []);
+  };
 
   // Subtitle Dataset State
   const [events, setEvents] = useState([]);
@@ -1851,10 +1882,12 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
   // Re-break every subtitle's lines to the CPL limit (QC drawer "Re-break All")
   const handleRebreakAll = async () => {
     if (events.length === 0) return;
+    await runTask('Re-breaking lines', async (job) => {
     try {
       const res = await fetch(`${API_BASE}/api/subtitle/rebreak`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        signal: job.signal,
+        headers: jobHeaders(job, { 'Content-Type': 'application/json' }),
         body: JSON.stringify({ events, max_cpl: cplLimit })
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -1870,9 +1903,11 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
       setAutoSaveStatus('Line breaks re-balanced ✓');
       setTimeout(() => setAutoSaveStatus(''), 2500);
     } catch (err) {
+      if (job.cancelled) return;
       console.error('Re-break all failed:', err);
       alert(`Could not re-break lines: ${err.message || err}`);
     }
+    });
   };
 
   // Add Manual Subtitle
@@ -1944,6 +1979,12 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
   }, [pushToHistory, handleLint]);
 
   // ── Non-Blocking Progressive Batch-Wise Auto-Generate (Streaming SSE) ──
+  const genJobRef = useRef(null);
+  // Cancel while generating: stops the request, the server-side work and any upload still in flight
+  const cancelGeneration = () => {
+    genJobRef.current?.cancel();
+    mediaJobRef.current?.cancel();
+  };
   const handleGenerate = async () => {
     resetTracks();
     if (!selectedFile) {
@@ -1958,10 +1999,16 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
       return;
     }
 
+    // What the screen held before, so Cancel can put everything back exactly as it was
+    const before = { events, complianceScore, totalErrors, totalWarnings, activeEventId, pendingDraft, feedback: userFeedbackText };
+    const draftKey = `karya_subtitle_autosave_${selectedFile.name}`;
+    let savedDraft = null;
+    try { savedDraft = localStorage.getItem(draftKey); } catch (_) { }
+
     // Clear old subtitles and draft for a clean fresh AI generation
     setPendingDraft(null);
     try {
-      localStorage.removeItem(`karya_subtitle_autosave_${selectedFile.name}`);
+      localStorage.removeItem(draftKey);
     } catch (_) { }
     setEvents([]);
     setComplianceScore(100);
@@ -1971,6 +2018,9 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
     editedEventIdsRef.current.clear();
     setUserFeedbackText('');
 
+    const genJob = startJob(API_BASE);
+    genJobRef.current = genJob;
+    const { signal } = genJob;
     setIsGenerating(true);
     setProgressPercent(null);
     setProgressStage('Uploading Video & Extracting Audio');
@@ -1991,15 +2041,19 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
         try {
           const ctrl = new AbortController();
           const tId = setTimeout(() => ctrl.abort(), 4000);
+          const onStop = () => ctrl.abort();
+          signal.addEventListener('abort', onStop, { once: true });
           const ping = await fetch(`${API_BASE}/api/health`, { method: 'GET', signal: ctrl.signal });
           clearTimeout(tId);
+          signal.removeEventListener('abort', onStop);
           if (ping.ok) {
             break;
           }
         } catch (_) { }
+        genJob.throwIfCancelled();
         if (attempt < 8) {
           setProgressDetail(`Server is waking up (Render boot: ${attempt * 5}s)... please wait`);
-          await new Promise(r => setTimeout(r, 5000));
+          await sleepCancellable(5000, signal);
         }
       }
 
@@ -2010,7 +2064,9 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
         setProgressDetail('Waiting for background media upload to finish...');
         try {
           videoId = await uploadPromiseRef.current;
+          genJob.throwIfCancelled();
         } catch (e) {
+          if (isCancelError(e)) throw e;
           console.warn("Background upload failed, will upload directly:", e);
         }
         if (videoId) {
@@ -2023,6 +2079,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
         setProgressStage('Transferring Audio to Server');
         setProgressDetail('Transferring media to server...');
         videoId = await processAndUploadMedia(selectedFile, isAudioFile);
+        genJob.throwIfCancelled();
         if (videoId) {
           setCurrentVideoId(videoId);
         } else {
@@ -2061,7 +2118,8 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
 
       let streamRes = await fetch(`${API_BASE}/api/subtitle/generate_stream`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        signal,
+        headers: jobHeaders(genJob, { 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           video_id: videoId,
           language,
@@ -2096,6 +2154,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
         setProgressDetail('Cloud server session expired or restarted. Re-uploading audio track...');
 
         videoId = await processAndUploadMedia(selectedFile, isAudioFile);
+        genJob.throwIfCancelled();
         if (!videoId) {
           throw new Error('Media re-upload failed after server session expired.');
         }
@@ -2108,7 +2167,8 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
 
         streamRes = await fetch(`${API_BASE}/api/subtitle/generate_stream`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          signal,
+          headers: jobHeaders(genJob, { 'Content-Type': 'application/json' }),
           body: JSON.stringify({
             video_id: videoId,
             language,
@@ -2308,6 +2368,20 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
         }
       }
     } catch (err) {
+      if (genJob.cancelled || isCancelError(err)) {
+        // Stopped on purpose: put back everything that was on screen before Generate was pressed
+        setEvents(before.events);
+        setComplianceScore(before.complianceScore);
+        setTotalErrors(before.totalErrors);
+        setTotalWarnings(before.totalWarnings);
+        setActiveEventId(before.activeEventId);
+        setUserFeedbackText(before.feedback);
+        setPendingDraft(before.pendingDraft);
+        try { if (savedDraft !== null) localStorage.setItem(draftKey, savedDraft); } catch (_) { }
+        setAutoSaveStatus(before.events.length ? 'Generation cancelled. Your previous subtitles were kept.' : 'Generation cancelled.');
+        setTimeout(() => setAutoSaveStatus(''), 4000);
+        return;
+      }
       console.error("Generation error:", err);
       if (
         err.message && (
@@ -2335,6 +2409,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
         alert(`Error generating subtitles: ${err.message}`);
       }
     } finally {
+      if (genJobRef.current === genJob) genJobRef.current = null;
       setIsGenerating(false);
       if (elapsedTimerRef.current) clearInterval(elapsedTimerRef.current);
       setTimeout(() => {
@@ -2347,10 +2422,12 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
   const handleGeminiFix = async () => {
     if (!events || events.length === 0) return;
     setIsFixingWithGemini(true);
+    await runTask('AI QC fix', async (job) => {
     try {
       const res = await fetch(`${API_BASE}/api/subtitle/gemini_fix`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        signal: job.signal,
+        headers: jobHeaders(job, { 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           events: events,
           shot_changes: shotChanges,
@@ -2381,10 +2458,11 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
         setTimeout(() => setAutoSaveStatus(''), 3000);
       }
     } catch (err) {
-      console.error("Gemini fix failed:", err);
+      if (!job.cancelled) console.error("Gemini fix failed:", err);
     } finally {
       setIsFixingWithGemini(false);
     }
+    });
   };
 
   // ── Closed-Loop Acoustic Audio Synchronization Pass ──
@@ -2398,10 +2476,12 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
     }
 
     setIsSyncingAudio(true);
+    await runTask('Syncing to audio', async (job) => {
     try {
       const res = await fetch(`${API_BASE}/api/subtitle/acoustic_sync`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        signal: job.signal,
+        headers: jobHeaders(job, { 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           video_id: currentVideoId,
           events: events,
@@ -2445,19 +2525,23 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
         alert(err.detail || "Acoustic audio synchronization failed.");
       }
     } catch (err) {
+      if (job.cancelled) return;
       console.error("Acoustic sync failed:", err);
       alert("Acoustic sync failed: " + err.message);
     } finally {
       setIsSyncingAudio(false);
     }
+    });
   };
 
   // Auto-Fix All Issues
   const handleAutoFix = async () => {
+    await runTask('Auto-fixing issues', async (job) => {
     try {
       const res = await fetch(`${API_BASE}/api/subtitle/autofix`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        signal: job.signal,
+        headers: jobHeaders(job, { 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           events: events,
           shot_changes: shotChanges,
@@ -2479,9 +2563,11 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
         setShowDiffModal(true);
       }
     } catch (err) {
+      if (job.cancelled) return;
       console.error(err);
       alert('Auto-fix failed');
     }
+    });
   };
 
   // Import SRT / VTT File
@@ -2889,6 +2975,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
         <GenerateProgress
           progress={{ percent: progressPercent, stage: progressStage, detail: progressDetail, ...progressMeta }}
           elapsed={elapsedSeconds}
+          onCancel={cancelGeneration}
         />
       )}
 
@@ -2911,7 +2998,10 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
       )}
 
       {/* Real-time media preparation progress (measured bytes, FFmpeg media time, server stages) */}
-      {audioExtractionStatus && <MediaProgress status={audioExtractionStatus} fileName={selectedFile?.name} />}
+      {audioExtractionStatus && <MediaProgress status={audioExtractionStatus} fileName={selectedFile?.name} onCancel={() => mediaJobRef.current?.cancel()} />}
+
+      {/* QC fixes, sync, auto-fix and similar tasks: each one can be stopped */}
+      <TaskStrip tasks={tasks} notice={taskNotice} onCancel={cancelTask} />
 
       {/* Draft Restore Notification Banner */}
       {pendingDraft && (

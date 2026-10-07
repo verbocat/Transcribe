@@ -23,6 +23,7 @@ import LogoutConfirmModal from './components/LogoutConfirmModal';
 import ReloadConfirmModal from './components/ReloadConfirmModal';
 import { parseSubtitles } from './utils/subtitleParser';
 import { API_BASE } from './config';
+import { startJob, jobHeaders, isCancelError } from './utils/cancellable';
 import { AuthProvider, useAuth } from './auth_views/AuthContext';
 import { ThemeProvider } from './context/ThemeContext';
 import AppearanceHost from './theme/AppearanceHost';
@@ -552,6 +553,10 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
   const [isExporting, setIsExporting] = useState(false);
   const [selectedExportFormats, setSelectedExportFormats] = useState(['csv', 'docx', 'xlsx', 'srt', 'json']);
   const [isExtractingAudio, setIsExtractingAudio] = useState(false);
+  // Running requests, so each Cancel button can stop its own work (browser request and server job)
+  const extractJobRef = useRef(null);
+  const transcribeJobRef = useRef(null);
+  const exportJobRef = useRef(null);
   const [extractionNotice, setExtractionNotice] = useState('');
 
   // Detailed Progress Bar State with Live Elapsed Time
@@ -689,12 +694,16 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
       if (isVideo || needsServerDecode) {
         setIsExtractingAudio(true);
         setExtractionNotice(isVideo ? 'Extracting audio track from video...' : 'Converting WMA audio for playback...');
+        const extractJob = startJob(API_BASE);
+        extractJobRef.current = extractJob;
         try {
           const formData = new FormData();
           formData.append('file', file);
           const res = await fetch(`${API_BASE}/api/audio/extract`, {
             method: 'POST',
-            body: formData
+            body: formData,
+            signal: extractJob.signal,
+            headers: jobHeaders(extractJob)
           });
           if (res.ok) {
             const data = await res.json();
@@ -705,9 +714,17 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
             setAudioUrl(URL.createObjectURL(file));
           }
         } catch (err) {
-          console.warn("Video audio extraction fallback:", err);
-          setAudioUrl(URL.createObjectURL(file));
+          if (extractJob.cancelled || isCancelError(err)) {
+            // Cancelled: keep the file loaded and playable from the original, just without the prepared audio
+            setAudioUrl(URL.createObjectURL(file));
+            setExtractionNotice('Audio preparation cancelled');
+            setTimeout(() => setExtractionNotice(''), 3000);
+          } else {
+            console.warn("Video audio extraction fallback:", err);
+            setAudioUrl(URL.createObjectURL(file));
+          }
         } finally {
+          if (extractJobRef.current === extractJob) extractJobRef.current = null;
           setIsExtractingAudio(false);
         }
       } else {
@@ -806,10 +823,14 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
       if (storedElevenLabsKey) formData.append('elevenlabs_api_key', storedElevenLabsKey);
     } catch {}
 
+    const job = startJob(API_BASE);
+    transcribeJobRef.current = job;
     try {
       const res = await fetch(`${API_BASE}/api/transcribe`, {
         method: 'POST',
-        body: formData
+        body: formData,
+        signal: job.signal,
+        headers: jobHeaders(job)
       });
 
       if (res.ok) {
@@ -843,9 +864,16 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
       }
     } catch (err) {
       stopProgressSimulation(false);
-      console.error("Transcribe failed:", err);
-      alert(`Transcription request failed: ${err.message || err}`);
+      if (job.cancelled || isCancelError(err)) {
+        // Cancelled on purpose: whatever was on screen stays, the media stays loaded
+        setAutoSaveStatus('Transcription cancelled');
+        setTimeout(() => setAutoSaveStatus(''), 3000);
+      } else {
+        console.error("Transcribe failed:", err);
+        alert(`Transcription request failed: ${err.message || err}`);
+      }
     } finally {
+      if (transcribeJobRef.current === job) transcribeJobRef.current = null;
       setIsTranscribing(false);
     }
   };
@@ -897,11 +925,14 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
   const handleDubbingExport = async () => {
     if (segments.length === 0) return;
     setIsExporting(true);
+    const job = startJob(API_BASE);
+    exportJobRef.current = job;
     try {
       const filename = selectedFile ? selectedFile.name : (transcriptionResult?.filename || 'audio_transcript.wav');
       const res = await fetch(`${API_BASE}/api/export/dubbing`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        signal: job.signal,
+        headers: jobHeaders(job, { 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           result: {
             filename,
@@ -925,9 +956,12 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
       document.body.removeChild(a);
       window.URL.revokeObjectURL(url);
     } catch (err) {
-      console.error("Dubbing export failed:", err);
-      alert("Export failed: " + err);
+      if (!(job.cancelled || isCancelError(err))) {
+        console.error("Dubbing export failed:", err);
+        alert("Export failed: " + err);
+      }
     } finally {
+      if (exportJobRef.current === job) exportJobRef.current = null;
       setIsExporting(false);
     }
   };
@@ -935,6 +969,8 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
   const handleMultiExport = async () => {
     if (segments.length === 0) return;
     setIsExporting(true);
+    const job = startJob(API_BASE);
+    exportJobRef.current = job;
 
     try {
       const payloadResult = {
@@ -958,7 +994,8 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
 
       const res = await fetch(`${API_BASE}/api/export/multi`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        signal: job.signal,
+        headers: jobHeaders(job, { 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           result: payloadResult,
           formats: selectedExportFormats
@@ -985,9 +1022,12 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
         alert("Failed to export deliverables.");
       }
     } catch (err) {
-      console.error("Multi export failed:", err);
-      alert("Export failed: " + err);
+      if (!(job.cancelled || isCancelError(err))) {
+        console.error("Multi export failed:", err);
+        alert("Export failed: " + err);
+      }
     } finally {
+      if (exportJobRef.current === job) exportJobRef.current = null;
       setIsExporting(false);
     }
   };
@@ -1373,6 +1413,9 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
         elapsedSeconds={elapsedSeconds}
         onFileSelect={handleFileSelect}
         onTranscribe={handleStartTranscribe}
+        onCancelTranscribe={() => transcribeJobRef.current?.cancel()}
+        onCancelExtract={() => extractJobRef.current?.cancel()}
+        onCancelExport={() => exportJobRef.current?.cancel()}
         segments={segments}
         setSegments={setSegments}
         pushToHistory={pushToHistory}

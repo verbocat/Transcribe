@@ -1,3 +1,5 @@
+import { CancelledError } from './cancellable';
+
 /**
  * Upload helpers that report REAL progress.
  *
@@ -67,12 +69,15 @@ export function progressFrom(loaded, total, speed) {
  * onSent() fires once the whole body has left the browser (the server may still be working).
  * `baseLoaded` / `grandTotal` let a caller that sends several requests (chunks) report one overall bar.
  */
-export function xhrPostForm(url, formData, { onProgress, onSent, meter, baseLoaded = 0, grandTotal } = {}) {
+export function xhrPostForm(url, formData, { onProgress, onSent, meter, baseLoaded = 0, grandTotal, signal, headers } = {}) {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) { reject(new CancelledError()); return; }
     const xhr = new XMLHttpRequest();
     const rate = meter || createRateMeter();
     xhr.open('POST', url);
     xhr.responseType = 'text';
+    if (headers) Object.entries(headers).forEach(([k, v]) => xhr.setRequestHeader(k, v));
+    if (signal) signal.addEventListener('abort', () => xhr.abort(), { once: true });
 
     xhr.upload.onprogress = (e) => {
       if (!e.lengthComputable) return;
@@ -90,14 +95,14 @@ export function xhrPostForm(url, formData, { onProgress, onSent, meter, baseLoad
     };
     xhr.onerror = () => reject(Object.assign(new Error('Network error while uploading. Check your connection.'), { status: 0 }));
     xhr.ontimeout = () => reject(Object.assign(new Error('The upload timed out.'), { status: 0 }));
-    xhr.onabort = () => reject(Object.assign(new Error('The upload was cancelled.'), { status: 0 }));
+    xhr.onabort = () => reject(new CancelledError('The upload was cancelled.'));
     xhr.send(formData);
   });
 }
 
 /** Download as a Blob with real byte progress (falls back to a plain download if streaming is unavailable). */
-export async function fetchBlobWithProgress(url, { onProgress, expectedBytes = 0 } = {}) {
-  const res = await fetch(url);
+export async function fetchBlobWithProgress(url, { onProgress, expectedBytes = 0, signal } = {}) {
+  const res = await fetch(url, { signal });
   if (!res.ok) throw new Error(`Download failed (${res.status}).`);
   const total = Number(res.headers.get('content-length')) || expectedBytes || 0;
   if (!res.body || !res.body.getReader) return res.blob();

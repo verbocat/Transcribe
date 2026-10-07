@@ -28,6 +28,7 @@ logging.basicConfig(
 logger = logging.getLogger("backend")
 
 from app.terminal_logger import log_terminal
+from app import job_control
 from app.config import UPLOAD_DIR, EXPORTS_DIR, GEMINI_API_KEY, GEMINI_MODEL, DEFAULT_LANGUAGE, DEFAULT_SCRIPT, ELEVENLABS_API_KEY
 from app.models import (
     TranscriptionResult, Segment, LintRequest, AutoFixRequest, ExportRequest, BatchTask, AudioAnalysis, WordConfidence, QCError
@@ -283,6 +284,10 @@ app = FastAPI(
 )
 app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
 app.include_router(admin_router)
+
+# Requests tagged with an X-Job-Id header can be stopped with POST /api/jobs/{job_id}/cancel.
+# Added before CORS so the CORS middleware stays outermost and still decorates a cancelled response.
+app.add_middleware(job_control.JobScopeMiddleware)
 
 # CORS configuration with explicit Vercel and local dev support
 DEFAULT_ALLOWED_ORIGINS = [
@@ -887,6 +892,10 @@ def _prune_extract_jobs():
 
 async def _run_extract_job(job_id: str, file_path: Path, original_filename: str):
     job = _extract_jobs[job_id]
+    # Registered under the same id so POST /api/jobs/{job_id}/cancel stops FFmpeg and removes the upload
+    scope = job_control.register(job_id, asyncio.current_task())
+    token = job_control._current.set(scope)
+    job_control.on_cancel(lambda: file_path.unlink(missing_ok=True))
 
     def set_state(**kw):
         job.update(kw)
@@ -932,10 +941,22 @@ async def _run_extract_job(job_id: str, file_path: Path, original_filename: str)
                 "peaks": peaks,
             },
         )
+    except asyncio.CancelledError:
+        set_state(stage="cancelled")
+        file_path.unlink(missing_ok=True)
+        if not scope.cancelled:
+            raise
     except Exception as err:
-        import traceback
-        traceback.print_exc()
-        set_state(stage="error", error=f"Audio extraction failed: {err}")
+        if scope.cancelled:
+            set_state(stage="cancelled")
+            file_path.unlink(missing_ok=True)
+        else:
+            import traceback
+            traceback.print_exc()
+            set_state(stage="error", error=f"Audio extraction failed: {err}")
+    finally:
+        job_control._current.reset(token)
+        job_control.unregister(job_id)
 
 
 @app.post("/api/audio/extract_async")
@@ -964,6 +985,13 @@ async def extract_audio_async_endpoint(request: Request, file: UploadFile = File
     _extract_jobs[job_id] = {"stage": "queued", "percent": 0.0, "updated": time.time(), "bytes": file_path.stat().st_size}
     asyncio.create_task(_run_extract_job(job_id, file_path, file.filename))
     return {"job_id": job_id, "bytes": _extract_jobs[job_id]["bytes"]}
+
+
+@app.post("/api/jobs/{job_id}/cancel")
+async def cancel_job_endpoint(job_id: str):
+    """Stop a running job started with the same X-Job-Id header (or an extract_async job id)."""
+    stopped = job_control.cancel(job_id)
+    return {"cancelled": stopped}
 
 
 @app.get("/api/audio/extract_status/{job_id}")

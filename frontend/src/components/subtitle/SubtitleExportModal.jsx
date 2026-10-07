@@ -1,6 +1,7 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef } from 'react';
 import { X, Download, FileText, FileCode, File, Globe, Check, AlertTriangle } from 'lucide-react';
 import { API_BASE } from '../../config';
+import { startJob, jobHeaders, isCancelError } from '../../utils/cancellable';
 
 import { exportSrtLocally, exportVttLocally, exportTtmlLocally, exportTxtLocally, downloadLocally } from '../../utils/localExporter';
 
@@ -46,6 +47,7 @@ const EXPORT_FORMATS = [
 export default function SubtitleExportModal({ isOpen, onClose, events = [], filename = 'subtitles', complianceScore = 100 }) {
   const [selectedFormat, setSelectedFormat] = useState('srt');
   const [isExporting, setIsExporting] = useState(false);
+  const exportJob = useRef(null); // the server-side export, if one is running
   const [customFilename, setCustomFilename] = useState('');
   const [isClosing, setIsClosing] = useState(false);
 
@@ -66,6 +68,7 @@ export default function SubtitleExportModal({ isOpen, onClose, events = [], file
 
   const handleDismiss = () => {
     if (isClosing) return;
+    exportJob.current?.cancel(); // Cancel also stops an export that is still compiling on the server
     setIsClosing(true);
     setTimeout(() => {
       setIsClosing(false);
@@ -115,10 +118,13 @@ export default function SubtitleExportModal({ isOpen, onClose, events = [], file
       onClose();
     } catch (err) {
       console.warn('Local export error, attempting backend fallback:', err);
+      const job = startJob(API_BASE);
+      exportJob.current = job;
       try {
         const response = await fetch(`${API_BASE}/api/subtitle/export`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          signal: job.signal,
+          headers: jobHeaders(job, { 'Content-Type': 'application/json' }),
           body: JSON.stringify({
             events: events,
             filename: exportFilename,
@@ -140,8 +146,11 @@ export default function SubtitleExportModal({ isOpen, onClose, events = [], file
         URL.revokeObjectURL(url);
         onClose();
       } catch (backupErr) {
+        if (isCancelError(backupErr)) return; // cancelled on purpose: no file, no error
         console.error('Export error:', backupErr);
         alert('Export failed. Please verify the backend connection.');
+      } finally {
+        if (exportJob.current === job) exportJob.current = null;
       }
     } finally {
       setIsExporting(false);

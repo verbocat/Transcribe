@@ -2,6 +2,7 @@ import os
 import json
 import logging
 import subprocess
+from app import job_control
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Set
 try:
@@ -210,7 +211,7 @@ def extract_audio_from_video(video_path: str, output_path: str = None, progress_
         return _extract_with_progress(video_path, output_path, cmd, progress_cb)
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        result = job_control.run_subprocess(cmd, timeout=600)
         if result.returncode != 0:
             logger.error(f"FFmpeg extract audio error: {result.stderr}")
             return {
@@ -256,6 +257,7 @@ def _extract_with_progress(video_path: str, output_path: str, cmd: list, progres
     tail = []
     try:
         proc = subprocess.Popen(progress_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+        job_control.track_process(proc)
         for line in proc.stdout:
             line = line.strip()
             if line.startswith("out_time_us=") or line.startswith("out_time_ms="):
@@ -326,7 +328,7 @@ def detect_shot_changes(video_path: str, threshold: float = 0.3) -> List[float]:
     
     timestamps = []
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        result = job_control.run_subprocess(cmd, timeout=600)
         
         # FFmpeg showinfo filter outputs to stderr
         for line in result.stderr.splitlines():

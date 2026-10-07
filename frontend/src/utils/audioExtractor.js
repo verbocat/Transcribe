@@ -82,8 +82,10 @@ export function encodeWAV(samples, sampleRate) {
 }
 
 import { xhrPostForm, fetchBlobWithProgress, createRateMeter } from './xhrUpload';
+import { CancelledError, cancelServerJob, isCancelError, jobHeaders, sleepCancellable } from './cancellable';
 
-export async function extractAudioFromMedia(file, onProgress, apiBase = '', { preferLocal = true } = {}) {
+export async function extractAudioFromMedia(file, onProgress, apiBase = '', { preferLocal = true, signal, job } = {}) {
+  if (signal?.aborted) throw new CancelledError();
   const isVideo = Boolean(
     file.type?.startsWith('video/') ||
     /\.(mp4|mkv|mov|webm|avi|flv|wmv|m4v|ts)$/i.test(file.name || '')
@@ -111,6 +113,7 @@ export async function extractAudioFromMedia(file, onProgress, apiBase = '', { pr
       } finally {
         audioCtx.close().catch(() => {});
       }
+      if (signal?.aborted) throw new CancelledError();
 
       if (onProgress) onProgress({ stage: 'decode', percent: null, detail: 'Mixing down to mono' });
       const duration = audioBuffer.duration;
@@ -162,6 +165,7 @@ export async function extractAudioFromMedia(file, onProgress, apiBase = '', { pr
         sampleRate: targetSampleRate
       };
     } catch (browserDecodeErr) {
+      if (signal?.aborted) throw new CancelledError();
       console.warn("Client Web Audio decode fallback to server FFmpeg:", browserDecodeErr);
     }
   }
@@ -172,9 +176,10 @@ export async function extractAudioFromMedia(file, onProgress, apiBase = '', { pr
     try {
       const { extractAudioInBrowser, browserExtractionSupported } = await import('./browserAudioExtract');
       if (browserExtractionSupported()) {
-        return await extractAudioInBrowser(file, onProgress);
+        return await extractAudioInBrowser(file, onProgress, signal);
       }
     } catch (localErr) {
+      if (isCancelError(localErr)) throw localErr;
       console.warn('Browser audio extraction unavailable, using the server instead:', localErr);
     }
   }
@@ -192,6 +197,7 @@ export async function extractAudioFromMedia(file, onProgress, apiBase = '', { pr
   const meter = createRateMeter();
   let up = await xhrPostForm(`${base}/api/audio/extract_async`, formData, {
     meter,
+    signal,
     onProgress: (p) => emit({ stage: 'upload', detail: 'Uploading the video to the server', ...p }),
     onSent: () => emit({ stage: 'saving', percent: null, detail: 'Upload complete. The server is saving the file' }),
   });
@@ -202,7 +208,7 @@ export async function extractAudioFromMedia(file, onProgress, apiBase = '', { pr
     emit({ stage: 'extract', percent: null, detail: 'The server is extracting the audio (this server cannot report progress)' });
     const fd2 = new FormData();
     fd2.append('file', file);
-    const legacy = await xhrPostForm(`${base}/api/audio/extract`, fd2, {});
+    const legacy = await xhrPostForm(`${base}/api/audio/extract`, fd2, { signal, headers: jobHeaders(job) });
     if (!legacy.ok) throw new Error(`Server audio extraction failed: ${legacy.data?.detail || legacy.text || legacy.status}`);
     data = legacy.data;
   } else {
@@ -213,13 +219,17 @@ export async function extractAudioFromMedia(file, onProgress, apiBase = '', { pr
     // 2. Follow the FFmpeg job (real media-time progress)
     const jobId = up.data.job_id;
     const started = Date.now();
+    // Cancelling now must also stop FFmpeg on the server, which runs under its own job id
+    const stopServer = () => cancelServerJob(base, jobId);
+    signal?.addEventListener('abort', stopServer, { once: true });
     for (;;) {
-      await new Promise((r) => setTimeout(r, 600));
-      const res = await fetch(`${base}/api/audio/extract_status/${jobId}`);
+      await sleepCancellable(600, signal);
+      const res = await fetch(`${base}/api/audio/extract_status/${jobId}`, { signal });
       if (res.status === 404) throw new Error('The server restarted while extracting. Please open the file again.');
       const st = await res.json();
+      if (st.stage === 'cancelled') throw new CancelledError();
       if (st.stage === 'error') throw new Error(st.error || 'Audio extraction failed.');
-      if (st.stage === 'done') { data = st.result; break; }
+      if (st.stage === 'done') { data = st.result; signal?.removeEventListener('abort', stopServer); break; }
       if (st.stage === 'waveform') {
         emit({ stage: 'waveform', percent: null, detail: 'Drawing the waveform' });
       } else {
@@ -240,6 +250,7 @@ export async function extractAudioFromMedia(file, onProgress, apiBase = '', { pr
   emit({ stage: 'download', percent: 0, loaded: 0, total: data.audio_bytes || 0, detail: 'Downloading the extracted audio' });
   const audioBlob = await fetchBlobWithProgress(`${base}${data.audio_url}`, {
     expectedBytes: data.audio_bytes || 0,
+    signal,
     onProgress: (p) => emit({ stage: 'download', detail: 'Downloading the extracted audio', ...p }),
   });
   const audioFile = new File([audioBlob], data.audio_filename, { type: 'audio/wav' });

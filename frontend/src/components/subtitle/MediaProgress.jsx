@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { Square, Check } from 'lucide-react';
 import { formatBytes, formatSpeed, formatEta } from '../../utils/xhrUpload';
 
 /**
@@ -45,7 +46,7 @@ function useElapsed() {
 }
 
 /** The strip itself. `percent` null means "working, no measurable progress". */
-export function ProgressStrip({ label, step, steps, detail, percent, estimated = false, meta, elapsed }) {
+export function ProgressStrip({ label, step, steps, detail, percent, estimated = false, meta, elapsed, onCancel }) {
   const determinate = typeof percent === 'number' && Number.isFinite(percent);
   const pct = determinate ? Math.max(0, Math.min(100, percent)) : 0;
   const shown = determinate ? (pct >= 99.5 ? '100' : pct < 10 ? pct.toFixed(1) : String(Math.round(pct))) : null;
@@ -68,6 +69,16 @@ export function ProgressStrip({ label, step, steps, detail, percent, estimated =
               {estimated ? '≈' : ''}{shown}%
             </span>
           )}
+          {onCancel && (
+            <button
+              type="button"
+              onClick={onCancel}
+              title="Stop this and keep what you had"
+              className="inline-flex items-center gap-1 h-6 px-2 rounded-md border border-[var(--ss-line)] text-[11.5px] font-medium text-[var(--ss-text)] hover:bg-[var(--ss-hover)] cursor-pointer"
+            >
+              <Square size={10} className="shrink-0" /> Cancel
+            </button>
+          )}
         </span>
       </div>
       <div
@@ -87,7 +98,7 @@ export function ProgressStrip({ label, step, steps, detail, percent, estimated =
 }
 
 /** Media preparation (upload, extract, waveform). */
-export default function MediaProgress({ status, fileName }) {
+export default function MediaProgress({ status, fileName, onCancel }) {
   const elapsed = useElapsed();
   const { stage, percent, detail, loaded, total, speed, eta } = status;
   const flow = status.flow || (SERVER_STAGES.includes(stage) ? 'video' : 'audio');
@@ -105,12 +116,13 @@ export default function MediaProgress({ status, fileName }) {
       percent={typeof percent === 'number' && Number.isFinite(percent) ? percent : null}
       meta={meta}
       elapsed={elapsed}
+      onCancel={onCancel}
     />
   );
 }
 
 /** Subtitle generation: values come straight from the server's stage events. */
-export function GenerateProgress({ progress, elapsed }) {
+export function GenerateProgress({ progress, elapsed, onCancel }) {
   const { percent, stage, step, steps, detail, estimated, eta } = progress;
   const etaText = eta != null && eta > 0 ? `about ${eta >= 60 ? `${Math.floor(eta / 60)}m ${String(eta % 60).padStart(2, '0')}s` : `${eta}s`} left` : '';
   return (
@@ -123,6 +135,23 @@ export function GenerateProgress({ progress, elapsed }) {
       estimated={estimated}
       meta={etaText}
       elapsed={elapsed}
+      onCancel={onCancel}
     />
+  );
+}
+
+/** Other running tasks (QC fix, sync, auto-fix, re-break...) and the short "cancelled" note that follows a stop. */
+export function TaskStrip({ tasks, notice, onCancel }) {
+  return (
+    <>
+      {tasks.map((t) => (
+        <ProgressStrip key={t.id} label={t.label} step={1} steps={1} detail={t.detail} percent={null} onCancel={() => onCancel(t.id)} />
+      ))}
+      {notice && (
+        <div role="status" aria-live="polite" className="shrink-0 flex items-center gap-2 h-7 px-3 text-[12px] border-b border-[var(--ss-line)] bg-[var(--ss-panel)] text-[var(--ss-muted)]">
+          <Check size={12} className="shrink-0" /> {notice}
+        </div>
+      )}
+    </>
   );
 }

@@ -1,6 +1,7 @@
-import React, { useMemo, useState } from 'react';
-import { X, Sparkles, Loader2, Plus, BookText, ChevronDown, ChevronRight, Wand2, Check, AlertTriangle, ArrowRight } from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { X, Square, Sparkles, Loader2, Plus, BookText, ChevronDown, ChevronRight, Wand2, Check, AlertTriangle, ArrowRight } from 'lucide-react';
 import { API_BASE } from '../../config';
+import { startJob, jobHeaders, isCancelError } from '../../utils/cancellable';
 import { Button, IconButton, Select, TextInput, Switch, Badge } from './ui/controls';
 
 /**
@@ -106,8 +107,8 @@ const Notice = ({ tone = 'good', children }) => {
   return <div role="status" className={`rounded-lg border px-3 py-2 text-[12px] leading-snug ${tones[tone]}`}>{children}</div>;
 };
 
-async function post(path, body) {
-  const res = await fetch(`${API_BASE}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+async function post(path, body, job) {
+  const res = await fetch(`${API_BASE}${path}`, { method: 'POST', headers: jobHeaders(job, { 'Content-Type': 'application/json' }), body: JSON.stringify(body), signal: job?.signal });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.detail || `Request failed (${res.status})`);
   return data;
@@ -131,14 +132,20 @@ export default function ContextPanel({
   const readable = useMemo(() => events.filter((e) => (e.text || '').trim()).length, [events]);
   const filled = hasContent(ctx);
 
+  const jobRef = useRef(null);
+  const cancelBusy = () => jobRef.current?.cancel();
+  useEffect(() => () => jobRef.current?.cancel(), []);
+
   const autofill = async () => {
     setNote(null);
     setBusy('fill');
+    const job = startJob(API_BASE);
+    jobRef.current = job;
     try {
       const d = await post('/api/subtitle/context_autofill', {
         events: events.map((e) => ({ text: e.text, speaker: e.primary_speaker || e.speaker })),
         language,
-      });
+      }, job);
       const next = { ...ctx };
       ['title', 'topic', 'summary', 'region', 'language_mix', 'variety'].forEach((k) => { if (!String(next[k]).trim() && d[k]) next[k] = d[k]; });
       if (!next.content_type && d.content_type) next.content_type = d.content_type;
@@ -148,8 +155,9 @@ export default function ContextPanel({
       onChange(next);
       setNote({ tone: 'good', text: `Centroid read ${d.lines_read} of ${d.lines_total} subtitles and drafted the context: ${(d.speakers || []).length} speakers, ${(d.key_terms || []).length} key terms, ${(d.corrections || []).length} spelling fixes. Please check them. They are applied as rules.` });
     } catch (e) {
-      setNote({ tone: 'danger', text: e.message });
+      setNote(isCancelError(e) ? { tone: 'warn', text: 'Cancelled. Nothing was changed.' } : { tone: 'danger', text: e.message });
     } finally {
+      if (jobRef.current === job) jobRef.current = null;
       setBusy(null);
     }
   };
@@ -158,11 +166,13 @@ export default function ContextPanel({
     setNote(null);
     setFixes(null);
     setBusy('polish');
+    const job = startJob(API_BASE);
+    jobRef.current = job;
     try {
       const d = await post('/api/subtitle/context_polish', {
         events: events.map((e) => ({ id: e.id ?? e.event_id, text: e.text })),
         context: contextForRequest(ctx), glossary: glossaryTerms, language, cpl_limit: cplLimit, max_lines: maxLines,
-      });
+      }, job);
       if (d.ai_error) setNote({ tone: 'warn', text: `The AI proofreading could not run (${d.ai_error}). Only your exact “misheard → correct” fixes were applied.` });
       if (!d.fixes.length) {
         if (!d.ai_error) setNote({ tone: 'good', text: 'No recognition mistakes found. The subtitles already match your context.' });
@@ -172,8 +182,9 @@ export default function ContextPanel({
       setFixes(d.fixes);
       if (!d.ai_error) setNote({ tone: 'good', text: `Fixed ${d.fixes.length} subtitle${d.fixes.length === 1 ? '' : 's'}. Timing is unchanged. Press Ctrl+Z to undo.` });
     } catch (e) {
-      setNote({ tone: 'danger', text: e.message });
+      setNote(isCancelError(e) ? { tone: 'warn', text: 'Cancelled. Nothing was changed.' } : { tone: 'danger', text: e.message });
     } finally {
+      if (jobRef.current === job) jobRef.current = null;
       setBusy(null);
     }
   };
@@ -202,9 +213,13 @@ export default function ContextPanel({
           <p className="flex-1 min-w-0 text-[11.5px] leading-snug text-[var(--ss-muted)]">
             Tell the tool what the video is about, who speaks, and how names are spelled. The speech engine then hears them correctly, wrong spellings are fixed, and spoken language stays exactly as spoken. Saved for this video and used every time you generate.
           </p>
-          <Button size="sm" variant="primary" icon={busy === 'fill' ? Loader2 : Sparkles} disabled={!!busy || !readable} onClick={autofill} title={readable ? 'Read the current subtitles and draft the context' : 'Generate or import subtitles first'}>
-            {busy === 'fill' ? 'Reading…' : 'Auto-fill'}
-          </Button>
+          {busy === 'fill' ? (
+            <Button size="sm" variant="secondary" icon={Square} onClick={cancelBusy}>Cancel</Button>
+          ) : (
+            <Button size="sm" variant="primary" icon={Sparkles} disabled={!!busy || !readable} onClick={autofill} title={readable ? 'Read the current subtitles and draft the context' : 'Generate or import subtitles first'}>
+              Auto-fill
+            </Button>
+          )}
         </div>
         {note && <Notice tone={note.tone}>{note.text}</Notice>}
         {lastRun && (lastRun.ai_fixes + lastRun.applied_corrections) > 0 && (
@@ -300,9 +315,12 @@ export default function ContextPanel({
       </div>
 
       <footer className="shrink-0 px-5 py-3 border-t border-[var(--ss-line)] space-y-2">
-        <Button variant="primary" size="lg" className="w-full" icon={busy === 'polish' ? Loader2 : Wand2} disabled={!!busy || !readable || !filled} onClick={proofread}>
-          {busy === 'polish' ? 'Proofreading…' : `Fix names and terms in ${readable} current subtitles`}
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="primary" size="lg" className="flex-1 min-w-0" icon={busy === 'polish' ? Loader2 : Wand2} disabled={!!busy || !readable || !filled} onClick={proofread}>
+            {busy === 'polish' ? 'Proofreading…' : `Fix names and terms in ${readable} current subtitles`}
+          </Button>
+          {busy === 'polish' && <Button variant="secondary" size="lg" icon={Square} onClick={cancelBusy}>Cancel</Button>}
+        </div>
         <p className="text-center text-[11.5px] text-[var(--ss-faint)]">
           {!filled ? 'Add some context first.' : 'Timing never changes. The next Generate uses this context automatically.'}
         </p>
