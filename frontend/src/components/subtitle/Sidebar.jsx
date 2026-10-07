@@ -93,23 +93,19 @@ export default function Sidebar({
         disabled={item.disabled}
         aria-label={item.label}
         aria-pressed={item.active !== undefined ? on : undefined}
-        className={`group relative shrink-0 rounded-lg inline-flex items-center justify-center transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed outline-none focus-visible:ring-1 focus-visible:ring-[var(--ss-accent)] ${
+        data-power={item.id}
+        data-on={on ? 'true' : 'false'}
+        className={`rail-btn group relative shrink-0 rounded-lg inline-flex items-center justify-center cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed outline-none focus-visible:ring-1 focus-visible:ring-[var(--ss-accent)] ${
           horizontal && showLabels && !small ? 'h-7 px-2 gap-1.5' : 'w-8 h-8'
-        } ${
-          on
-            ? 'bg-[var(--ss-accent)]/15 text-[var(--ss-accent)]'
-            : item.accent
-              ? 'text-[var(--ss-accent)] hover:bg-[var(--ss-accent)]/10'
-              : 'text-[var(--ss-muted)] hover:text-[var(--ss-text)] hover:bg-[var(--ss-raised)]'
         }`}
       >
-        {on && !horizontal && <span aria-hidden="true" className={`absolute top-1.5 bottom-1.5 w-[2px] rounded-full bg-[var(--ss-accent)] ${position === 'right' ? '-right-[5px]' : '-left-[5px]'}`} />}
+        {on && !horizontal && <span aria-hidden="true" className={`absolute top-1.5 bottom-1.5 w-[2px] rounded-full bg-[var(--rail-a)] shadow-[0_0_6px_var(--rail-a)] ${position === 'right' ? '-right-[5px]' : '-left-[5px]'}`} />}
         <Icon size={16} strokeWidth={1.8} className={item.spin ? 'animate-spin' : ''} />
         {horizontal && showLabels && !small && <span className="text-[12px] font-medium leading-none">{item.label}</span>}
         {item.badge != null && (
           <span className="absolute -top-0.5 -right-0.5 min-w-[14px] h-[14px] px-1 rounded-full bg-[var(--ss-warn)] text-[9px] font-bold leading-[14px] text-black text-center">{item.badge}</span>
         )}
-        {item.dot && !item.badge && <span aria-hidden="true" className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-[var(--ss-accent)]" />}
+        {item.dot && !item.badge && <span aria-hidden="true" className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-[var(--rail-a)]" />}
         {!(horizontal && showLabels && !small) && <Tip>{item.title || item.label}</Tip>}
       </button>
     );
@@ -123,7 +119,7 @@ export default function Sidebar({
         horizontal ? 'flex-row items-center w-full px-2 h-10' : 'flex-col items-center h-full w-11 py-2'
       }`}
     >
-      <div className={`flex ${horizontal ? 'flex-row items-center gap-1' : 'flex-col items-center gap-1'}`}>
+      <div className={`flex ${horizontal ? 'flex-row items-center gap-1.5' : 'flex-col items-center gap-1'}`}>
         {groups.map((group, gi) => (
           <React.Fragment key={gi}>
             {gi > 0 && <span aria-hidden="true" className={horizontal ? 'w-px h-4 mx-1 bg-[var(--ss-line)]' : 'h-px w-5 my-1 bg-[var(--ss-line)]'} />}
