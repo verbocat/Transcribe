@@ -8,7 +8,14 @@ import {
   Scissors, GitMerge, ChevronLeft, ChevronRight, CornerDownRight, ArrowLeftToLine, ArrowRightToLine, Plus
 } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
+import { publishPlayhead, subscribePlayhead } from '../utils/playheadBus';
 import { themeColor, withAlpha, getSpeakerPalette, subscribeTheme } from '../theme/themeEngine';
+
+function Timecode({ format }) {
+  const [t, setT] = useState(0);
+  useEffect(() => subscribePlayhead(setT), []);
+  return format(t);
+}
 
 export default function AudioWaveform({
   audioUrl,
@@ -59,7 +66,9 @@ export default function AudioWaveform({
   onMergeSegmentRef.current = onMergeSegment;
 
   const [isPlaying, setIsPlaying] = useState(false);
-  const [currentTime, setCurrentTime] = useState(0);
+  // The playhead moves every frame, so it lives in a ref and on the playhead bus; only <Timecode> re-renders with it
+  const currentTimeRef = useRef(0);
+  const setCurrentTime = (t) => { currentTimeRef.current = t; publishPlayhead(t); };
   const [duration, setDuration] = useState(0);
   const [playbackRate, setPlaybackRate] = useState(1.0);
   const [zoomLevel, setZoomLevel] = useState(35); // px per second
@@ -389,13 +398,13 @@ export default function AudioWaveform({
   // Subtitle Edit Quick Actions
   const handleSetStartToCursor = () => {
     if (!activeSegment || !onSegmentTimeChangeRef.current) return;
-    const newStart = Math.min(activeSegment.end_time - 0.1, Math.max(0, Math.round(currentTime * 1000) / 1000));
+    const newStart = Math.min(activeSegment.end_time - 0.1, Math.max(0, Math.round(currentTimeRef.current * 1000) / 1000));
     onSegmentTimeChangeRef.current(activeSegment.segment_id, newStart, activeSegment.end_time);
   };
 
   const handleSetEndToCursor = () => {
     if (!activeSegment || !onSegmentTimeChangeRef.current) return;
-    const newEnd = Math.max(activeSegment.start_time + 0.1, Math.min(duration || 9999, Math.round(currentTime * 1000) / 1000));
+    const newEnd = Math.max(activeSegment.start_time + 0.1, Math.min(duration || 9999, Math.round(currentTimeRef.current * 1000) / 1000));
     onSegmentTimeChangeRef.current(activeSegment.segment_id, activeSegment.start_time, newEnd);
   };
 
@@ -451,7 +460,7 @@ export default function AudioWaveform({
       } else if (e.key === 's' || e.key === 'S') {
         if (onSplitSegmentRef.current && currentSegmentIdRef.current) {
           e.preventDefault();
-          onSplitSegmentRef.current(currentSegmentIdRef.current, currentTime);
+          onSplitSegmentRef.current(currentSegmentIdRef.current, currentTimeRef.current);
         }
       } else if (e.key === 'm' || e.key === 'M') {
         if (onMergeSegmentRef.current && currentSegmentIdRef.current) {
@@ -473,7 +482,7 @@ export default function AudioWaveform({
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isReady, currentTime, activeSegment]);
+  }, [isReady, activeSegment]);
 
   // 1. PLAY BUTTON: Plays the ENTIRE audio continuously
   const toggleGlobalPlay = () => {
@@ -539,7 +548,7 @@ export default function AudioWaveform({
   const skip = (seconds) => {
     if (isReady && wavesurferRef.current) {
       try {
-        const newTime = Math.max(0, Math.min(duration, currentTime + seconds));
+        const newTime = Math.max(0, Math.min(duration, currentTimeRef.current + seconds));
         wavesurferRef.current.setTime(newTime);
       } catch (e) {}
     }
@@ -619,7 +628,7 @@ export default function AudioWaveform({
 
             {/* Split at Cursor */}
             <button
-              onClick={() => onSplitSegmentRef.current && onSplitSegmentRef.current(activeSegment.segment_id, currentTime)}
+              onClick={() => onSplitSegmentRef.current && onSplitSegmentRef.current(activeSegment.segment_id, currentTimeRef.current)}
               title="Split Dialogue at Current Playhead Cursor (Hotkey: S )"
               className="inline-flex items-center gap-1 px-2 py-1 bg-[var(--kt-s3)] hover:bg-[var(--kt-s4)] text-amber-300 border border-amber-500/30 rounded text-[11px] font-semibold shadow-xs transition-all active:scale-95 cursor-pointer"
             >
@@ -640,7 +649,7 @@ export default function AudioWaveform({
             {/* Add New Segment at Current Playhead (FEAT-11) */}
             {onAddSegmentAtTime && (
               <button
-                onClick={() => onAddSegmentAtTime(currentTime)}
+                onClick={() => onAddSegmentAtTime(currentTimeRef.current)}
                 title="Add New Blank Segment at Playhead"
                 className="inline-flex items-center gap-1 px-2 py-1 bg-[var(--kt-s3)] hover:bg-[var(--kt-s4)] text-[var(--kt-accent)] border border-[var(--kt-accent)]/30 rounded text-[11px] font-semibold shadow-xs transition-all active:scale-95 cursor-pointer"
               >
@@ -739,7 +748,7 @@ export default function AudioWaveform({
 
           {/* Compact Timecode */}
           <div className="font-mono text-[11px] text-slate-300 bg-[var(--kt-s2)] px-2.5 py-1 rounded border border-[var(--kt-s4)] flex items-center gap-1.5 shadow-xs">
-            <span className="text-[var(--kt-accent)] font-bold">{formatTime(currentTime)}</span>
+            <span className="text-[var(--kt-accent)] font-bold"><Timecode format={formatTime} /></span>
             <span className="text-slate-600">/</span>
             <span className="text-slate-400 font-medium">{formatTime(duration)}</span>
           </div>

@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   ArrowLeft, Sparkles, Upload, Undo2, Redo2, Download, Save, MoreHorizontal, Loader2, Check,
-  FolderOpen, BarChart2, GitCompare, StickyNote, BookOpen, FileUp, Clapperboard, Languages, Palette
+  FolderOpen, BarChart2, GitCompare, StickyNote, BookOpen, FileUp, Clapperboard, Languages, Palette, ShieldCheck
 } from 'lucide-react';
 import NotificationBellDropdown from '../NotificationBellDropdown';
 import AccountMenuDropdown from '../AccountMenuDropdown';
@@ -172,6 +172,13 @@ export default function TopBar(p) {
         <button type="button" className="ts-btn ts-btn-ghost ts-btn-icon" title="Undo (Ctrl+Z)" aria-label="Undo" disabled={!p.canUndo} onClick={p.onUndo}><Undo2 size={15} /></button>
         <button type="button" className="ts-btn ts-btn-ghost ts-btn-icon" title="Redo (Ctrl+Y)" aria-label="Redo" disabled={!p.canRedo} onClick={p.onRedo}><Redo2 size={15} /></button>
       </div>
+
+      <button type="button" className={`ts-btn ${p.translateOpen ? 'ts-chip-accent' : ''}`} disabled={!hasSegments} onClick={p.onOpenTranslate} aria-pressed={p.translateOpen} title="Translate the transcript with Centroid">
+        <Languages size={14} /> Translate
+      </button>
+      <button type="button" className={`ts-btn ${p.qcOpen ? 'ts-chip-accent' : ''}`} disabled={!hasSegments} onClick={p.onOpenQc} aria-pressed={p.qcOpen} title="Karya checks and Centroid translation QC">
+        <ShieldCheck size={14} /> QC{p.centroidQcIssues != null ? ` · ${p.centroidQcIssues}` : ''}
+      </button>
 
       <button type="button" className="ts-btn" disabled={!hasSegments || p.isSaving} onClick={p.onSave} title="Save to cloud (Ctrl+S)">
         {p.isSaving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Save
