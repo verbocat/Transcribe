@@ -138,6 +138,8 @@ Some older modules (`gemini_subtitle_generator.py`, `gemini_subtitle_structurer.
    GEMINI_MODEL=gemini-3.8-flash
    # Extra Gemini gender votes in Transcription Studio
    GEMINI_ASSIST=false
+   # Text-only Gemini pass that corrects speaker labels during transcription (the Speakers panel can also run it on demand)
+   SPEAKER_AI_REVIEW=false
 
    # Defaults when a file has no language/script chosen
    DEFAULT_LANGUAGE=Hindi

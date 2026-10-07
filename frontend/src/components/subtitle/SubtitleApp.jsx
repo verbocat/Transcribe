@@ -9,7 +9,7 @@ import {
   Bold, Italic, Underline, Strikethrough, AlignLeft, AlignCenter, AlignRight,
   Highlighter, Palette, RotateCcw, User, Wand2, Languages, LayoutDashboard,
   Command, Keyboard, FolderOpen, Save, Replace, ListOrdered, ArrowRightLeft, CaseSensitive,
-  Eraser, SkipBack, SkipForward, Maximize, Users, BookText, StepBack, StepForward, AlignJustify
+  Eraser, SkipBack, SkipForward, Maximize, Users, BookText, StepBack, StepForward, AlignJustify, BadgeCheck
 } from 'lucide-react';
 import { API_BASE } from '../../config';
 import { publishPlayhead, getPlayhead, subscribePlayhead } from '../../utils/playheadBus';
@@ -31,7 +31,7 @@ import CommandPalette from './CommandPalette';
 import LanguageTracks from './LanguageTracks';
 import { langName } from './languages';
 import { ShiftTimingsDialog, GoToDialog, FindReplaceDialog } from './ToolDialogs';
-import { Button, IconButton, Kbd } from './ui/controls';
+import { Button, IconButton, Kbd, Segmented } from './ui/controls';
 import { useStudioPrefs, formatTimecode, loadPrefs } from './prefs';
 import { SETTINGS_GROUPS } from './SubtitleSettingsModal';
 import * as tools from './subtitleTools';
@@ -47,6 +47,7 @@ import { xhrPostForm, createRateMeter } from '../../utils/xhrUpload';
 import MediaProgress, { GenerateProgress, TaskStrip } from './MediaProgress';
 import { startJob, jobHeaders, isCancelError, CancelledError, sleepCancellable, useTaskRunner } from '../../utils/cancellable';
 import ContextPanel, { loadContext, saveContext, contextForRequest } from './ContextPanel';
+import { draftKey, buildDraft, readDraft } from './draftStorage';
 
 function formatTime(seconds) {
   if (isNaN(seconds) || seconds == null) return "00:00.000";
@@ -528,17 +529,13 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
   const [tracks, setTracks] = useState({});          // { [languageCode]: events[] } (the active track is saved on switch)
   const [activeTrack, setActiveTrack] = useState(null);
   const [sourceTrack, setSourceTrack] = useState(null);
-  const [centroidTab, setCentroidTab] = useState('translate');
-  const [centroidNonce, setCentroidNonce] = useState(0);
   const [centroidState, setCentroidState] = useState({ hasResults: false, qcIssues: null });
   // Context for the transcript (speakers, key terms, writing style): saved per video file, sent with every Generate
   const [showContextPanel, setShowContextPanel] = useState(false);
   const [genContext, setGenContext] = useState(() => loadContext(null));
   const [contextRun, setContextRun] = useState(null); // what the last generation corrected using the context
   const [progressMeta, setProgressMeta] = useState({ step: 1, steps: 1, estimated: false, eta: null });
-  const openCentroid = useCallback((tab = 'translate') => {
-    setCentroidTab(tab);
-    setCentroidNonce((n) => n + 1);
+  const openCentroid = useCallback(() => {
     setShowContextPanel(false);
     setShowCentroidModal(true);
   }, []);
@@ -559,6 +556,12 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
   const [apiKeyModalError, setApiKeyModalError] = useState(null);
   const [serverHasElevenLabsKey, setServerHasElevenLabsKey] = useState(false);
   const [showQcDrawer, setShowQcDrawer] = useState(false);
+  const [qcView, setQcView] = useState('guideline'); // 'guideline' | 'centroid': the two panels of the single QC view
+  const [qcHost, setQcHost] = useState(null); // DOM slot the Centroid QC panel renders into
+  const openQc = useCallback((view) => {
+    if (view) setQcView(view);
+    setShowQcDrawer(true);
+  }, []);
   const [showSettingsDropdown, setShowSettingsDropdown] = useState(false);
   const [showFileDropdown, setShowFileDropdown] = useState(false);
   const [activeMenu, setActiveMenu] = useState(null); // 'file' | 'edit' | 'subtitle' | 'tools' | 'view' | 'settings' | null
@@ -955,22 +958,16 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
   // One stable timer that reads the latest data, so continuous editing no longer postpones the save.
   const [lastDraftSavedAt, setLastDraftSavedAt] = useState(null);
   const autosaveDataRef = useRef(null);
-  autosaveDataRef.current = { events, complianceScore, totalErrors, totalWarnings, selectedFile, language, contentType, cplLimit, cpsLimit, frameRate, sdhMode };
+  autosaveDataRef.current = { events, tracks, activeTrack, sourceTrack, complianceScore, totalErrors, totalWarnings, selectedFile, language, contentType, cplLimit, cpsLimit, frameRate, sdhMode };
   const lastSavedEventsRef = useRef(null);
+  const lastSavedTracksRef = useRef(null);
   const saveDraftNow = useCallback(() => {
     const d = autosaveDataRef.current;
     if (!d || !d.events || d.events.length === 0) return false;
     try {
-      const fileId = d.selectedFile?.name || 'draft_subtitle';
-      localStorage.setItem(`karya_subtitle_autosave_${fileId}`, JSON.stringify({
-        events: d.events,
-        complianceScore: d.complianceScore,
-        totalErrors: d.totalErrors,
-        totalWarnings: d.totalWarnings,
-        settings: { language: d.language, contentType: d.contentType, cplLimit: d.cplLimit, cpsLimit: d.cpsLimit, frameRate: d.frameRate, sdhMode: d.sdhMode },
-        timestamp: new Date().toISOString()
-      }));
+      localStorage.setItem(draftKey(d.selectedFile?.name), JSON.stringify(buildDraft(d)));
       lastSavedEventsRef.current = d.events;
+      lastSavedTracksRef.current = d.tracks;
       setLastDraftSavedAt(new Date());
       return true;
     } catch (e) {
@@ -982,12 +979,12 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
     if (!prefs.autosaveSec) return undefined;
     const interval = setInterval(() => {
       const d = autosaveDataRef.current;
-      if (!d || !d.events || d.events.length === 0 || d.events === lastSavedEventsRef.current) return;
+      if (!d || !d.events || d.events.length === 0 || d.events === lastSavedEventsRef.current && d.tracks === lastSavedTracksRef.current) return;
       saveDraftNow();
     }, prefs.autosaveSec * 1000);
     return () => clearInterval(interval);
   }, [prefs.autosaveSec, saveDraftNow]);
-  const hasUnsavedDraftChanges = events.length > 0 && events !== lastSavedEventsRef.current;
+  const hasUnsavedDraftChanges = events.length > 0 && (events !== lastSavedEventsRef.current || tracks !== lastSavedTracksRef.current);
 
   // Workspace shortcuts (handlers are read from a ref so the listener is attached once)
   const shortcutRef = useRef({});
@@ -1141,6 +1138,38 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
     setActiveTrack(code);
     loadTrackEvents(evs);
   }, [loadTrackEvents]);
+
+  /** Centroid QC "Apply fix": write new text into the subtitles on screen, or into another language's saved track. Returns how many changed. */
+  const applyTextFixes = useCallback((code, edits) => {
+    const patch = (list) => {
+      const next = [...list];
+      let hit = 0;
+      edits.forEach((ed) => {
+        let i = -1;
+        if (ed.id != null) i = next.findIndex((e) => (e.id ?? e.event_id) === ed.id);
+        else {
+          const near = (e) => e && Math.abs((e.start_time ?? e.start ?? 0) - ed.start) < 0.05;
+          i = near(next[ed.index - 1]) ? ed.index - 1 : next.findIndex(near);
+        }
+        if (i < 0) return;
+        const e = next[i];
+        next[i] = { ...e, text: ed.text, lines: ed.text.split('\n'), ...(e.qc_errors?.some((x) => x.rule_id === 'TRANSLATION-ALIGN') ? { align_resolved: true } : {}) };
+        editedEventIdsRef.current.add(e.id ?? e.event_id);
+        hit += 1;
+      });
+      return { next, hit };
+    };
+    if (code === 'editor' || code === activeTrackRef.current) {
+      const { next, hit } = patch(eventsNowRef.current);
+      if (hit) { setEvents(next); pushToHistory(next); handleLint(next); }
+      return hit;
+    }
+    const saved = tracksRef.current[code];
+    if (!saved) return 0;
+    const { next, hit } = patch(saved);
+    if (hit) setTracks((prev) => ({ ...prev, [code]: next }));
+    return hit;
+  }, [pushToHistory, handleLint]);
 
   const lintDebounceRef = useRef(null);
   const debouncedLint = useCallback((updatedEvents) => {
@@ -1594,7 +1623,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
       setActiveEventId(null);
 
       // Check if previous autosaved draft exists
-      const saved = localStorage.getItem(`karya_subtitle_autosave_${file.name}`);
+      const saved = localStorage.getItem(draftKey(file.name));
       if (saved) {
         try {
           const data = JSON.parse(saved);
@@ -1724,7 +1753,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
       const next = prev.map(e => {
         if (e.id === id || e.event_id === id) {
           if (typeof field === 'object' && field !== null) {
-            return { ...e, ...field };
+            return { ...e, ...field, ...('text' in field && e.qc_errors?.some(x => x.rule_id === 'TRANSLATION-ALIGN') ? { align_resolved: true } : {}) };
           }
           return { ...e, [field]: value, ...(field === 'text' && e.qc_errors?.some(x => x.rule_id === 'TRANSLATION-ALIGN') ? { align_resolved: true } : {}) };
         }
@@ -1910,6 +1939,81 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
     });
   };
 
+  // ── Quality check: one-click fixes for single issues (and "fix all") ──
+  // Each fix works on a copy of the subtitles, so a whole batch is one undo step and one re-check.
+  const applyQcFixes = useCallback(async (items) => {
+    // items: [{ key, eventId, ruleId }]  ->  [{ key, ok, message }]
+    const rebreakIds = new Set(items.filter(i => tools.QC_REBREAK_RULES.has(i.ruleId)).map(i => i.eventId));
+    let rebroke = new Map();
+    if (rebreakIds.size) {
+      try {
+        const res = await fetch(`${API_BASE}/api/subtitle/rebreak`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ events: events.filter(e => rebreakIds.has(e.id ?? e.event_id)), max_cpl: cplLimit })
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        rebroke = new Map((data.events || []).map(e => [e.id ?? e.event_id, e.text]));
+      } catch (err) {
+        console.error('QC rebreak failed:', err);
+      }
+    }
+    const fps = frameRate || 24;
+    const gap = 2 / fps;
+    const round = (v) => Math.round(v * 1000) / 1000;
+    let work = events.map(e => ({ ...e }));
+    const results = [];
+    for (const item of items) {
+      const idx = work.findIndex(e => (e.id ?? e.event_id) === item.eventId);
+      if (idx < 0) { results.push({ key: item.key, ok: false, message: 'This subtitle no longer exists.' }); continue; }
+      const e = work[idx];
+      const start = e.start_time ?? e.start ?? 0;
+      const end = e.end_time ?? e.end ?? start;
+      const next = work.reduce((best, o, j) => {
+        if (j === idx) return best;
+        const os = o.start_time ?? o.start ?? 0;
+        return os > start + 1e-6 && (!best || os < (best.start_time ?? best.start)) ? o : best;
+      }, null);
+      const roomEnd = next ? (next.start_time ?? next.start) - gap : Infinity;
+      const setEnd = (newEnd) => { work[idx] = { ...e, end_time: newEnd, end: newEnd, duration: round(newEnd - start) }; };
+      const rule = String(item.ruleId || '').toUpperCase();
+      if (rule === 'NF-DURATION-SHORT' || rule.startsWith('NF-CPS')) {
+        const chars = (e.text || '').replace(/<[^>]*>/g, '').replace(/\n/g, '').length;
+        const needed = rule === 'NF-DURATION-SHORT' ? minDuration : Math.max(minDuration, chars / Math.max(1, cpsLimit - 0.1));
+        const target = round(Math.min(start + needed, start + maxDuration, roomEnd));
+        if (target <= end + 0.005) { results.push({ key: item.key, ok: false, message: 'No room to extend before the next subtitle. Shorten the text or merge.' }); continue; }
+        setEnd(target);
+        const full = target >= start + needed - 0.005;
+        results.push({ key: item.key, ok: true, message: `Now ${(target - start).toFixed(2)}s long${full ? '' : ' (as far as the next subtitle allows)'}` });
+      } else if (rule === 'NF-GAP-MISSING' || rule === 'NF-GAP-FLASH' || rule === 'NF-OVERLAP' || rule.startsWith('NF-GAP')) {
+        const target = round(roomEnd);
+        if (!next || target < start + 0.1) { results.push({ key: item.key, ok: false, message: 'Cannot close the gap without making this subtitle too short.' }); continue; }
+        setEnd(target);
+        results.push({ key: item.key, ok: true, message: 'Ends 2 frames before the next subtitle' });
+      } else if (tools.QC_REBREAK_RULES.has(rule)) {
+        const t = rebroke.get(item.eventId);
+        if (t === undefined || t === e.text) { results.push({ key: item.key, ok: false, message: 'The lines could not be re-balanced. Edit the text or split the subtitle.' }); continue; }
+        work[idx] = { ...e, text: t, lines: t.split('\n') };
+        results.push({ key: item.key, ok: true, message: 'Lines re-broken to fit' });
+      } else if (rule === 'NF-PUNCT-SPACE' || rule === 'NF-ELLIPSIS') {
+        const fixed = tools.tidyWhitespace([e]).events[0];
+        if (!fixed || fixed.text === e.text) { results.push({ key: item.key, ok: false, message: 'Fix this one by hand in the editor.' }); continue; }
+        work[idx] = { ...e, ...fixed, lines: String(fixed.text).split('\n') };
+        results.push({ key: item.key, ok: true, message: 'Spacing tidied' });
+      } else {
+        results.push({ key: item.key, ok: false, message: 'This one needs a manual edit.' });
+      }
+    }
+    if (results.some(r => r.ok)) {
+      items.forEach((i, n) => { if (results[n]?.ok) editedEventIdsRef.current.add(i.eventId); });
+      setEvents(work);
+      pushToHistory(work);
+      handleLint(work);
+    }
+    return results;
+  }, [events, frameRate, cplLimit, cpsLimit, minDuration, maxDuration, pushToHistory, handleLint]);
+
   // Add Manual Subtitle
   const handleAddSubtitle = (atTime = null, customEndTime = null) => {
     const startTime = atTime !== null ? Math.max(0, atTime) : (events.length > 0 ? events[events.length - 1].end_time + 0.1 : 0);
@@ -2090,7 +2194,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
       setProgressPercent(null);
       setProgressMeta({ step: 1, steps: 1, estimated: false, eta: null });
       setProgressStage('Starting AI Subtitle Stream');
-      setProgressDetail('Connecting to ElevenLabs Scribe v2 transcription pipeline...');
+      setProgressDetail('Connecting to the transcription pipeline...');
 
       console.log(
         '%c[Subtitle Studio]%c Starting Generation Pipeline for Video ID: ' + videoId,
@@ -2162,7 +2266,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
 
         setProgressPercent(null);
         setProgressStage('Starting AI Subtitle Stream');
-        setProgressDetail('Connecting to ElevenLabs Scribe v2 pipeline with active session...');
+        setProgressDetail('Connecting to the transcription pipeline with active session...');
         console.log(`[Subtitle Studio] Retrying stream for new Video ID: ${videoId}`);
 
         streamRes = await fetch(`${API_BASE}/api/subtitle/generate_stream`, {
@@ -2270,7 +2374,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
 
               const totalSec = ((Date.now() - startTimer) / 1000).toFixed(2);
               console.log(
-                '%c[Subtitle Studio]%c Generated ' + finalEvents.length + ' Netflix-compliant subtitle cards with ' + score + '% compliance in ' + totalSec + 's!',
+                '%c[Subtitle Studio]%c Generated ' + finalEvents.length + ' guideline-compliant subtitle cards with ' + score + '% compliance in ' + totalSec + 's!',
                 'background: #16a34a; color: white; padding: 3px 8px; border-radius: 4px; font-weight: bold;',
                 'color: #16a34a; font-weight: bold;'
               );
@@ -2319,10 +2423,10 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
               if (finalEvents.length === 0) {
                 setProgressStage('No Dialogue Detected');
                 setProgressDetail(res.error || '0 subtitles found across recording.');
-                alert(res.error || `No Subtitles Generated: No audible dialogue was transcribed.\n\nTip: Ensure the audio has audible speech and your ElevenLabs API key / quota is active in Settings.`);
+                alert(res.error || `No Subtitles Generated: No audible dialogue was transcribed.\n\nTip: Ensure the audio has audible speech and your speech engine API key / quota is active in Settings.`);
               } else {
                 setProgressStage('Complete');
-                setProgressDetail(`All ${finalEvents.length} subtitles generated following Netflix guidelines!`);
+                setProgressDetail(`All ${finalEvents.length} subtitles generated following the subtitle guidelines!`);
               }
             } else if (data.type === 'error' || data.type === 'stream_error') {
               console.error(
@@ -2330,7 +2434,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
                 'background: #dc2626; color: white; padding: 2px 6px; border-radius: 3px; font-weight: bold;',
                 'color: #dc2626; font-weight: bold;'
               );
-              const errMsg = data.message || data.error || 'ElevenLabs transcription failed';
+              const errMsg = data.message || data.error || 'Transcription failed';
               if (
                 errMsg.toLowerCase().includes('api key') ||
                 errMsg.toLowerCase().includes('401') ||
@@ -2454,11 +2558,11 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
         setTotalErrors(data.total_errors || 0);
         setTotalWarnings(data.total_warnings || 0);
         setCpsStats(data.cps_stats || null);
-        setAutoSaveStatus('Gemini Auto-Fix Applied ✓');
+        setAutoSaveStatus('AI auto-fix applied ✓');
         setTimeout(() => setAutoSaveStatus(''), 3000);
       }
     } catch (err) {
-      if (!job.cancelled) console.error("Gemini fix failed:", err);
+      if (!job.cancelled) console.error("AI fix failed:", err);
     } finally {
       setIsFixingWithGemini(false);
     }
@@ -2701,7 +2805,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
     else document.documentElement.requestFullscreen?.().catch(() => {});
   };
   const confirmGenerate = () => {
-    if (hasEvents && prefs.confirmGenerate && !window.confirm('Generate new subtitles with ElevenLabs? This replaces the current subtitles (you can undo) and uses ElevenLabs credits.')) return;
+    if (hasEvents && prefs.confirmGenerate && !window.confirm('Generate new subtitles? This replaces the current subtitles (you can undo) and uses transcription credits.')) return;
     handleGenerate();
   };
   const exportSubs = () => { if (hasEvents) setShowExportModal(true); else flashStatus('Nothing to export yet. Generate or import subtitles first.'); };
@@ -2789,17 +2893,16 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
       id: 'tools',
       label: 'Tools',
       items: [
-        { label: 'Generate subtitles (ElevenLabs)…', icon: Sparkles, disabled: isGenerating || !(selectedFile || currentVideoId), onSelect: confirmGenerate },
+        { label: 'Generate subtitles…', icon: Sparkles, disabled: isGenerating || !(selectedFile || currentVideoId), onSelect: confirmGenerate },
         { label: 'Re-sync timings to speech…', icon: Volume2, disabled: !hasEvents || !currentVideoId, onSelect: handleAcousticSync },
-        { label: 'Fix QC issues with Gemini…', icon: Wand2, disabled: !hasEvents, onSelect: handleGeminiFix },
+        { label: 'Fix QC issues with AI…', icon: Wand2, disabled: !hasEvents, onSelect: handleGeminiFix },
         { label: 'Re-break all line breaks', icon: AlignJustify, disabled: !hasEvents, onSelect: handleRebreakAll },
         { label: 'Context…', icon: BookText, onSelect: openContext },
-        { label: 'Translate subtitles…', icon: Languages, onSelect: () => openCentroid('translate') },
-        ...(centroidState.hasResults ? [{ label: 'Centroid QC…', icon: ShieldCheck, onSelect: () => openCentroid('qc') }] : []),
+        { label: 'Translate subtitles…', icon: Languages, onSelect: () => openCentroid() },
         { type: 'separator' },
         { label: 'Speakers…', icon: Users, disabled: !hasEvents, onSelect: () => setShowSpeakerModal(true) },
         { label: 'Glossary…', icon: BookText, onSelect: () => openSettings('glossary') },
-        { label: 'Netflix QC report', icon: ShieldCheck, onSelect: () => setShowQcDrawer(true) },
+        { label: 'Quality check (QC)…', icon: ShieldCheck, onSelect: () => openQc() },
       ],
     },
     {
@@ -2811,7 +2914,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
         { label: 'Timeline', checked: layout.timelinePos !== 'hidden', onSelect: () => toggleLayoutKey('timelinePos', 'bottom', 'hidden') },
         { label: 'Tool rail', checked: layout.sidebar !== 'hidden', onSelect: () => toggleLayoutKey('sidebar', 'left', 'hidden') },
         { label: 'Status bar', checked: layout.showFooter, onSelect: () => patchLayout({ showFooter: !layout.showFooter }) },
-        { label: 'QC report', checked: showQcDrawer, onSelect: () => setShowQcDrawer((v) => !v) },
+        { label: 'QC panel', checked: showQcDrawer, onSelect: () => setShowQcDrawer((v) => !v) },
         { type: 'separator' },
         { type: 'heading', label: 'Focus' },
         { label: 'Focus on video', checked: layout.maximize === 'video', onSelect: () => patchLayout({ maximize: layout.maximize === 'video' ? 'none' : 'video' }) },
@@ -3015,7 +3118,11 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
           <div className="flex items-center gap-2">
             <button
               onClick={() => {
-                const restoredEvents = pendingDraft.events || [];
+                const restored = readDraft(pendingDraft);
+                const restoredEvents = restored.events;
+                setTracks(restored.tracks);
+                setActiveTrack(restored.activeTrack);
+                setSourceTrack(restored.sourceTrack);
                 setEvents(restoredEvents);
                 setComplianceScore(pendingDraft.complianceScore || 100);
                 setTotalErrors(pendingDraft.totalErrors || 0);
@@ -3045,31 +3152,23 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
       >
         {layout.sidebar !== 'hidden' && (
         <Sidebar
-          activeTab={showQcDrawer ? 'qa' : showExportModal ? 'export' : null}
+          qcOpen={showQcDrawer}
           isGenerating={isGenerating}
           canGenerate={Boolean(selectedFile || currentVideoId)}
           onTabChange={(tabId) => {
-            if (tabId === 'media') fileInputRef.current?.click();
-            if (tabId === 'import') srtImportRef.current?.click();
             if (tabId === 'generate') {
               confirmGenerate();
             }
             if (tabId === 'context') { if (showContextPanel) setShowContextPanel(false); else openContext(); }
-            if (tabId === 'qa') setShowQcDrawer(true);
-            if (tabId === 'export') setShowExportModal(true);
-            if (tabId === 'translate') { if (showCentroidModal && centroidTab === 'translate') setShowCentroidModal(false); else openCentroid('translate'); }
-            if (tabId === 'centroid-qc') openCentroid('qc');
+            if (tabId === 'qc') { if (showQcDrawer) setShowQcDrawer(false); else openQc(); }
+            if (tabId === 'translate') { if (showCentroidModal) setShowCentroidModal(false); else openCentroid(); }
           }}
-          onOpenLayout={() => openSettings('layout')}
-          layoutOpen={showSettingsModal && settingsPage === 'layout'}
           translateOpen={showCentroidModal}
           contextOpen={showContextPanel}
-          contextActive={Object.keys(contextForRequest(genContext)).some((k) => !['strict', 'writing_style', 'fillers', 'stutters', 'numbers', 'profanity'].includes(k))}
-          hasTranslation={centroidState.hasResults}
+          contextActive={Object.keys(contextForRequest(genContext)).some((k) => !['strict', 'writing_style'].includes(k))}
           centroidQcCount={centroidState.qcIssues}
           position={layout.sidebar}
           showLabels={layout.sidebarLabels}
-          onOpenHelp={() => openSettings('shortcuts')}
         />
         )}
 
@@ -3184,6 +3283,30 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
                 : 'shrink-0 min-h-0 min-w-0 flex flex-col p-4 border-[var(--kt-s4)] bg-[var(--ss-panel)] text-slate-200 overflow-hidden ' + (layout.qcDock === 'bottom' ? 'border-t' : layout.qcDock === 'left' ? 'border-r' : 'border-l')}
               style={layout.qcDock === 'overlay' ? undefined : (layout.qcDock === 'bottom' ? { height: layout.qcSize, order: 2 } : { width: layout.qcSize, order: layout.qcDock === 'left' ? 0 : 2 })}
             >
+            <div className="shrink-0 flex items-center gap-2 pb-3">
+              <div className="flex-1 min-w-0">
+                <Segmented
+                  label="QC panel"
+                  value={qcView}
+                  onChange={setQcView}
+                  options={[
+                    { value: 'guideline', label: 'Guideline QC', icon: ShieldCheck },
+                    { value: 'centroid', label: centroidState.qcIssues != null ? `Centroid QC · ${centroidState.qcIssues}` : 'Centroid QC', icon: BadgeCheck },
+                  ]}
+                />
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowQcDrawer(false)}
+                className="p-1 rounded-none hover:bg-[var(--ss-hover)] text-slate-400 hover:text-white transition-colors cursor-pointer"
+                title="Close QC"
+                aria-label="Close QC"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            {qcView === 'centroid' && <div ref={setQcHost} className="flex-1 min-h-0 flex flex-col" />}
+            {qcView === 'guideline' && (
             <NetflixQCPanel
               qcUnavailable={qcUnavailable}
               complianceScore={complianceScore}
@@ -3197,6 +3320,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
               cpsLimit={cpsLimit}
               onAutoFix={handleAutoFix}
               onRebreakAll={handleRebreakAll}
+              onApplyFixes={applyQcFixes}
               onGeminiFix={handleGeminiFix}
               isFixingWithGemini={isFixingWithGemini}
               onAcousticSync={handleAcousticSync}
@@ -3207,8 +3331,8 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
                 handlePlayEvent(id);
                 if (layout.qcDock === 'overlay') setShowQcDrawer(false);
               }}
-              onClose={() => setShowQcDrawer(false)}
             />
+            )}
             </div>
           )}
         </div>
@@ -3283,13 +3407,13 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
           <div 
             onClick={() => setShowQcDrawer(true)} 
             className="flex items-center gap-1.5 cursor-pointer hover:underline"
-            title="Click to open Netflix QC Report Drawer"
+            title="Click to open the QC panel"
           >
             <div className={`w-2 h-2 rounded-none ${
               totalErrors > 0 ? 'bg-rose-500 animate-pulse' : totalWarnings > 0 ? 'bg-amber-400' : 'bg-emerald-400'
             }`} />
             <span className="font-semibold">
-              {qcUnavailable ? 'Netflix QC: unavailable (backend offline)' : `Netflix QC: ${complianceScore.toFixed(0)}%`}
+              {qcUnavailable ? 'Guideline QC: unavailable (backend offline)' : `Guideline QC: ${complianceScore.toFixed(0)}%`}
             </span>
             {!qcUnavailable && totalErrors > 0 && <span className="text-rose-400 font-bold">({totalErrors} Err)</span>}
           </div>
@@ -3414,8 +3538,9 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
         isOpen={showCentroidModal}
         onClose={() => setShowCentroidModal(false)}
         defaultSourceLang={language}
-        startTab={centroidTab}
-        startTabNonce={centroidNonce}
+        qcHost={showQcDrawer && qcView === 'centroid' ? qcHost : null}
+        onOpenQc={() => openQc('centroid')}
+        onOpenTranslate={() => { setShowQcDrawer(false); openCentroid(); }}
         onStateChange={setCentroidState}
         onJumpToEvent={(id) => { setActiveEventId(id); handlePlayEvent(id); }}
         events={events}
@@ -3424,7 +3549,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
         cpsLimit={cpsLimit}
         maxLines={maxLines}
         fileName={selectedFile?.name || 'subtitles'}
-        onUpdateEvent={handleUpdateEvent}
+        onApplyTextFixes={applyTextFixes}
         activeLang={activeTrack}
         trackLangs={Object.keys(tracks)}
         onTranslated={handleTranslated}

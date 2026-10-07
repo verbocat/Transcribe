@@ -336,7 +336,7 @@ export default function ActiveSubtitleInspector({
         {/* Center: Gap Telemetry */}
         <div className="hidden sm:flex items-center gap-3 text-[10px] font-mono">
           {gapPrevSec !== null && (
-            <span className={`flex items-center gap-1 ${isShotGapError ? 'text-rose-400 font-bold' : ('text-slate-400')}`} title="Gap from previous subtitle (Netflix requires >= 2 frames)">
+            <span className={`flex items-center gap-1 ${isShotGapError ? 'text-rose-400 font-bold' : ('text-slate-400')}`} title="Gap from previous subtitle (at least 2 frames required)">
               <span>Gap In:</span>
               <span className={`px-1 py-0.2 rounded border ${isShotGapError ? 'bg-rose-950/60 border-rose-500 text-rose-300' : ('bg-[var(--kt-s1)] border-[var(--kt-s4)]')}`}>
                 {gapPrevSec.toFixed(3)}s ({gapPrevFrames}f)
@@ -570,7 +570,7 @@ export default function ActiveSubtitleInspector({
             className={`px-2 py-0.5 rounded text-[11px] font-semibold border transition-colors cursor-pointer flex items-center gap-1 ${
               'bg-[var(--kt-s2)] hover:bg-[var(--kt-s3)] border-[var(--kt-s4)] text-slate-300 hover:text-white'
             }`}
-            title="Auto-Break lines according to Netflix syntactic grammar"
+            title="Auto-Break lines according to syntactic grammar"
           >
             <Sparkles size={11} className={"text-[var(--kt-accent)]"} />
             <span>Re-Break</span>

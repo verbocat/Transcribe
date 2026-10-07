@@ -272,6 +272,12 @@ async def lifespan(app: FastAPI):
     init_db()
     init_auth_db()
     monitor_task = asyncio.create_task(_hardware_monitor_loop())
+    # Load the local gender model now so the first transcription does not pay for it
+    try:
+        from app.gender_local import _get_session as _warm_gender_model
+        asyncio.get_running_loop().run_in_executor(None, _warm_gender_model)
+    except Exception:
+        pass
     yield
     monitor_task.cancel()
 
@@ -409,7 +415,9 @@ async def health_check():
         "default_model": GEMINI_MODEL,
         "default_language": DEFAULT_LANGUAGE,
         "default_script": DEFAULT_SCRIPT,
-        "version": "1.0.0"
+        "version": "1.0.0",
+        # Lets you confirm from outside that the live-progress job API is deployed
+        "features": {"transcribe_async": True, "audio_extract_async": True}
     }
 
 
@@ -793,6 +801,152 @@ async def delete_project(project_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ── Transcription with live step-by-step progress ───────────────────────────────
+# POST /api/transcribe_async runs the same pipeline as POST /api/transcribe in the background;
+# GET /api/transcribe_status/{job_id} reports the current stage, overall percent and a stage list.
+# (/api/transcribe is unchanged and still returns the finished result in one response.)
+_transcribe_jobs: dict = {}
+TRANSCRIBE_STAGES = [
+    ("extracting", "Extracting audio"),
+    ("preparing", "Preparing audio"),
+    ("uploading", "Uploading to speech engine"),
+    ("transcribing", "Transcribing and identifying speakers"),
+    ("script", "Fixing script and loanwords"),
+    ("segmenting", "Building segments"),
+    ("gender", "Detecting speaker gender"),
+    ("linting", "Checking Karya rules"),
+]
+
+
+def _prune_transcribe_jobs():
+    cutoff = time.time() - 3600
+    for jid in [j for j, v in _transcribe_jobs.items() if v.get("updated", 0) < cutoff]:
+        _transcribe_jobs.pop(jid, None)
+
+
+async def _run_transcribe_job(job_id, target_path, original_media_path, language, script, elevenlabs_api_key, needs_extract=True, cancel_id=None):
+    job = _transcribe_jobs[job_id]
+    # Registered under the id the browser sent as X-Job-Id (or the poll id), so POST /api/jobs/{id}/cancel stops FFmpeg and the run
+    scope_id = cancel_id or job_id
+    scope = job_control.register(scope_id, asyncio.current_task())
+    scope_token = job_control._current.set(scope)
+    stages = [s for s in TRANSCRIBE_STAGES if needs_extract or s[0] != "extracting"]
+    order = [k for k, _ in stages]
+    started = time.time()
+    # Stage list is rebuilt on every update so the UI can draw a checklist from one response
+    def set_state(**kw):
+        job.update(kw)
+        job["updated"] = time.time()
+        job["elapsed_sec"] = round(time.time() - started, 1)
+        cur = job.get("stage")
+        idx = order.index(cur) if cur in order else (len(order) if cur in ("saving", "done") else -1)
+        if cur in order:
+            job["step"], job["step_count"] = idx + 1, len(order)
+        job["stages"] = [
+            {"id": k, "label": lbl, "status": "done" if (i < idx or cur == "done") else ("active" if i == idx else "pending")}
+            for i, (k, lbl) in enumerate(stages)
+        ]
+
+    def on_progress(stage, overall, detail, stage_pct=None):
+        # Never let the bar move backwards (stages can report from worker threads)
+        overall = max(overall, job.get("percent") or 0.0)
+        set_state(stage=stage, percent=min(99.0, overall), stage_percent=stage_pct, detail=detail)
+
+    try:
+        from app.video_processor import get_supported_video_extensions, extract_audio_from_video
+        ext = Path(target_path).suffix.lower()
+        if needs_extract and (ext in get_supported_video_extensions() or ext == ".wma" or ext not in [".wav", ".mp3", ".m4a", ".aac", ".flac", ".ogg", ".opus"]):
+            # FFmpeg's own progress drives the first 10% of the bar
+            def on_ffmpeg(pct, done, total):
+                on_progress("extracting", 0.0 if pct is None else 10.0 * pct / 100.0, "Extracting the audio track with FFmpeg",
+                            None if pct is None else round(pct, 1))
+            set_state(stage="extracting", percent=0.0, detail="Extracting the audio track with FFmpeg")
+            try:
+                audio_info = await asyncio.to_thread(extract_audio_from_video, target_path, None, on_ffmpeg)
+                extracted = audio_info.get("audio_path")
+                if extracted and os.path.exists(extracted):
+                    target_path = extracted
+            except Exception as extract_err:
+                print(f"Video audio extraction fallback note: {extract_err}")
+        set_state(stage="preparing", percent=max(job.get("percent") or 0.0, 10.0), detail="Preparing audio")
+
+        is_video = Path(original_media_path).suffix.lower() in get_supported_video_extensions()
+        result = await process_audio_file(
+            audio_path=target_path,
+            language=language,
+            script=script,
+            elevenlabs_api_key=elevenlabs_api_key,
+            video_path=original_media_path if is_video else None,
+            progress_cb=on_progress,
+        )
+        result.filename = Path(target_path).name
+        active_sessions[result.audio_id] = {"filename": result.filename, "file_path": target_path, "result": result}
+        set_state(stage="saving", percent=99.0, detail="Saving the project")
+        await asyncio.to_thread(_save_transcription_to_db, result, target_path)
+        set_state(stage="done", percent=100.0, detail="Done", result=result.model_dump(mode="json"))
+    except Exception as err:
+        import traceback
+        traceback.print_exc()
+        set_state(stage="error", error=f"Transcription failed: {err}")
+    except asyncio.CancelledError:
+        set_state(stage="error", error="Transcription cancelled.", cancelled=True)
+    finally:
+        job_control.unregister(scope_id, scope)
+        job_control._current.reset(scope_token)
+
+
+@app.post("/api/transcribe_async")
+async def transcribe_audio_async(
+    request: Request,
+    file: Optional[UploadFile] = File(None),
+    audio_id: Optional[str] = Form(None),
+    language: str = Form("Auto-Detect"),
+    script: str = Form("Auto-Detect"),
+    elevenlabs_api_key: Optional[str] = Form(None),
+    audio_filename: Optional[str] = Form(None)
+):
+    """Start a transcription in the background and return a job id to poll.
+
+    Send `audio_filename` (from /api/audio/extract_async's result) to reuse audio that was already
+    extracted: nothing is uploaded or extracted a second time."""
+    client_ip = request.client.host if request.client else "127.0.0.1"
+    _check_rate_limit(client_ip)
+    _prune_transcribe_jobs()
+    original_path = None
+    needs_extract = True
+    if audio_filename:
+        wav_path = UPLOAD_DIR / Path(audio_filename).name
+        if not wav_path.exists():
+            raise HTTPException(status_code=404, detail="Extracted audio not found; upload the file again.")
+        target_path = str(wav_path)
+        needs_extract = False
+        # The source video sits next to its extracted audio (same stem); gender detection can watch it
+        from app.video_processor import get_supported_video_extensions as _vid_exts
+        original_path = next((str(p) for p in UPLOAD_DIR.glob(f"{wav_path.stem}.*") if p.suffix.lower() in _vid_exts()), None)
+    elif file:
+        file_path = UPLOAD_DIR / f"{uuid.uuid4().hex[:8]}_{file.filename}"
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+        target_path = str(file_path)
+    elif audio_id and audio_id in active_sessions:
+        target_path = active_sessions[audio_id]["file_path"]
+    else:
+        raise HTTPException(status_code=400, detail="Audio file, audio_filename or valid audio_id is required.")
+
+    job_id = uuid.uuid4().hex
+    _transcribe_jobs[job_id] = {"stage": "queued", "percent": 0.0, "updated": time.time()}
+    asyncio.create_task(_run_transcribe_job(job_id, target_path, original_path or target_path, language, script, elevenlabs_api_key, needs_extract, cancel_id=request.headers.get("x-job-id")))
+    return {"job_id": job_id}
+
+
+@app.get("/api/transcribe_status/{job_id}")
+async def transcribe_status(job_id: str):
+    job = _transcribe_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Transcription job not found or expired.")
+    return {k: v for k, v in job.items() if k != "updated"}
+
+
 @app.get("/api/audio/{filename}")
 async def get_audio_stream(filename: str):
     """Stream audio file for WaveSurfer browser player."""
@@ -1000,6 +1154,18 @@ async def extract_audio_status_endpoint(job_id: str):
     if not job:
         raise HTTPException(status_code=404, detail="Extraction job not found or expired.")
     return {k: v for k, v in job.items() if k != "updated"}
+
+
+@app.post("/api/speakers/refine")
+async def refine_speakers_endpoint(payload: dict):
+    """AI second pass on speaker labels. Returns suggestions only; the editor applies them (and can undo)."""
+    from app.speaker_refine import lines_from_segments, suggest_corrections
+    segments_raw = [s for s in payload.get("segments", []) if isinstance(s, dict) and "segment_id" in s]
+    if len(segments_raw) < 2:
+        raise HTTPException(status_code=400, detail="Not enough lines to review.")
+    lines = lines_from_segments(segments_raw)
+    plan, notes = await asyncio.to_thread(suggest_corrections, lines, str(payload.get("language") or "Hindi"))
+    return {"speaker_map": plan["speaker_map"], "reassign": {str(k): v for k, v in plan["reassign"].items()}, "notes": notes}
 
 
 @app.post("/api/lint")
@@ -2223,8 +2389,17 @@ async def centroid_analyze(payload: dict):
 
 @app.post("/api/centroid/qc")
 async def centroid_qc(payload: dict):
-    """Run Centroid linguistic QC on source/target cue pairs; returns issues with suggested fixes."""
+    """
+    Subtitle QC for source/target cue pairs: Centroid's AI review merged with local rule checks.
+
+    Response (unchanged shape, additive fields only):
+      summary: {mqm_score, error_count, warning_count, clean_percentage, ai_checked, local_issue_count, ...}
+      issues:  [{index (1-based), start, end, category, severity "error"|"warning", mqm_severity, title, description,
+                 source, target, suggestion (full replacement text for the cue, or null), origin "ai"|"local"}]
+      centroid_error: present only when Centroid failed; local checks are still returned and ai_checked is false.
+    """
     from app import centroid_client
+    from app.subtitle_qc import run_local_qc, merge_qc
     cues = payload.get("cues") or []
     if not cues or not payload.get("target_lang"):
         raise HTTPException(status_code=400, detail="Provide 'cues' (source + target) and 'target_lang'.")
@@ -2233,7 +2408,30 @@ async def centroid_qc(payload: dict):
         {"start": c.get("start"), "end": c.get("end"), "source": c.get("source", ""), "target": c.get("target", "")}
         for c in cues
     ]
-    return await centroid_client.post("/subtitles/qc", body)
+    local = run_local_qc(
+        body["cues"], payload["target_lang"], payload.get("source_lang"),
+        payload.get("glossary"), payload.get("constraints"),
+    )
+    centroid, err = None, None
+    try:
+        centroid = await centroid_client.post("/subtitles/qc", body)
+    except HTTPException as e:
+        err = str(e.detail)
+    return merge_qc(centroid, local, len(cues), err)
+
+
+@app.post("/api/subtitle/qc")
+async def subtitle_qc_local(payload: dict):
+    """Local-only QC (no Centroid call): same response shape as /api/centroid/qc."""
+    from app.subtitle_qc import run_local_qc, merge_qc
+    cues = payload.get("cues") or []
+    if not cues:
+        raise HTTPException(status_code=400, detail="Provide 'cues'.")
+    local = run_local_qc(
+        cues, payload.get("target_lang") or payload.get("language") or "en", payload.get("source_lang"),
+        payload.get("glossary"), payload.get("constraints"),
+    )
+    return merge_qc(None, local, len(cues))
 
 
 @app.post("/api/subtitle/lint")

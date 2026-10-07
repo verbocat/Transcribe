@@ -56,9 +56,11 @@ def register(job_id: str, task: Optional[asyncio.Task] = None) -> "Job":
     return job
 
 
-def unregister(job_id: str) -> None:
+def unregister(job_id: str, job: Optional["Job"] = None) -> None:
+    """Forget a job. With `job`, only if that exact job is still the one registered (a background run may have taken the id over)."""
     with _lock:
-        _jobs.pop(job_id, None)
+        if job is None or _jobs.get(job_id) is job:
+            _jobs.pop(job_id, None)
 
 
 def cancel(job_id: str) -> bool:
@@ -165,4 +167,4 @@ class JobScopeMiddleware:
                     pass
         finally:
             _current.reset(token)
-            unregister(job_id)
+            unregister(job_id, job)

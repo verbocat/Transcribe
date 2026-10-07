@@ -28,7 +28,7 @@ export const SETTINGS_GROUPS = [
     pages: [
       { id: 'qc', label: 'Timing & QC', icon: Gauge, desc: 'Reading speed, line length, durations and frame rate.' },
       { id: 'language', label: 'Language & script', icon: Languages, desc: 'Spoken language, script and dialogue style.' },
-      { id: 'ai', label: 'Speech & AI', icon: Sparkles, desc: 'Transcription engine, speakers and Gemini correction.' },
+      { id: 'ai', label: 'Speech & AI', icon: Sparkles, desc: 'Transcription engine, speakers and AI correction.' },
       { id: 'glossary', label: 'Glossary', icon: BookText, desc: 'Names and terms to spell exactly.' },
     ],
   },

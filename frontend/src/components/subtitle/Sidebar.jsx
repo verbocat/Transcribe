@@ -1,53 +1,44 @@
 import React from 'react';
 import {
-  FolderOpen,
-  FileText,
   Sparkles,
   Languages,
-  BadgeCheck,
   ShieldCheck,
-  Download,
-  HelpCircle,
   Loader2,
-  LayoutDashboard,
   BookText,
 } from 'lucide-react';
 
 /**
- * Left tool rail: a slim, icon-only strip (labels appear as tooltips), grouped by job:
- * media in | AI steps | review and out. Panels (Context, Translate, QC, Export) stay highlighted while open.
- * "Centroid QC" only appears once a translation exists. When docked top or bottom it becomes a compact row with labels.
+ * Left tool rail: a slim, icon-only strip (labels appear as tooltips) for the working tools:
+ * AI steps | quality check. Panels (Context, Translate, QC) stay highlighted while open.
+ * File actions (open, import, export), layout and shortcuts live in the top menu bar only.
+ * "QC" opens one view with Guideline and Centroid tabs; the badge counts Centroid issues.
+ * When docked top or bottom it becomes a compact row with labels.
  */
 export default function Sidebar({
   activeTab = null,
   isGenerating = false,
   canGenerate = true,
-  hasTranslation = false,
   translateOpen = false,
   contextOpen = false,
   contextActive = false,
   centroidQcCount = null,
   onTabChange = () => {},
-  onOpenHelp = () => {},
-  onOpenLayout = () => {},
-  layoutOpen = false,
+  qcOpen = false,
   position = 'left',
   showLabels = true,
 }) {
   const horizontal = position === 'top' || position === 'bottom';
+  // vertical rails always name each tool under its icon; the toggle only applies to the horizontal row
+  const labelled = horizontal ? showLabels : true;
   const first = position === 'left' || position === 'top';
 
   const groups = [
-    [
-      { id: 'media', label: 'Open', icon: FolderOpen, title: 'Open a video or audio file' },
-      { id: 'import', label: 'Import', icon: FileText, title: 'Import subtitles from an SRT / VTT file' },
-    ],
     [
       {
         id: 'generate',
         label: isGenerating ? 'Working' : 'Generate',
         icon: isGenerating ? Loader2 : Sparkles,
-        title: !canGenerate ? 'Open a video or audio file first' : isGenerating ? 'Generating subtitles…' : 'Generate subtitles with ElevenLabs Scribe',
+        title: !canGenerate ? 'Open a video or audio file first' : isGenerating ? 'Generating subtitles…' : 'Generate subtitles',
         disabled: !canGenerate || isGenerating,
         spin: isGenerating,
         accent: true,
@@ -67,19 +58,16 @@ export default function Sidebar({
         title: 'Translate the subtitles into another language with Centroid',
         active: translateOpen,
       },
-      ...(hasTranslation
-        ? [{
-          id: 'centroid-qc',
-          label: 'Centroid QC',
-          icon: BadgeCheck,
-          title: 'Check the translation with Centroid QC',
-          badge: centroidQcCount,
-        }]
-        : []),
     ],
     [
-      { id: 'qa', label: 'QC', icon: ShieldCheck, title: 'Open the Netflix compliance (QC) panel' },
-      { id: 'export', label: 'Export', icon: Download, title: 'Export subtitles (SRT, VTT, TTML…)' },
+      {
+        id: 'qc',
+        label: 'QC',
+        icon: ShieldCheck,
+        title: 'Quality check: Guideline QC and Centroid translation QC',
+        active: qcOpen,
+        badge: centroidQcCount,
+      },
     ],
   ];
 
@@ -106,24 +94,21 @@ export default function Sidebar({
         onClick={() => item.onClick ? item.onClick() : onTabChange(item.id)}
         disabled={item.disabled}
         aria-label={item.label}
-        aria-pressed={item.active !== undefined || item.id === 'qa' || item.id === 'export' ? on : undefined}
-        className={`group relative shrink-0 rounded-lg inline-flex items-center justify-center transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed outline-none focus-visible:ring-1 focus-visible:ring-[var(--ss-accent)] ${
-          horizontal && showLabels && !small ? 'h-7 px-2 gap-1.5' : 'w-8 h-8'
-        } ${
-          on
-            ? 'bg-[var(--ss-accent)]/15 text-[var(--ss-accent)]'
-            : item.accent
-              ? 'text-[var(--ss-accent)] hover:bg-[var(--ss-accent)]/10'
-              : 'text-[var(--ss-muted)] hover:text-[var(--ss-text)] hover:bg-[var(--ss-raised)]'
+        aria-pressed={item.active !== undefined ? on : undefined}
+        data-power={item.id}
+        data-on={on ? 'true' : 'false'}
+        className={`rail-btn group relative shrink-0 rounded-lg inline-flex items-center justify-center cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed outline-none focus-visible:ring-1 focus-visible:ring-[var(--ss-accent)] ${
+          horizontal ? (showLabels && !small ? 'h-7 px-2 gap-1.5' : 'w-8 h-8') : 'w-[58px] py-1.5 flex-col gap-1'
         }`}
       >
-        {on && !horizontal && <span aria-hidden="true" className={`absolute top-1.5 bottom-1.5 w-[2px] rounded-full bg-[var(--ss-accent)] ${position === 'right' ? '-right-[5px]' : '-left-[5px]'}`} />}
-        <Icon size={16} strokeWidth={1.8} className={item.spin ? 'animate-spin' : ''} />
+        {on && !horizontal && <span aria-hidden="true" className={`absolute top-2 bottom-2 w-[2px] rounded-full bg-[var(--rail-a)] shadow-[0_0_6px_var(--rail-a)] ${position === 'right' ? '-right-[7px]' : '-left-[7px]'}`} />}
+        <Icon size={horizontal ? 16 : 20} strokeWidth={1.8} className={item.spin ? 'animate-spin' : ''} />
         {horizontal && showLabels && !small && <span className="text-[12px] font-medium leading-none">{item.label}</span>}
+        {!horizontal && labelled && <span className="text-[10.5px] font-semibold leading-none">{item.label}</span>}
         {item.badge != null && (
-          <span className="absolute -top-0.5 -right-0.5 min-w-[14px] h-[14px] px-1 rounded-full bg-[var(--ss-warn)] text-[9px] font-bold leading-[14px] text-black text-center">{item.badge}</span>
+          <span className="absolute top-0.5 right-1 min-w-[14px] h-[14px] px-1 rounded-full bg-[var(--ss-warn)] text-[9px] font-bold leading-[14px] text-black text-center">{item.badge}</span>
         )}
-        {item.dot && !item.badge && <span aria-hidden="true" className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-[var(--ss-accent)]" />}
+        {item.dot && !item.badge && <span aria-hidden="true" className="absolute top-1.5 right-2 w-1.5 h-1.5 rounded-full bg-[var(--rail-a)]" />}
         {!(horizontal && showLabels && !small) && <Tip>{item.title || item.label}</Tip>}
       </button>
     );
@@ -134,21 +119,16 @@ export default function Sidebar({
       aria-label="Tools"
       style={{ order: first ? 0 : 3 }}
       className={`shrink-0 bg-[var(--ss-bg)] ${edge} border-[var(--ss-line)] flex justify-between select-none z-30 ${
-        horizontal ? 'flex-row items-center w-full px-2 h-10' : 'flex-col items-center h-full w-11 py-2'
+        horizontal ? 'flex-row items-center w-full px-2 h-10' : 'flex-col items-center justify-center h-full w-[70px] py-2'
       }`}
     >
-      <div className={`flex ${horizontal ? 'flex-row items-center gap-1' : 'flex-col items-center gap-1'}`}>
+      <div className={`flex ${horizontal ? 'flex-row items-center gap-1.5' : 'flex-col items-center gap-1.5'}`}>
         {groups.map((group, gi) => (
           <React.Fragment key={gi}>
-            {gi > 0 && <span aria-hidden="true" className={horizontal ? 'w-px h-4 mx-1 bg-[var(--ss-line)]' : 'h-px w-5 my-1 bg-[var(--ss-line)]'} />}
+            {gi > 0 && <span aria-hidden="true" className={horizontal ? 'w-px h-4 mx-1 bg-[var(--ss-line)]' : 'h-px w-8 my-1.5 bg-[var(--ss-line)]'} />}
             {group.map((item) => btn(item))}
           </React.Fragment>
         ))}
-      </div>
-
-      <div className={`flex items-center gap-1 ${horizontal ? 'flex-row' : 'flex-col'}`}>
-        {btn({ id: 'layout', label: 'Layout', icon: LayoutDashboard, title: 'Layout & panels (Ctrl+Shift+L)', active: layoutOpen, onClick: onOpenLayout }, true)}
-        {btn({ id: 'help', label: 'Shortcuts', icon: HelpCircle, title: 'Keyboard shortcuts', active: false, onClick: onOpenHelp }, true)}
       </div>
     </aside>
   );

@@ -122,6 +122,12 @@ def _strip_tags(text: str) -> str:
     return re.sub(r'<[^>]+>|\{\\an[1-9]\}', '', text)
 
 
+def _is_dual_speaker(text: str) -> bool:
+    """Netflix dual-speaker card: exactly two lines, each opened by a hyphen (one speaker per line)."""
+    lines = [l.strip() for l in _strip_tags(text or "").split('\n')]
+    return len(lines) == 2 and all(l.startswith(('-', '–', '—')) for l in lines)
+
+
 def _strip_music_notes(text: str) -> str:
     """Remove ♪ characters for CPS calculation."""
     return text.replace('♪', '').strip()
@@ -326,6 +332,10 @@ def optimize_line_breaks(text: str, max_cpl: int = 42) -> str:
     5. Bottom-heavy pyramid: upper line shorter than lower line
     6. No orphans (single short word on line 2)
     """
+    # A dual-speaker card keeps one speaker per line; re-breaking it would mix the two speakers.
+    if _is_dual_speaker(text):
+        return text
+
     clean = _strip_tags(text).strip()
     
     # If it fits on one line, no break needed
@@ -768,6 +778,28 @@ def lint_subtitle_event(
                     "suggested_fix": "Add '-' prefix to both lines if two speakers, or remove from both if single speaker.",
                 })
     
+        # Netflix: "Use a hyphen without a space to indicate two speakers in one subtitle"
+        if line1_has_hyphen and line2_has_hyphen and any(re.match(r'^\s*(?:<[^>]+>)*[-–—]\s', l) for l in lines):
+            errors.append({
+                "event_id": event_id,
+                "rule_id": "NF-DUAL-SPEAKER-SPACE",
+                "field": "format",
+                "message": "Dual-speaker hyphen is followed by a space. Netflix uses a hyphen without a space.",
+                "severity": "warning",
+                "suggested_fix": "\n".join(re.sub(r'^(\s*(?:<[^>]+>)*[-–—])\s+', r'\1', l) for l in lines),
+            })
+
+    # ── Space Before Punctuation Check (Hindi guide: no spaces after text and before punctuation) ──
+    if re.search(r'\S[ \t]+[,.!?;:।॥…]', _strip_tags(text)):
+        errors.append({
+            "event_id": event_id,
+            "rule_id": "NF-PUNCT-SPACE",
+            "field": "text",
+            "message": "Space before a punctuation mark. There should be no space between the text and the punctuation.",
+            "severity": "warning",
+            "suggested_fix": re.sub(r'(?<=\S)[ \t]+([,.!?;:।॥…])', r'\1', text),
+        })
+
     # ── Ellipsis Check ──
     if '...' in text:
         errors.append({
@@ -1246,6 +1278,8 @@ def rebalance_words_across_adjacent_events(
 
     # Forward shift: from event[i] to event[i+1]
     for i in range(len(events) - 1):
+        if _is_dual_speaker(events[i].get("text", "")) or _is_dual_speaker(events[i + 1].get("text", "")):
+            continue
         txt_i = _strip_tags(events[i].get("text", "")).replace('\n', ' ').strip()
         broken_i = optimize_line_breaks(txt_i, cpl_limit).split('\n')
         if len(broken_i) > max_lines or any(len(l) > cpl_limit for l in broken_i) or len(txt_i) > (max_cap - 4):
@@ -1281,6 +1315,8 @@ def rebalance_words_across_adjacent_events(
 
     # Backward shift: from event[i] to event[i-1]
     for i in range(len(events) - 1, 0, -1):
+        if _is_dual_speaker(events[i].get("text", "")) or _is_dual_speaker(events[i - 1].get("text", "")):
+            continue
         txt_i = _strip_tags(events[i].get("text", "")).replace('\n', ' ').strip()
         broken_i = optimize_line_breaks(txt_i, cpl_limit).split('\n')
         if len(broken_i) > max_lines or any(len(l) > cpl_limit for l in broken_i) or len(txt_i) > (max_cap - 4):
@@ -1352,7 +1388,7 @@ def split_multi_speaker_subtitles(
             # 1. Inline hyphens: e.g. "- Hello! - Hi!" or "Hello! - Hi!"
             inline_hyphen_parts = [p.strip() for p in re.split(r'(?:^|\s+)[-—–]\s+', single) if p.strip()]
             if len(inline_hyphen_parts) >= 2:
-                lines = [f"- {p}" for p in inline_hyphen_parts]
+                lines = [f"-{p}" for p in inline_hyphen_parts]
             elif len(speakers) > 1:
                 # 2. Model returned multiple speakers but single line of text without hyphens
                 # Split at sentence boundaries (., !, ?, ।, ॥)
@@ -1510,6 +1546,9 @@ def format_and_split_subtitle_events(
     # Pass 1: Text splitting for dense events
     split_pass_events = []
     for ev in events:
+        if _is_dual_speaker(str(ev.get("text", ""))):
+            split_pass_events.append(dict(ev))
+            continue
         raw_txt = _strip_tags(auto_fix_ellipsis(str(ev.get("text", "")))).strip()
         raw_txt = re.sub(r'\s+', ' ', raw_txt)
         st = float(ev.get("start_time", ev.get("start", 0.0)))
@@ -1571,9 +1610,12 @@ def format_and_split_subtitle_events(
     # Pass 2: Line Breaking (CPL enforcement) and CPS duration extension
     formatted_events = []
     for i, ev in enumerate(split_pass_events):
-        txt = _strip_tags(auto_fix_ellipsis(str(ev.get("text", "")))).strip()
-        txt = re.sub(r'\s+', ' ', txt)
-        broken_txt = optimize_line_breaks(txt, cpl_limit)
+        if _is_dual_speaker(str(ev.get("text", ""))):
+            broken_txt = '\n'.join(re.sub(r'\s+', ' ', l).strip() for l in _strip_tags(auto_fix_ellipsis(str(ev["text"]))).split('\n'))
+        else:
+            txt = _strip_tags(auto_fix_ellipsis(str(ev.get("text", "")))).strip()
+            txt = re.sub(r'\s+', ' ', txt)
+            broken_txt = optimize_line_breaks(txt, cpl_limit)
         
         # Verify lines
         lines = broken_txt.split('\n')

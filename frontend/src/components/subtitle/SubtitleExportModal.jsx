@@ -8,11 +8,11 @@ import { exportSrtLocally, exportVttLocally, exportTtmlLocally, exportTxtLocally
 const EXPORT_FORMATS = [
   {
     key: 'ttml',
-    name: 'Netflix TTML / DFXP',
+    name: 'TTML / DFXP',
     ext: '.ttml',
     icon: FileCode,
-    description: 'Netflix primary delivery format with styling cues, regions, and XML namespace.',
-    badge: 'For Netflix delivery',
+    description: 'Primary delivery format with styling cues, regions, and XML namespace.',
+    badge: 'For broadcast delivery',
     badgeColor: 'bg-[var(--ss-raised)] text-slate-300 border-[var(--ss-line)]',
   },
   {
@@ -190,8 +190,8 @@ export default function SubtitleExportModal({ isOpen, onClose, events = [], file
           <div className="mx-6 mt-4 p-3 rounded-none bg-amber-950/30 border border-amber-800/60 flex items-start gap-3">
             <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
             <div>
-              <p className="text-xs font-bold text-amber-300">Netflix QC Compliance: {complianceScore}%</p>
-              <p className="text-[11px] text-amber-200/80 mt-0.5">Netflix requires ≥98% compliance. You can still export, or run Auto-Fix first.</p>
+              <p className="text-xs font-bold text-amber-300">Guideline QC Compliance: {complianceScore}%</p>
+              <p className="text-[11px] text-amber-200/80 mt-0.5">≥98% compliance is required for delivery. You can still export, or run Auto-Fix first.</p>
             </div>
           </div>
         )}
