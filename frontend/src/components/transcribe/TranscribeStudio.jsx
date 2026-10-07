@@ -133,7 +133,7 @@ export default function TranscribeStudio(p) {
       {p.isTranscribing && (
         <ProgressStrip
           stage={p.progressStage} detail={p.progressDetail} percent={p.progressPercent}
-          estimated={p.progressEstimated} meta={p.progressMeta} stepIndex={p.progressStepIndex} elapsedSeconds={p.elapsedSeconds}
+          estimated={p.progressEstimated} stepCount={p.progressStepCount} meta={p.progressMeta} stepIndex={p.progressStepIndex} elapsedSeconds={p.elapsedSeconds}
         />
       )}
 

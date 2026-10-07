@@ -1,14 +1,12 @@
 import React from 'react';
 
-const STEPS = 3; // upload, transcribe, finish
-
 const mmss = (sec) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
 
 /**
  * Slim one-row progress strip, same as Subtitle Studio's. Upload bytes are measured; the server wait is an
  * estimate and is marked with "≈". A null percent shows a moving bar with no number.
  */
-export default function ProgressStrip({ stage, detail, percent, estimated, meta, stepIndex, elapsedSeconds }) {
+export default function ProgressStrip({ stage, detail, percent, estimated, meta, stepIndex, stepCount, elapsedSeconds }) {
   const determinate = typeof percent === 'number' && Number.isFinite(percent);
   const pct = determinate ? Math.max(0, Math.min(100, percent)) : 0;
   const shown = determinate ? (pct >= 99.5 ? '100' : pct < 10 ? pct.toFixed(1) : String(Math.round(pct))) : null;
@@ -21,7 +19,7 @@ export default function ProgressStrip({ stage, detail, percent, estimated, meta,
           <span className="relative rounded-full" style={{ width: 8, height: 8, background: 'var(--ts-accent)' }} />
         </span>
         <span style={{ fontWeight: 500, whiteSpace: 'nowrap' }}>{stage}</span>
-        <span className="ts-mono" style={{ color: 'var(--ts-faint)', whiteSpace: 'nowrap' }}>{stepIndex}/{STEPS}</span>
+        {stepCount > 1 && <span className="ts-mono" style={{ color: 'var(--ts-faint)', whiteSpace: 'nowrap' }}>{stepIndex}/{stepCount}</span>}
         {detail && <span className="truncate min-w-0" style={{ color: 'var(--ts-muted)' }}>{detail}</span>}
         <span className="flex-1" />
         {meta && <span className="ts-mono hidden sm:inline" style={{ color: 'var(--ts-muted)', whiteSpace: 'nowrap' }}>{meta}</span>}

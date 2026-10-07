@@ -562,6 +562,9 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
   const [progressStepIndex, setProgressStepIndex] = useState(1);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [progressEstimated, setProgressEstimated] = useState(false);
+  const [progressStepCount, setProgressStepCount] = useState(3);
+  const [extractedAudioName, setExtractedAudioName] = useState('');
+  const [extractedForFile, setExtractedForFile] = useState('');
   const [progressMeta, setProgressMeta] = useState('');
   const progressTimerRef = useRef(null);
   const elapsedTimerRef = useRef(null);
@@ -679,6 +682,7 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
       setTotalErrors(0);
       setTotalWarnings(0);
       setProgressPercent(0);
+      setExtractedAudioName('');
 
       const isVideo = Boolean(
         file.type?.startsWith('video/') ||
@@ -702,6 +706,8 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
           if (res.ok) {
             const data = await res.json();
             setAudioUrl(`${API_BASE}${data.audio_url}`);
+            setExtractedAudioName(data.audio_filename || '');
+            setExtractedForFile(file.name);
             setExtractionNotice('Audio extracted successfully ✓');
             setTimeout(() => setExtractionNotice(''), 3000);
           } else {
@@ -750,6 +756,7 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
   const beginUploadProgress = () => {
     stopProgressTimers();
     setProgressStepIndex(1);
+    setProgressStepCount(3);
     setProgressStage('Uploading audio');
     setProgressDetail(selectedFile?.name || '');
     setProgressPercent(0);
@@ -800,6 +807,41 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
     }
   };
 
+  const applyTranscriptionResult = (data) => {
+    setTranscriptionResult(data);
+    const segs = data.segments || [];
+    setSegments(segs);
+    setOriginalSegments(JSON.parse(JSON.stringify(segs)));
+    setHistory([segs]);
+    setHistoryIndex(0);
+    setComplianceScore(data.compliance_score || 100.0);
+    setTotalErrors(data.total_errors || 0);
+    setTotalWarnings(data.total_warnings || 0);
+    if (segs.length > 0) setActiveSegmentId(segs[0].segment_id);
+  };
+
+  // Poll a /api/transcribe_async job: the strip shows the server's own stage, step and percent
+  const pollTranscribeJob = async (jobId) => {
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    for (;;) {
+      const res = await fetch(`${API_BASE}/api/transcribe_status/${jobId}`);
+      if (!res.ok) throw new Error(res.status === 404 ? 'The transcription job expired or the server restarted.' : `Status check failed (${res.status}).`);
+      const job = await res.json();
+      if (job.stage === 'error') throw new Error(job.error || 'Transcription failed.');
+      if (job.stage === 'done') return job.result;
+      const active = (job.stages || []).find((x) => x.status === 'active');
+      setProgressStage(active?.label || 'Preparing');
+      setProgressDetail(job.detail || '');
+      setProgressStepIndex(job.step || 1);
+      setProgressStepCount(job.step_count || 0);
+      setProgressPercent(typeof job.percent === 'number' ? job.percent : null);
+      // The speech engine answers once, so its share of the bar is the server's estimate
+      setProgressEstimated(job.stage === 'transcribing');
+      setProgressMeta(job.stage_percent != null && job.stage !== 'transcribing' ? `${Math.round(job.stage_percent)}% of this step` : '');
+      await sleep(700);
+    }
+  };
+
   const handleStartTranscribe = async () => {
     if (!selectedFile) return;
     setIsTranscribing(true);
@@ -808,45 +850,51 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
     let audioSeconds = 0;
     try { audioSeconds = await probeDuration(audioUrl || videoUrl); } catch {}
 
-    const formData = new FormData();
-    formData.append('file', selectedFile);
-    formData.append('language', targetLanguage);
-    formData.append('script', targetScript);
-    try {
-      const storedElevenLabsKey = (localStorage.getItem('elevenlabs_api_key') || '').trim();
-      if (storedElevenLabsKey) formData.append('elevenlabs_api_key', storedElevenLabsKey);
-    } catch {}
+    const build = (withFile) => {
+      const fd = new FormData();
+      if (withFile) fd.append('file', selectedFile);
+      fd.append('language', targetLanguage);
+      fd.append('script', targetScript);
+      try {
+        const storedElevenLabsKey = (localStorage.getItem('elevenlabs_api_key') || '').trim();
+        if (storedElevenLabsKey) fd.append('elevenlabs_api_key', storedElevenLabsKey);
+      } catch {}
+      return fd;
+    };
 
     try {
-      const res = await xhrPostForm(`${API_BASE}/api/transcribe`, formData, {
+      let data = null;
+      // Preferred: background job with real stages. Reuse the audio already extracted for the waveform when we have it.
+      const reuse = extractedAudioName && selectedFile.name === extractedForFile;
+      const fd = build(!reuse);
+      if (reuse) fd.append('audio_filename', extractedAudioName);
+      else setProgressStepCount(0);
+      const start = await xhrPostForm(`${API_BASE}/api/transcribe_async`, fd, {
         onProgress: onUploadProgress,
-        onSent: () => { serverStartedAt = beginServerProgress(audioSeconds); },
+        onSent: () => { setProgressStepCount(0); setProgressStage('Starting'); setProgressDetail(''); setProgressMeta(''); setProgressPercent(null); },
       });
-
-      if (res.ok) {
-        const data = res.data || {};
-        setTranscriptionResult(data);
-        const segs = data.segments || [];
-        setSegments(segs);
-        setOriginalSegments(JSON.parse(JSON.stringify(segs)));
-        setHistory([segs]);
-        setHistoryIndex(0);
-        setComplianceScore(data.compliance_score || 100.0);
-        setTotalErrors(data.total_errors || 0);
-        setTotalWarnings(data.total_warnings || 0);
-        if (segs.length > 0) {
-          setActiveSegmentId(segs[0].segment_id);
-        }
+      if (start.ok && start.data?.job_id) {
+        setProgressStepCount(0);
+        data = await pollTranscribeJob(start.data.job_id);
+        finishProgress(true);
+      } else if (start.status === 404 || start.status === 405) {
+        // Older backend without the job API: the blocking endpoint, with an estimated wait
+        beginUploadProgress();
+        const res = await xhrPostForm(`${API_BASE}/api/transcribe`, build(true), {
+          onProgress: onUploadProgress,
+          onSent: () => { serverStartedAt = beginServerProgress(audioSeconds); },
+        });
+        if (!res.ok) throw new Error(res.data?.detail || res.text || 'Failed to process audio');
+        data = res.data || {};
         finishProgress(true, serverStartedAt, audioSeconds);
       } else {
-        finishProgress(false);
-        let errorMsg = res.data?.detail || res.text || 'Failed to process audio';
-        alert(`Transcription error: ${errorMsg}`);
+        throw new Error(start.data?.detail || start.text || 'Failed to start transcription');
       }
+      applyTranscriptionResult(data);
     } catch (err) {
       finishProgress(false);
       console.error("Transcribe failed:", err);
-      alert(`Transcription request failed: ${err.message || err}`);
+      alert(`Transcription error: ${err.message || err}`);
     } finally {
       setIsTranscribing(false);
     }
@@ -1370,6 +1418,7 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
         extractionNotice={extractionNotice}
         progressPercent={progressPercent}
         progressEstimated={progressEstimated}
+        progressStepCount={progressStepCount}
         detectedLanguage={transcriptionResult?.language || ''}
         progressMeta={progressMeta}
         progressStage={progressStage}
