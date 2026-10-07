@@ -410,7 +410,9 @@ async def health_check():
         "default_model": GEMINI_MODEL,
         "default_language": DEFAULT_LANGUAGE,
         "default_script": DEFAULT_SCRIPT,
-        "version": "1.0.0"
+        "version": "1.0.0",
+        # Lets you confirm from outside that the live-progress job API is deployed
+        "features": {"transcribe_async": True, "audio_extract_async": True}
     }
 
 

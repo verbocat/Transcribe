@@ -62,6 +62,10 @@ export default function EmptyState({
       <button type="button" onClick={onOpenProjects} style={{ color: 'var(--ts-muted)', background: 'none', border: 0, marginTop: 20 }}>
         Open saved project
       </button>
+
+      <p className="text-center ts-mono" style={{ color: 'var(--ts-faint)', fontSize: 11, marginTop: 12 }}>
+        build {typeof window !== 'undefined' ? window.__TRANSCRIBE_BUILD__ : ''}
+      </p>
     </div>
   );
 }
