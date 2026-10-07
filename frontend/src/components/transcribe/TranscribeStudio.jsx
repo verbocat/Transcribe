@@ -5,7 +5,7 @@ import SpeakerRail from './SpeakerRail';
 import TranscriptList from './TranscriptList';
 import ProgressStrip from './ProgressStrip';
 import EmptyState from './EmptyState';
-import AudioWaveform from '../AudioWaveform';
+import TranscribeTimeline from './TranscribeTimeline';
 import VideoPane, { createMediaBus } from './VideoPane';
 import CastModal from './CastModal';
 import SpeakerPanel from './SpeakerPanel';
@@ -245,17 +245,19 @@ export default function TranscribeStudio(p) {
       {!hasSegments && p.isTranscribing && <div className="flex-1" />}
 
       {p.audioUrl && (
-        <footer className="shrink-0" style={{ background: 'var(--ts-panel)', borderTop: '1px solid var(--ts-line)', maxHeight: '42vh', overflowY: 'auto' }}>
-          <AudioWaveform
+        <footer className="shrink-0" style={{ background: 'var(--ts-panel)', borderTop: '1px solid var(--ts-line)', height: '38vh', minHeight: 260 }}>
+          <TranscribeTimeline
             audioUrl={p.audioUrl}
+            videoUrl={p.videoUrl}
             segments={p.segments}
-            currentSegmentId={p.activeSegmentId}
+            activeSegmentId={p.activeSegmentId}
             setActiveSegmentId={p.setActiveSegmentId}
-            onSegmentClick={(seg) => p.setActiveSegmentId(seg.segment_id)}
             onSegmentTimeChange={p.onSegmentTimeChange}
-            onSplitSegment={p.onSplit}
-            onMergeSegment={p.onMerge}
-            onAddSegmentAtTime={p.onAdd}
+            onSplit={p.onSplit}
+            onMerge={p.onMerge}
+            onAdd={p.onAdd}
+            onUndo={p.canUndo ? p.onUndo : null}
+            onRedo={p.canRedo ? p.onRedo : null}
             playTargetTime={p.playTargetTime}
             onTimeUpdate={(t) => mediaBus.emit({ time: t })}
             onPlayStateChange={(playing) => mediaBus.emit({ playing })}
