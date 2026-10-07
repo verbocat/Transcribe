@@ -482,9 +482,10 @@ export default function CentroidModal({
       duration: Math.round((end - start) * 1000) / 1000,
       text,
       lines: text.split('\n'),
-      qc_errors: [],
+      // A subtitle Centroid did not translate (or returned out of step) is flagged on that subtitle only
+      qc_errors: c.align_error ? [{ rule_id: 'TRANSLATION-ALIGN', field: 'text', severity: 'error', message: c.align_error, suggested_fix: null }] : [],
       errors: [],
-      is_valid: true,
+      is_valid: !c.align_error,
       autoFocusText: false,
     };
   });
