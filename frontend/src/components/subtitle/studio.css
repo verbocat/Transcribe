@@ -123,9 +123,10 @@
   --rail-a: var(--ss-accent);
   --rail-depth: color-mix(in srgb, var(--ss-muted) 28%, var(--ss-bg));
   position: relative;
-  color: var(--ss-muted);
-  border-radius: 8px;
-  background: transparent;
+  color: color-mix(in srgb, var(--ss-text) 78%, var(--ss-muted));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--ss-raised) 70%, transparent);
+  box-shadow: inset 0 0 0 1px var(--ss-line);
   perspective: 120px;
   transition: background 150ms ease, color 150ms ease;
 }
@@ -151,7 +152,8 @@
 /* open tool: icon takes the accent, extrusion turns into a soft same-hue edge */
 .rail-btn[data-on="true"] {
   color: var(--rail-a);
-  background: color-mix(in srgb, var(--rail-a) 12%, transparent);
+  background: color-mix(in srgb, var(--rail-a) 14%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--rail-a) 55%, transparent);
 }
 .rail-btn[data-on="true"] svg {
   --rail-depth: color-mix(in srgb, var(--rail-a) 45%, var(--ss-bg));
