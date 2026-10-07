@@ -2172,7 +2172,10 @@ async def centroid_translate(payload: dict):
             {"start": e.get("start_time", e.get("start")), "end": e.get("end_time", e.get("end")), "text": e.get("text", "")}
             for e in cues
         ]
-    return await centroid_client.post("/subtitles/translate", body)
+    data = await centroid_client.post("/subtitles/translate", body)
+    if body.get("cues"):
+        centroid_client.drop_misaligned_translations(data, body["cues"])
+    return data
 
 
 @app.post("/api/centroid/analyze")

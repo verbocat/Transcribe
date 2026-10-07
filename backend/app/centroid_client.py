@@ -1,5 +1,5 @@
 """Thin async client for the Centroid public API (subtitle translation + linguistic QC)."""
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 import httpx
 from fastapi import HTTPException
@@ -41,6 +41,24 @@ async def post(path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
             detail = res.text
         raise HTTPException(status_code=res.status_code if res.status_code < 500 else 502, detail=str(detail)[:500])
     return res.json()
+
+
+def drop_misaligned_translations(data: Dict[str, Any], source_cues: List[Dict[str, Any]]) -> None:
+    """A language track is only usable if it has one cue per source cue with the same timing, because the editor
+    pairs them by position. Move any language that does not line up into 'errors' instead of showing shifted text."""
+    results = data.get("results") or {}
+    errors = data.setdefault("errors", {})
+    for lang in list(results):
+        cues = (results[lang] or {}).get("cues") or []
+        aligned = len(cues) == len(source_cues) and all(
+            abs(float(c.get("start") or 0) - float(s.get("start") or 0)) < 0.002
+            and abs(float(c.get("end") or 0) - float(s.get("end") or 0)) < 0.002
+            for c, s in zip(cues, source_cues)
+        )
+        if not aligned:
+            results.pop(lang)
+            errors[lang] = (f"Centroid returned {len(cues)} subtitles for {len(source_cues)} source subtitles, or changed "
+                            "their timing, so this translation was not loaded. Please translate again.")
 
 
 async def status() -> Dict[str, Any]:
