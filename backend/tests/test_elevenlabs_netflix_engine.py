@@ -186,7 +186,9 @@ def test_gap_chaining():
     # Netflix guideline: 3 to 11 frame gaps MUST be chained to 2 frames
     words = [
         {"text": "First sentence here.", "start": 1.0, "end": 2.5},
-        {"text": "Second sentence here.", "start": 2.7, "end": 4.0},  # gap is 0.2s (4.8 frames)
+        # gap is 0.2s (4.8 frames). The pair runs past 3.8s so the engine doesn't group
+        # the two short sentences into one card, which it does for quick back-to-back lines.
+        {"text": "Second sentence here.", "start": 2.7, "end": 5.0},
     ]
     events = build_netflix_subtitles_from_words(
         words=words,
