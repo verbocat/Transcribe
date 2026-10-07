@@ -396,6 +396,292 @@ def find_best_split_point(tokens: List[Dict[str, Any]], cpl_limit: int = 42) -> 
     return max(1, n // 2)
 
 
+# ──────────────────────────────────────────────────────────
+# Card merging, dual speakers, ellipsis and punctuation
+# (Netflix General Requirements + Hindi Timed Text Style Guide)
+# ──────────────────────────────────────────────────────────
+
+# A line that ends with one of these is a finished sentence (or an interruption already marked with "…").
+_TERMINAL_PUNCT = ('.', '!', '?', '।', '॥', '…')
+# Trailing marks replaced by "…" when an unfinished sentence gets an ellipsis.
+_TRAILING_SOFT_PUNCT = ',;:—–-'
+# Two cards of the same speaker are joined only across a short pause, so the second part never shows up long before it is said.
+MERGE_MAX_GAP_SEC = 1.0
+# Two speakers share a card only in a quick back-and-forth.
+DUAL_MAX_GAP_SEC = 1.0
+# Netflix: an ellipsis marks a pause of 2 seconds or more...
+PAUSE_ELLIPSIS_SEC = 2.0
+# Past this the next line is treated as a new start, not the same sentence resuming.
+PAUSE_ELLIPSIS_MAX_SEC = 10.0
+# ...or an abrupt interruption: the next speaker starts this soon after an unfinished sentence.
+INTERRUPTION_MAX_GAP_SEC = 0.5
+# Languages whose own guide puts a space before ? ! : ; (French), so the "no space before punctuation" rule is skipped.
+_SPACE_BEFORE_PUNCT_LANGS = {"fr", "fra", "fre", "french"}
+
+
+def is_dual_speaker_text(text: str) -> bool:
+    """True for a Netflix dual-speaker card: exactly two lines, each opened by a hyphen."""
+    lines = [ln.strip() for ln in re.sub(r'<[^>]+>|\{\\an[1-9]\}', '', text or '').split('\n')]
+    return len(lines) == 2 and all(ln.startswith(('-', '–', '—')) for ln in lines)
+
+
+def _ends_sentence(text: str) -> bool:
+    return text.rstrip().rstrip('"”’\')').endswith(_TERMINAL_PUNCT)
+
+
+def _with_trailing_ellipsis(text: str) -> str:
+    text = text.rstrip()
+    if text.endswith('…'):
+        return text
+    return text.rstrip(_TRAILING_SOFT_PUNCT).rstrip() + '…'
+
+
+def _with_leading_ellipsis(text: str) -> str:
+    text = text.lstrip()
+    return text if text.startswith('…') else '…' + text
+
+
+def tidy_punctuation_spacing(text: str, language: Optional[str] = None) -> str:
+    """Unicode ellipsis, no space before punctuation (Hindi guide I.14), single spaces."""
+    text = re.sub(r'\.{3,}', '…', text or '')
+    if str(language or '').strip().lower() not in _SPACE_BEFORE_PUNCT_LANGS:
+        text = re.sub(r'(?<=\S)[ \t]+([,.!?;:।॥…])', r'\1', text)
+    text = re.sub(r'[ \t]{2,}', ' ', text)
+    return text.strip()
+
+
+def tidy_quotation_marks(texts: List[str]) -> List[str]:
+    """
+    Quotation marks across the whole transcript (Hindi guide I.15): no space inside the marks,
+    and a closing quote follows the full stop. A quotation may span several cards, so the open/close
+    state carries over from card to card; a straight quote is read from the spaces around it first,
+    and from that state only when the spaces don't tell.
+    """
+    out: List[str] = []
+    is_open = False
+    for text in texts:
+        res: List[str] = []
+        i, n = 0, len(text)
+        while i < n:
+            ch = text[i]
+            if ch in '"“”':
+                before = text[i - 1] if i > 0 else ' '
+                after = text[i + 1] if i + 1 < n else ' '
+                space_before = before.isspace()
+                space_after = after.isspace() or after in ',.!?;:।॥…'
+                if ch == '“':
+                    opening = True
+                elif ch == '”':
+                    opening = False
+                elif space_before and not space_after:
+                    opening = True
+                elif space_after and not space_before:
+                    opening = False
+                else:
+                    opening = not is_open
+                if opening:
+                    res.append(ch)
+                    i += 1
+                    while i < n and text[i] in ' \t':
+                        i += 1
+                    is_open = True
+                    continue
+                while res and res[-1] in ' \t':
+                    res.pop()
+                if i + 1 < n and text[i + 1] in '.।॥':
+                    res.append(text[i + 1])
+                    res.append(ch)
+                    i += 2
+                else:
+                    res.append(ch)
+                    i += 1
+                is_open = False
+                continue
+            res.append(ch)
+            i += 1
+        out.append(''.join(res))
+    return out
+
+
+def _speaker_label_and_id(raw_spk: str) -> Tuple[str, str]:
+    """'speaker_0' -> ('Speaker 1', 'speaker_0');  'Speaker 2' -> ('Speaker 2', 'speaker_1')."""
+    raw_spk = str(raw_spk or "Speaker 1")
+    if raw_spk.startswith("Speaker"):
+        num_part = raw_spk.replace("Speaker ", "").strip()
+        return raw_spk, f"speaker_{int(num_part) - 1 if num_part.isdigit() else 0}"
+    num_part = raw_spk.replace("speaker_", "").strip()
+    return f"Speaker {int(num_part) + 1 if num_part.isdigit() else num_part}", raw_spk
+
+
+def _fits_card(text: str, profile: 'NetflixLanguageProfile', cpl_limit: int) -> bool:
+    """
+    Can this text sit in one card: one line, or two lines that each stay within the CPL limit?
+    When the text holds more than one sentence, the line break has to fall between sentences,
+    so a merged card never reads "end of one sentence + start of the next / rest of it".
+    """
+    if len(text) <= cpl_limit:
+        return True
+    lines = optimize_language_line_breaks(text, profile, custom_cpl=cpl_limit).split('\n')
+    if len(lines) != 2 or any(len(ln) > cpl_limit for ln in lines):
+        return False
+    if _SENTENCE_END_INSIDE.search(text) and not _ends_sentence(lines[0]):
+        return False
+    return True
+
+
+_SENTENCE_END_INSIDE = re.compile(r'[.!?।॥…]["”’)]?\s+\S')
+
+
+def _shot_change_between(t0: float, t1: float, shot_changes: Optional[List[float]]) -> bool:
+    return bool(shot_changes) and any(t0 <= sc <= t1 for sc in shot_changes)
+
+
+def _card_speaker_tag(raw_spk: str, include_speaker_tags: bool) -> str:
+    return f"[{_speaker_label_and_id(raw_spk)[0]}] " if include_speaker_tags else ""
+
+
+def merge_light_and_dual_speaker_cards(
+    raw_events: List[Dict[str, Any]],
+    profile: 'NetflixLanguageProfile',
+    cpl_limit: int,
+    cps_limit: float,
+    max_dur: float,
+    language: Optional[str] = None,
+    shot_changes: Optional[List[float]] = None,
+    include_speaker_tags: bool = False,
+) -> List[Dict[str, Any]]:
+    """
+    Joins cards the segmenter left too light, without moving any split point inside a card:
+
+    1. Same speaker: a card that fits on one line joins its neighbour when the pause between them is short,
+       the result still fits two lines of at most `cpl_limit`, stays within the reading speed and 7 s,
+       and does not end in the middle of a new sentence.
+    2. Two speakers (Netflix dual-speaker card): two short complete sentences from different speakers in a
+       quick exchange become "-line one" / "-line two", one speaker per line, each line within `cpl_limit`.
+       The first line may be an interrupted sentence (it then ends with "…").
+
+    Each raw event gets a "parts" list: [{"speaker", "tokens"}] (one part, or two for a dual-speaker card).
+    """
+    def _text(tokens: List[Dict[str, Any]]) -> str:
+        return tidy_punctuation_spacing(" ".join(t["text"] for t in tokens), language)
+
+    cards = []
+    for ev in raw_events:
+        toks = ev["tokens"]
+        cards.append({
+            "parts": [{"speaker": toks[0]["speaker"], "tokens": list(toks)}],
+            "start": ev["start"],
+            "end": ev["end"],
+            "has_audio_event": any(t.get("type") == "audio_event" for t in toks),
+        })
+
+    merged: List[Dict[str, Any]] = []
+    i = 0
+    same_count = dual_count = 0
+    while i < len(cards):
+        cur = cards[i]
+        while i + 1 < len(cards):
+            nxt = cards[i + 1]
+            if cur["has_audio_event"] or nxt["has_audio_event"] or len(cur["parts"]) > 1:
+                break
+            gap = nxt["start"] - cur["end"]
+            span = nxt["end"] - cur["start"]
+            if gap < 0 or span > max_dur or _shot_change_between(cur["end"], nxt["start"], shot_changes):
+                break
+            a_spk = cur["parts"][0]["speaker"]
+            b_spk = nxt["parts"][0]["speaker"]
+            a_txt = _text(cur["parts"][0]["tokens"])
+            b_txt = _text(nxt["parts"][0]["tokens"])
+
+            if a_spk == b_spk:
+                joined = _text(cur["parts"][0]["tokens"] + nxt["parts"][0]["tokens"])
+                light = len(a_txt) <= cpl_limit or len(b_txt) <= cpl_limit
+                # Room for a leading and a trailing "…" the ellipsis pass may add later.
+                if (
+                    gap <= MERGE_MAX_GAP_SEC
+                    and light
+                    and _fits_card("…" + joined + "…", profile, cpl_limit)
+                    and len(joined) / max(span, 0.1) <= cps_limit
+                    and (not _ends_sentence(a_txt) or _ends_sentence(b_txt))
+                ):
+                    cur = {
+                        "parts": [{"speaker": a_spk, "tokens": cur["parts"][0]["tokens"] + nxt["parts"][0]["tokens"]}],
+                        "start": cur["start"],
+                        "end": nxt["end"],
+                        "has_audio_event": False,
+                    }
+                    same_count += 1
+                    i += 1
+                    continue
+                break
+
+            # Different speakers: Netflix dual-speaker card.
+            prev = merged[-1] if merged else None
+            prev_last = prev["parts"][-1] if prev else None
+            a_continues_prev = (
+                prev_last is not None
+                and prev_last["speaker"] == a_spk
+                and not _ends_sentence(_text(prev_last["tokens"]))
+            )
+            after = cards[i + 2] if i + 2 < len(cards) else None
+            a_interrupted = not _ends_sentence(a_txt)
+            a_resumes_after = (
+                a_interrupted and after is not None
+                and after["parts"][0]["speaker"] == a_spk
+                and after["start"] - nxt["end"] <= MERGE_MAX_GAP_SEC
+            )
+            line_a = "-" + _card_speaker_tag(a_spk, include_speaker_tags) + (_with_trailing_ellipsis(a_txt) if a_interrupted else a_txt)
+            line_b = "-" + _card_speaker_tag(b_spk, include_speaker_tags) + b_txt
+            if (
+                gap <= (INTERRUPTION_MAX_GAP_SEC if a_interrupted else DUAL_MAX_GAP_SEC)
+                and not a_continues_prev
+                and not a_resumes_after
+                and _ends_sentence(b_txt)
+                and len(line_a) <= cpl_limit
+                and len(line_b) <= cpl_limit
+                and (len(line_a) + len(line_b)) / max(span, 0.1) <= cps_limit
+            ):
+                cur = {
+                    "parts": [cur["parts"][0], nxt["parts"][0]],
+                    "start": cur["start"],
+                    "end": nxt["end"],
+                    "has_audio_event": False,
+                }
+                dual_count += 1
+                i += 1
+            break
+        merged.append(cur)
+        i += 1
+
+    log_terminal(
+        "NETFLIX-ENGINE",
+        f"Card merging: {len(raw_events)} -> {len(merged)} cards ({same_count} same-speaker joins, {dual_count} dual-speaker cards)"
+    )
+    return merged
+
+
+def apply_ellipsis_rules(cards: List[Dict[str, Any]]) -> None:
+    """
+    Netflix Hindi guide I.4 (Continuity), on the text of each card part ("text", set by the caller):
+    - a sentence split between two continuous subtitles gets no ellipsis;
+    - a pause of 2 s or more (up to 10 s) inside a sentence that continues: "…" ends the first subtitle and opens the next;
+    - an abrupt interruption (another speaker cuts in right after an unfinished sentence): "…" ends the cut-off line.
+    """
+    flat = [(c, p) for c in cards for p in c["parts"]]
+    for (c1, p1), (c2, p2) in zip(flat, flat[1:]):
+        if not p1["text"] or not p2["text"]:
+            continue
+        if _ends_sentence(p1["text"]):
+            continue
+        gap = p2["tokens"][0]["start"] - p1["tokens"][-1]["end"]
+        if p1["speaker"] == p2["speaker"]:
+            if c1 is not c2 and PAUSE_ELLIPSIS_SEC <= gap <= PAUSE_ELLIPSIS_MAX_SEC:
+                p1["text"] = _with_trailing_ellipsis(p1["text"])
+                p2["text"] = _with_leading_ellipsis(p2["text"])
+        elif gap <= INTERRUPTION_MAX_GAP_SEC:
+            p1["text"] = _with_trailing_ellipsis(p1["text"])
+
+
 def get_language_profile(language: Optional[str] = None) -> NetflixLanguageProfile:
     """Retrieve the exact Netflix Timed Text profile for a given language."""
     lang_clean = (language or "en").strip().lower()
@@ -570,6 +856,10 @@ def optimize_language_line_breaks(
     5. Bottom-heavy or symmetric pyramid layout.
     6. Strictly forbids orphan words on line 2 (line 2 having <= 4 characters).
     """
+    # A dual-speaker card keeps one speaker per line; re-breaking it would mix the two speakers.
+    if is_dual_speaker_text(text):
+        return text
+
     clean = re.sub(r'<[^>]+>|\{\\an[1-9]\}', '', text or '').strip()
     cpl_limit = custom_cpl or profile.cpl_limit
 
@@ -587,6 +877,7 @@ def optimize_language_line_breaks(
 
     total_len = len(clean)
     target_split = total_len * 0.50
+    has_inner_sentence_end = any(w.endswith(profile.sentence_endings + ('…',)) for w in words[:-1])
 
     best_score = float('inf')
     best_split = len(words) // 2
@@ -663,6 +954,10 @@ def optimize_language_line_breaks(
         # Strict orphan penalty on line 2 (<= 5 chars or single word)
         if lower_len <= 5 or len(words[split_idx:]) == 1:
             score += 500.0
+
+        # A card holding two sentences breaks between them, never inside one
+        if has_inner_sentence_end and not last_upper_raw.endswith(profile.sentence_endings + ('…',)):
+            score += 200.0
 
         if score < best_score:
             best_score = score
@@ -918,6 +1213,22 @@ def build_netflix_subtitles_from_words(
 
     log_terminal("NETFLIX-ENGINE", f"Segmented {len(clean_tokens)} word tokens into {len(raw_events)} raw events. Split Breakdown -> {dict(split_counts)}")
 
+    # Step 2b: Join light cards and quick two-speaker exchanges (Netflix dual-speaker format)
+    raw_events = merge_light_and_dual_speaker_cards(
+        raw_events, profile, cpl_limit, cps_limit, max_dur,
+        language=language, shot_changes=shot_changes if snap_to_shot_changes else None,
+        include_speaker_tags=include_speaker_tags,
+    )
+
+    # Step 2c: Text of every card part, then ellipsis (pauses / interruptions) and quotation marks
+    for card in raw_events:
+        for part in card["parts"]:
+            part["text"] = tidy_punctuation_spacing(" ".join(t["text"] for t in part["tokens"]), language)
+    apply_ellipsis_rules(raw_events)
+    all_parts = [p for card in raw_events for p in card["parts"]]
+    for part, quoted in zip(all_parts, tidy_quotation_marks([p["text"] for p in all_parts])):
+        part["text"] = quoted
+
     # Step 3: Conform each event into Netflix SubtitleEvent
     events: List[SubtitleEvent] = []
     total_raw = len(raw_events)
@@ -926,54 +1237,26 @@ def build_netflix_subtitles_from_words(
     shot_snapped = 0
 
     for idx, raw in enumerate(raw_events, 1):
-        tokens = raw["tokens"]
+        parts = raw["parts"]
         ev_start = raw["start"]
         ev_end = raw["end"]
 
-        # Determine speakers in this event
-        distinct_speakers = []
-        for t in tokens:
-            spk_val = t.get("speaker") or t.get("speaker_id") or "Speaker 1"
-            if spk_val not in distinct_speakers:
-                distinct_speakers.append(spk_val)
-
-        # Check if dual speaker format is needed (both utterances must be concise and complete)
-        if len(distinct_speakers) >= 2:
-            spk1 = distinct_speakers[0]
-            spk2 = distinct_speakers[1]
-            spk1_words = [t["text"] for t in tokens if (t.get("speaker") == spk1 or t.get("speaker_id") == spk1)]
-            spk2_words = [t["text"] for t in tokens if (t.get("speaker") == spk2 or t.get("speaker_id") == spk2)]
-            
-            # Format speaker labels
-            spk1_label = spk1 if spk1.startswith("Speaker") else f"Speaker {spk1.replace('speaker_', '')}"
-            spk2_label = spk2 if spk2.startswith("Speaker") else f"Speaker {spk2.replace('speaker_', '')}"
-            
-            spk1_tag = f"[{spk1_label}] " if include_speaker_tags else ""
-            spk2_tag = f"[{spk2_label}] " if include_speaker_tags else ""
-            
-            line1 = f"- {spk1_tag}{' '.join(spk1_words)}".strip()
-            line2 = f"- {spk2_tag}{' '.join(spk2_words)}".strip()
-            formatted_text = f"{line1}\n{line2}"
-            lines = [line1, line2]
+        if len(parts) == 2:
+            # Netflix dual-speaker card: hyphen without a space, one speaker per line
+            spk1_label, spk1_id = _speaker_label_and_id(parts[0]["speaker"])
+            spk2_label, _ = _speaker_label_and_id(parts[1]["speaker"])
+            lines = [
+                "-" + _card_speaker_tag(parts[0]["speaker"], include_speaker_tags) + parts[0]["text"],
+                "-" + _card_speaker_tag(parts[1]["speaker"], include_speaker_tags) + parts[1]["text"],
+            ]
+            formatted_text = "\n".join(lines)
             speaker_names = [spk1_label, spk2_label]
             primary_speaker = spk1_label
-            primary_speaker_id = spk1
+            primary_speaker_id = spk1_id
         else:
-            raw_spk = distinct_speakers[0] if distinct_speakers else "Speaker 1"
-            if raw_spk.startswith("Speaker"):
-                speaker_label = raw_spk
-                num_part = raw_spk.replace("Speaker ", "").strip()
-                speaker_id = f"speaker_{int(num_part) - 1 if num_part.isdigit() else 0}"
-            else:
-                num_part = raw_spk.replace("speaker_", "").strip()
-                speaker_label = f"Speaker {int(num_part) + 1 if num_part.isdigit() else num_part}"
-                speaker_id = raw_spk
-
-            combined_text = " ".join([t["text"] for t in tokens]).strip()
-            # Clean typography: standardize ellipsis to Unicode U+2026
-            combined_text = re.sub(r'\.{3,}', '…', combined_text)
+            speaker_label, speaker_id = _speaker_label_and_id(parts[0]["speaker"])
             # Optimize line breaks according to Netflix language guidelines
-            formatted_text = optimize_language_line_breaks(combined_text, profile, custom_cpl=cpl_limit)
+            formatted_text = optimize_language_line_breaks(parts[0]["text"], profile, custom_cpl=cpl_limit)
             if include_speaker_tags:
                 formatted_text = f"[{speaker_label}] {formatted_text}"
             lines = formatted_text.split('\n')
