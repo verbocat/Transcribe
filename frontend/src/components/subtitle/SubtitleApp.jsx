@@ -12,6 +12,7 @@ import {
   Eraser, SkipBack, SkipForward, Maximize, Users, BookText, StepBack, StepForward, AlignJustify
 } from 'lucide-react';
 import { API_BASE } from '../../config';
+import { publishPlayhead, getPlayhead, subscribePlayhead } from '../../utils/playheadBus';
 import Sidebar from './Sidebar';
 import SubtitleTablePanel from './SubtitleTablePanel';
 import './studio.css';
@@ -52,6 +53,15 @@ function formatTime(seconds) {
   const s = Math.floor(seconds % 60);
   const ms = Math.floor((seconds % 1) * 1000);
   return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}.${ms.toString().padStart(3, '0')}`;
+}
+
+// Footer timecode: follows the playhead on its own, so playback never re-renders the whole studio
+function PlayheadTimecode({ format, frameRate }) {
+  const ref = useRef(null);
+  useEffect(() => subscribePlayhead((t) => {
+    if (ref.current) ref.current.textContent = formatTimecode(t, format, frameRate);
+  }), [format, frameRate]);
+  return <span ref={ref} />;
 }
 
 // Sliced multi-part chunked upload for files > 90MB (bypasses Cloudflare 100MB proxy limits)
@@ -420,7 +430,6 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
   const [userFeedbackText, setUserFeedbackText] = useState('');
 
   // Video playback sync state
-  const [currentTime, setCurrentTime] = useState(0);
   const [playTarget, setPlayTarget] = useState(null);
 
   // Netflix Rules & QC Telemetry
@@ -1330,7 +1339,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
 
   // Re-cut / Split active subtitle at current playhead cursor
   const handleSplitAtCursor = (splitTime) => {
-    const timeToSplit = splitTime !== undefined ? splitTime : currentTime;
+    const timeToSplit = splitTime !== undefined ? splitTime : getPlayhead();
     setEvents(prev => {
       let targetIdx = prev.findIndex(e => {
         const st = e.start_time ?? e.start ?? 0;
@@ -1375,7 +1384,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
 
   // ── Subtitle Edit Feature: Move active and all following subtitles to playhead (preserving spacing) ──
   const handleShiftAllFollowing = (targetId, targetTime) => {
-    const pivotTime = targetTime !== undefined ? targetTime : currentTime;
+    const pivotTime = targetTime !== undefined ? targetTime : getPlayhead();
     setEvents(prev => {
       if (!prev || prev.length === 0) return prev;
 
@@ -1432,7 +1441,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
       // Subtitle Edit Alignment: Shift active & all following subtitles to playhead (Ctrl+Space or Ctrl+Enter)
       if ((e.ctrlKey || e.metaKey) && (e.key === ' ' || e.key === 'Enter')) {
         e.preventDefault();
-        handleShiftAllFollowing(activeEventId, currentTime);
+        handleShiftAllFollowing(activeEventId, getPlayhead());
         return;
       }
 
@@ -1478,7 +1487,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [history, historyIndex, events, activeEventId, currentTime]);
+  }, [history, historyIndex, events, activeEventId]);
 
   // Jump to Next QC Issue
   const jumpToNextIssue = () => {
@@ -1720,10 +1729,6 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
     });
   }, [debouncedPushHistory, debouncedLint]);
 
-  const handlePlayerTimeUpdate = useCallback((t) => {
-    setCurrentTime(t);
-  }, []);
-
   // Seek and Play Subtitle Event
   const handlePlayEvent = useCallback((id) => {
     setEvents(currentEvents => {
@@ -1731,7 +1736,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
       if (target) {
         const st = target.start_time !== undefined ? target.start_time : (target.start !== undefined ? target.start : 0);
         const en = target.end_time !== undefined ? target.end_time : (target.end !== undefined ? target.end : 0);
-        setCurrentTime(st);
+        publishPlayhead(st);
         setPlayTarget({ time: st, endTime: en, pause: false });
       }
       return currentEvents;
@@ -2581,7 +2586,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
     handlePlayEvent(ev.id);
   };
   const goToTime = (t) => {
-    setCurrentTime(t);
+    publishPlayhead(t);
     setPlayTarget({ time: t, pause: true });
   };
   const jumpToPrevIssue = () => {
@@ -2655,7 +2660,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
         { label: 'Find and replace…', icon: Replace, shortcut: 'Ctrl+H', disabled: !hasEvents, onSelect: () => setDialog('find') },
         { label: 'Go to subtitle or time…', icon: ListOrdered, shortcut: 'Ctrl+G', disabled: !hasEvents, onSelect: () => setDialog('goto') },
         { type: 'separator' },
-        { label: 'Move selected and following to playhead', icon: Clock, shortcut: 'Ctrl+Space', disabled: !hasActive, onSelect: () => handleShiftAllFollowing(activeEventId, currentTime) },
+        { label: 'Move selected and following to playhead', icon: Clock, shortcut: 'Ctrl+Space', disabled: !hasActive, onSelect: () => handleShiftAllFollowing(activeEventId, getPlayhead()) },
         { label: 'Clear text formatting', icon: Eraser, disabled: !hasEvents, onSelect: handleClearFormat },
       ],
     },
@@ -2663,8 +2668,8 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
       id: 'subtitle',
       label: 'Subtitle',
       items: [
-        { label: 'Add at playhead', icon: Plus, onSelect: () => handleAddSubtitle(currentTime) },
-        { label: 'Split at playhead', icon: Split, disabled: !hasEvents, onSelect: () => handleSplitAtCursor(currentTime) },
+        { label: 'Add at playhead', icon: Plus, onSelect: () => handleAddSubtitle(getPlayhead()) },
+        { label: 'Split at playhead', icon: Split, disabled: !hasEvents, onSelect: () => handleSplitAtCursor(getPlayhead()) },
         { label: 'Merge selected with next', icon: Merge, disabled: !hasActive || activeIdx >= events.length - 1, onSelect: () => handleMergeEvents(activeEventId) },
         { label: 'Extend selected to next subtitle', icon: ArrowRightLeft, disabled: !hasActive || activeIdx >= events.length - 1, onSelect: () => applyEdit((evs) => tools.extendToNext(evs, activeEventId, frameRate), 'Extended to the next subtitle.', 'Already touching the next subtitle.') },
         { label: 'Delete selected', icon: Trash2, danger: true, shortcut: 'Del', disabled: !hasActive, onSelect: () => handleDeleteEvent(activeEventId) },
@@ -3000,7 +3005,6 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
                 activeEventId={activeEventId}
                 setActiveEventId={setActiveEventId}
                 playTarget={playTarget}
-                onTimeUpdate={handlePlayerTimeUpdate}
                 frameRate={frameRate}
                 theme={theme}
                 isAudio={isAudioFile}
@@ -3018,7 +3022,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
                 activeEventId={activeEventId}
                 setActiveEventId={setActiveEventId}
                 onSeek={(t) => {
-                  setCurrentTime(t);
+                  publishPlayhead(t);
                   setPlayTarget({ time: t, pause: true });
                 }}
                 onPlayEvent={handlePlayEvent}
@@ -3031,7 +3035,6 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
                 onRebreakEvent={handleRebreakEvent}
                 onAddSubtitle={(t) => handleAddSubtitle(t)}
                 onExport={() => setShowExportModal(true)}
-                currentTime={currentTime}
                 availableSpeakers={availableSpeakers}
                 frameRate={frameRate}
                 cplLimit={cplLimit}
@@ -3057,12 +3060,11 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
               events={events}
               shotChanges={shotChanges}
               duration={videoDuration}
-              currentTime={currentTime}
               activeEventId={activeEventId}
               setActiveEventId={setActiveEventId}
               onEventTimeChange={handleEventTimeChange}
               onSeek={(t) => {
-                setCurrentTime(t);
+                publishPlayhead(t);
                 setPlayTarget({ time: t, pause: true });
               }}
               onAddSubtitleAtTime={handleAddSubtitle}
@@ -3177,7 +3179,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
           <span className="flex items-center gap-1">
             <span className="text-slate-400">TC</span>
             <span className="font-semibold text-[var(--ss-accent)]">
-              {formatTimecode(currentTime, prefs.tcFormat, frameRate)}
+              <PlayheadTimecode format={prefs.tcFormat} frameRate={frameRate} />
             </span>
             <span className="opacity-40">/</span>
             <span>{formatTimecode(videoDuration, prefs.tcFormat, frameRate)}</span>

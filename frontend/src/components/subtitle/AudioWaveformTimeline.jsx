@@ -1,4 +1,5 @@
 import { subscribePlayhead, publishPlayhead, getPlayhead } from '../../utils/playheadBus';
+import { usePlayheadSelector } from '../../utils/usePlayheadSelector';
 import { themeColor, withAlpha } from '../../theme/themeEngine';
 import { stripFormatting } from './formatTags';
 import React, { useRef, useState, useEffect, useLayoutEffect, useCallback, useMemo } from 'react';
@@ -166,7 +167,6 @@ export default function AudioWaveformTimeline({
   shotChanges = [],
   activeEventId = null,
   setActiveEventId = () => {},
-  currentTime = 0,
   duration = 0,
   onEventTimeChange = () => {},
   onSeek = () => {},
@@ -205,7 +205,6 @@ export default function AudioWaveformTimeline({
   const containerRef = useRef(null);
   const scrollRef    = useRef(null);
   const canvasRef    = useRef(null);
-  const lastTimeRef  = useRef(currentTime);
   const lastActiveIdRef = useRef(activeEventId);
 
   const [dragState, setDragState] = useState(null);
@@ -557,16 +556,16 @@ export default function AudioWaveformTimeline({
   useEffect(() => {
     const el = scrollRef.current;
     if (!el || dragState || isZoomingRef.current) return;
-    if (isInternalSeekRef.current) { isInternalSeekRef.current = false; lastTimeRef.current = currentTime; lastActiveIdRef.current = activeEventId; return; }
+    if (isInternalSeekRef.current) { isInternalSeekRef.current = false; lastActiveIdRef.current = activeEventId; return; }
     const w  = el.clientWidth || 900;
-    const px = currentTime * zoomLevel;
+    const px = getPlayhead() * zoomLevel;
     const cs = el.scrollLeft;
     const ac = activeEventId !== lastActiveIdRef.current;
-    lastTimeRef.current = currentTime; lastActiveIdRef.current = activeEventId;
+    lastActiveIdRef.current = activeEventId;
     const isIn = px >= cs && px <= cs + w;
     // Playback following is handled by the playhead-bus subscription; here only jump to a newly selected cue
     if (ac && !isIn) el.scrollLeft = Math.max(0, px - w * 0.2);
-  }, [currentTime, activeEventId, zoomLevel, dragState]);
+  }, [activeEventId, zoomLevel, dragState]);
 
   // ── Playhead needle: follows the playhead bus every frame, without React renders ──
   const needleRef = useRef(null);
@@ -659,9 +658,10 @@ export default function AudioWaveformTimeline({
   const activeStart = activeEvent ? (activeEvent.start_time ?? activeEvent.start ?? 0) : 0;
   const activeEnd = activeEvent ? (activeEvent.end_time ?? activeEvent.end ?? 0) : 0;
   const isLastActive = activeEvent ? (events[events.length - 1] === activeEvent) : true;
-  const cueAtPlayhead = events.some(x => {
+  // Toolbar buttons whose enabled state depends on the playhead (see PlayheadButton)
+  const cueAtTime = (t) => events.some(x => {
     const st = x.start_time ?? x.start ?? 0, en = x.end_time ?? x.end ?? 0;
-    return currentTime > st + 0.05 && currentTime < en - 0.05;
+    return t > st + 0.05 && t < en - 0.05;
   });
 
   // ── Drag & Resize Subtitle Blocks ──
@@ -773,30 +773,30 @@ export default function AudioWaveformTimeline({
           <ToolbarButton title="Undo (Ctrl+Z)" onClick={onUndo} disabled={!onUndo}><RotateCcw size={13}/></ToolbarButton>
           <ToolbarButton title="Redo (Ctrl+Y)" onClick={onRedo} disabled={!onRedo}><RotateCw size={13}/></ToolbarButton>
           <div className="w-px h-4 bg-[var(--ss-line)] mx-1.5" />
-          <ToolbarButton
+          <PlayheadButton
             title="Split the subtitle under the playhead at the playhead"
             label="Split"
-            disabled={!onSplitAtTime || !cueAtPlayhead}
+            unavailable={!onSplitAtTime} disabledAt={(t) => !cueAtTime(t)} deps={[events]}
             onClick={() => onSplitAtTime(getPlayhead())}
-          ><Scissors size={12}/></ToolbarButton>
+          ><Scissors size={12}/></PlayheadButton>
           <ToolbarButton
             title="Merge the selected subtitle with the next one"
             label="Merge"
             disabled={!onMergeWithNext || !activeEvent || isLastActive}
             onClick={() => onMergeWithNext(activeEventId)}
           ><Merge size={12}/></ToolbarButton>
-          <ToolbarButton
+          <PlayheadButton
             title="Set the selected subtitle's start to the playhead"
             label="Set In"
-            disabled={!activeEvent || currentTime >= activeEnd}
+            unavailable={!activeEvent} disabledAt={(t) => t >= activeEnd} deps={[activeEnd]}
             onClick={() => onEventTimeChange(activeEventId, getPlayhead(), activeEnd)}
-          ><LogIn size={12}/></ToolbarButton>
-          <ToolbarButton
+          ><LogIn size={12}/></PlayheadButton>
+          <PlayheadButton
             title="Set the selected subtitle's end to the playhead"
             label="Set Out"
-            disabled={!activeEvent || currentTime <= activeStart}
+            unavailable={!activeEvent} disabledAt={(t) => t <= activeStart} deps={[activeStart]}
             onClick={() => onEventTimeChange(activeEventId, activeStart, getPlayhead())}
-          ><LogOut size={12}/></ToolbarButton>
+          ><LogOut size={12}/></PlayheadButton>
           <ToolbarButton
             title="Delete the selected subtitle"
             label="Delete"
@@ -1124,6 +1124,13 @@ function ToolbarButton({ title, label, onClick, disabled = false, danger = false
       {children}{label && <span>{label}</span>}
     </button>
   );
+}
+
+/** Toolbar button that is enabled or disabled depending on where the playhead is. It watches the playhead itself,
+ *  so the timeline around it re-renders only when the button actually flips, not as the playhead moves. */
+function PlayheadButton({ unavailable = false, disabledAt, deps = [], ...rest }) {
+  const atDisabled = usePlayheadSelector(unavailable ? null : disabledAt, [unavailable, ...deps]);
+  return <ToolbarButton {...rest} disabled={unavailable || Boolean(atDisabled)} />;
 }
 
 function ContextMenuItem({ icon, label, shortcut, danger, onClick }) {

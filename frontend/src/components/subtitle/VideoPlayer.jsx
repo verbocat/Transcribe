@@ -1,4 +1,4 @@
-import { publishPlayhead } from '../../utils/playheadBus';
+import { publishPlayhead, subscribePlayhead } from '../../utils/playheadBus';
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { 
   Play, Pause, SkipBack, SkipForward, Volume2, VolumeX, Maximize, Minimize, 
@@ -24,6 +24,14 @@ function findCueAt(events, t, preferId = null) {
     if (pref && contains(pref)) return pref;
   }
   return events.find(contains) || null;
+}
+
+// True while the user is typing somewhere (e.g. editing a subtitle), so playback doesn't move the selection under them
+function isTypingInField() {
+  const el = document.activeElement;
+  if (!el) return false;
+  const tag = el.tagName?.toLowerCase();
+  return tag === 'textarea' || tag === 'input' || tag === 'select' || el.isContentEditable;
 }
 
 export default function VideoPlayer({
@@ -66,7 +74,6 @@ export default function VideoPlayer({
   const [showTitleSafe, setShowTitleSafe] = useState(false);
   const [subtitlePosition, setSubtitlePosition] = useState('bottom'); // 'bottom' | 'top'
   const [subtitleFontSize, setSubtitleFontSize] = useState(24); // px relative
-  const [audioLevel, setAudioLevel] = useState(0); // for fake/real VU meter
 
   const [hoverTime, setHoverTime] = useState(null);
   const [hoverPosition, setHoverPosition] = useState(0);
@@ -83,10 +90,8 @@ export default function VideoPlayer({
   const eventsRef = useRef(events);
   eventsRef.current = events;
 
-  const lastParentTimeUpdateRef = useRef(0);
   const lastActiveSubtitleIdRef = useRef(null);
   const lastRenderedTimeRef = useRef(0);
-  const lastMeterUpdateRef = useRef(0);
 
   // Format SMPTE Timecode HH:MM:SS:FF
   const formatSMPTE = useCallback((seconds) => {
@@ -217,24 +222,11 @@ export default function VideoPlayer({
           const t = videoRef.current.currentTime;
           publishPlayhead(t); // every frame: timeline needle moves smoothly without React renders
 
-          // 1. Throttled internal current time update (~30fps for smooth timecode display)
-          if (Math.abs(t - lastRenderedTimeRef.current) >= 0.033) {
+          // 1. No React state per frame: the scrub bar, timeline needle, list and timecodes all follow the bus above.
+          //    Only the audio-only spectrum animation needs renders, and ~8 per second is enough for it.
+          if (isAudioMode && Math.abs(t - lastRenderedTimeRef.current) >= 0.12) {
             lastRenderedTimeRef.current = t;
             setCurrentTime(t);
-          }
-
-          // 2. Throttled parent onTimeUpdate (~10 per second): the timeline needle uses the playhead bus, so the
-          //    rest of the screen only needs coarse updates (playing-row marker, readouts)
-          if (Math.abs(t - lastParentTimeUpdateRef.current) >= 0.1) {
-            lastParentTimeUpdateRef.current = t;
-            onTimeUpdateRef.current?.(t);
-          }
-
-          // 3. Audio Meter jitter throttled (~8fps, every 120ms) to prevent render storms
-          const now = performance.now();
-          if (now - lastMeterUpdateRef.current > 120) {
-            lastMeterUpdateRef.current = now;
-            setAudioLevel(0.25 + Math.random() * 0.65);
           }
 
           // 4. Enforce Loop Mode
@@ -254,7 +246,8 @@ export default function VideoPlayer({
             }
           }
 
-          // 6. Overlay cue lookup (playback only drives the overlay; selection stays with the user)
+          // 6. Cue under the playhead: drives the overlay and selects that cue, so the list and timeline follow
+          //    playback. Runs only when the cue changes. Gaps keep the last selection; typing is never interrupted.
           const currentEvents = eventsRef.current;
           if (currentEvents && currentEvents.length > 0) {
             const active = findCueAt(currentEvents, t);
@@ -262,6 +255,9 @@ export default function VideoPlayer({
             if (aId !== lastActiveSubtitleIdRef.current) {
               lastActiveSubtitleIdRef.current = aId;
               setCurrentSubtitle(active || null);
+              if (aId != null && aId !== activeEventIdRef.current && !isTypingInField()) {
+                setActiveEventIdRef.current?.(aId);
+              }
             }
           } else if (lastActiveSubtitleIdRef.current !== null) {
             lastActiveSubtitleIdRef.current = null;
@@ -271,14 +267,23 @@ export default function VideoPlayer({
         animId = requestAnimationFrame(loop);
       };
       animId = requestAnimationFrame(loop);
-    } else {
-      setAudioLevel(0);
+    } else if (videoRef.current) {
+      setCurrentTime(videoRef.current.currentTime);
     }
 
     return () => {
       if (animId) cancelAnimationFrame(animId);
     };
-  }, [isPlaying, audioUrl]);
+  }, [isPlaying, audioUrl, isAudioMode]);
+
+  // Scrub bar follows the playhead bus every frame by writing styles directly (no React renders)
+  const progressFillRef = useRef(null);
+  const progressThumbRef = useRef(null);
+  useEffect(() => subscribePlayhead((t) => {
+    const pct = duration > 0 ? `${Math.max(0, Math.min(100, (t / duration) * 100))}%` : '0%';
+    if (progressFillRef.current) progressFillRef.current.style.width = pct;
+    if (progressThumbRef.current) progressThumbRef.current.style.left = pct;
+  }), [duration]);
 
   const handleTimeUpdate = useCallback(() => {
     if (!videoRef.current) return;
@@ -678,7 +683,7 @@ export default function VideoPlayer({
                     return (
                       <div
                         key={idx}
-                        className="w-1.5 rounded-none transition-all duration-75"
+                        className="w-1.5 rounded-none transition-all duration-150 ease-linear"
                         style={{
                           height: `${animatedHeight}%`,
                           backgroundColor: isPlaying ? 'var(--kt-info)' : '#475569',
@@ -754,7 +759,7 @@ export default function VideoPlayer({
                 ctx?.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
                 const a = document.createElement('a');
                 a.href = canvas.toDataURL('image/jpeg', 0.95);
-                a.download = `snapshot_${formatSMPTE(currentTime).replace(/[:.]/g, '-')}.jpg`;
+                a.download = `snapshot_${formatSMPTE(videoRef.current.currentTime).replace(/[:.]/g, '-')}.jpg`;
                 a.click();
               }
             }}
@@ -838,13 +843,13 @@ export default function VideoPlayer({
           onMouseLeave={() => setHoverTime(null)}
         >
           <div 
-            className="h-full rounded-full pointer-events-none transition-all duration-75 bg-[var(--ss-accent)]"
-            style={{ width: `${duration > 0 ? (currentTime / duration) * 100 : 0}%` }}
+            ref={progressFillRef}
+            className="h-full rounded-full pointer-events-none bg-[var(--ss-accent)]"
           />
           {/* Circular Scrubber Thumb */}
           <div 
+            ref={progressThumbRef}
             className="absolute top-1/2 -translate-y-1/2 w-3.5 h-3.5 bg-white border-2 border-[var(--ss-accent)] rounded-full shadow-md pointer-events-none transform -translate-x-1/2"
-            style={{ left: `${duration > 0 ? (currentTime / duration) * 100 : 0}%` }}
           />
           {hoverTime !== null && (
             <div 
