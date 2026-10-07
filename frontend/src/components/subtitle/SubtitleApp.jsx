@@ -1010,7 +1010,10 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
           setEvents(prev => prev.map(e => {
             const curId = e.id ?? e.event_id;
             const newErrors = errMap.get(curId);
-            return newErrors ? { ...e, qc_errors: newErrors, errors: newErrors } : e;
+            if (!newErrors) return e;
+            // the linter does not know about translation alignment errors: keep them until the text is edited
+            const kept = (e.qc_errors || []).filter(err => err.rule_id === 'TRANSLATION-ALIGN' && !e.align_resolved);
+            return { ...e, qc_errors: [...kept, ...newErrors], errors: newErrors };
           }));
         }
       }
@@ -1683,7 +1686,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
           if (typeof field === 'object' && field !== null) {
             return { ...e, ...field };
           }
-          return { ...e, [field]: value };
+          return { ...e, [field]: value, ...(field === 'text' && e.qc_errors?.some(x => x.rule_id === 'TRANSLATION-ALIGN') ? { align_resolved: true } : {}) };
         }
         return e;
       });

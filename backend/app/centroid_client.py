@@ -43,22 +43,57 @@ async def post(path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     return res.json()
 
 
-def drop_misaligned_translations(data: Dict[str, Any], source_cues: List[Dict[str, Any]]) -> None:
-    """A language track is only usable if it has one cue per source cue with the same timing, because the editor
-    pairs them by position. Move any language that does not line up into 'errors' instead of showing shifted text."""
-    results = data.get("results") or {}
-    errors = data.setdefault("errors", {})
-    for lang in list(results):
-        cues = (results[lang] or {}).get("cues") or []
-        aligned = len(cues) == len(source_cues) and all(
-            abs(float(c.get("start") or 0) - float(s.get("start") or 0)) < 0.002
-            and abs(float(c.get("end") or 0) - float(s.get("end") or 0)) < 0.002
-            for c, s in zip(cues, source_cues)
-        )
-        if not aligned:
-            results.pop(lang)
-            errors[lang] = (f"Centroid returned {len(cues)} subtitles for {len(source_cues)} source subtitles, or changed "
-                            "their timing, so this translation was not loaded. Please translate again.")
+_TIME_TOL = 0.002
+
+
+def _same_time(a: Dict[str, Any], b: Dict[str, Any]) -> bool:
+    return (abs(float(a.get("start") or 0) - float(b.get("start") or 0)) < _TIME_TOL
+            and abs(float(a.get("end") or 0) - float(b.get("end") or 0)) < _TIME_TOL)
+
+
+def _fmt(t: float) -> str:
+    ms = max(0, int(round(float(t) * 1000)))
+    return f"{ms // 3600000:02d}:{ms % 3600000 // 60000:02d}:{ms % 60000 // 1000:02d},{ms % 1000:03d}"
+
+
+def _srt(cues: List[Dict[str, Any]]) -> str:
+    return "\n".join(
+        f"{n}\n{_fmt(c['start'])} --> {_fmt(c['end'])}\n{(c.get('target') or c.get('source') or '').strip()}\n"
+        for n, c in enumerate(cues, start=1)
+    )
+
+
+def align_translations(data: Dict[str, Any], source_cues: List[Dict[str, Any]]) -> None:
+    """The editor pairs translated cues with source cues by position, so a language whose cues do not line up would
+    shift every later subtitle. Such a language is still loaded, but rebuilt so it has exactly one cue per source
+    cue (matched by timing): a source cue with no matching translation keeps its source text and gets an
+    'align_error' on that one subtitle, and translated cues that match no source cue are dropped and listed in
+    'warnings'. A language that already lines up is left untouched."""
+    for lang, res in list((data.get("results") or {}).items()):
+        cues = (res or {}).get("cues") or []
+        if len(cues) == len(source_cues) and all(_same_time(c, s) for c, s in zip(cues, source_cues)):
+            continue
+        pool = list(cues)
+        rebuilt: List[Dict[str, Any]] = []
+        flagged = 0
+        for n, src in enumerate(source_cues, start=1):
+            hit = next((c for c in pool if _same_time(c, src)), None)
+            cue = {"index": n, "start": src["start"], "end": src["end"], "source": src.get("text", ""), "target": ""}
+            if hit is not None:
+                pool.remove(hit)
+                cue["target"] = hit.get("target") or ""
+            if not cue["target"]:
+                flagged += 1
+                cue["align_error"] = "No translation came back for this subtitle. The text shown is the original; translate it again or type it in."
+            rebuilt.append(cue)
+        warnings = [w for w in (res.get("warnings") or []) if w.get("type") != "alignment"]
+        for c in rebuilt:
+            if c.get("align_error"):
+                warnings.append({"index": c["index"], "type": "alignment", "message": c["align_error"]})
+        res["cues"] = rebuilt
+        res["srt"] = _srt(rebuilt)
+        res["warnings"] = warnings
+        res["align"] = {"returned": len(cues), "expected": len(source_cues), "unmatched_extra": len(pool), "flagged": flagged}
 
 
 async def status() -> Dict[str, Any]:
