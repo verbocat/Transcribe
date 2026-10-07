@@ -66,3 +66,18 @@ def test_merge_keeps_one_fix_per_cue_and_summary():
     assert out["summary"]["error_count"] == 1 and out["summary"]["mqm_score"] <= 99
     off = merge_qc(None, local, 1, "Centroid down")
     assert off["summary"]["ai_checked"] is False and off["centroid_error"]
+
+
+def test_segment_unit_skips_card_rules():
+    long_text = "नमस्ते मैं गीता गुरुमूर्ति हूँ हमारे साथ जुड़ने के लिए धन्यवाद ऑस्ट्रेलियाई अधिकारियों ने पुष्टि की है कि एक टीम जांच कर रही है"
+    c = cue("Hello there everyone", long_text, 0, 12)
+    assert by_cat(run_local_qc([c], "hi", "en"), "line-length")
+    assert not by_cat(run_local_qc([c], "hi", "en", constraints={"unit": "segment"}), "line-length")
+
+
+def test_reading_speed_fix_extends_end_when_room():
+    cues = [cue("x", "a" * 60, 0, 2), cue("y", "ok", 5, 6)]
+    iss = by_cat(run_local_qc(cues, "en"), "reading-speed")
+    assert iss and iss[0]["suggestion_end"] and 2 < iss[0]["suggestion_end"] <= 5
+    tight = by_cat(run_local_qc([cue("x", "a" * 60, 0, 2), cue("y", "ok", 2, 3)], "en"), "reading-speed")
+    assert tight and tight[0]["suggestion_end"] is None

@@ -139,7 +139,14 @@ export default function TranscribeStudio(p) {
         let i = ed.id != null ? next.findIndex((e) => e[idKey] === ed.id) : -1;
         if (i < 0) i = next.findIndex((e) => Math.abs((e.start_time ?? 0) - ed.start) < 0.05);
         if (i < 0) return;
-        next[i] = key === 'id' ? { ...next[i], text: ed.text, lines: ed.text.split('\n') } : { ...next[i], transcript: ed.text };
+        const cur = next[i];
+        const text = ed.text ?? (key === 'id' ? cur.text : cur.transcript);
+        if (key === 'id') {
+          const end = ed.end ?? cur.end_time;
+          next[i] = { ...cur, text, lines: text.split('\n'), ...(ed.end != null ? { end_time: end, end, duration: Math.round((end - cur.start_time) * 1000) / 1000 } : {}) };
+        } else {
+          next[i] = { ...cur, transcript: text, ...(ed.end != null ? { end_time: ed.end } : {}) };
+        }
         hit += 1;
       });
       return { next, hit };
@@ -274,6 +281,7 @@ export default function TranscribeStudio(p) {
         onStateChange={setCentroidState}
         onJumpToEvent={(id) => { const seg = p.segments.find((s) => s.segment_id === id); if (seg) jumpTo(seg); }}
         events={events}
+        cueUnit="segment"
         glossaryTerms={[]}
         fileName={p.filename || 'transcript'}
         onApplyTextFixes={applyTextFixes}
