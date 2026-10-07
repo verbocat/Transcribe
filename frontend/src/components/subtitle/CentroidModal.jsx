@@ -173,7 +173,7 @@ const Notice = ({ tone = 'danger', children }) => {
  * Stays mounted while closed so results survive.
  */
 export default function CentroidModal({
-  isOpen, onClose, events = [], glossaryTerms = [], cplLimit = 42, maxLines = 2, cpsLimit = 20,
+  isOpen, onClose, events = [], cueUnit = 'cue', glossaryTerms = [], cplLimit = 42, maxLines = 2, cpsLimit = 20,
   fileName = 'subtitles', defaultSourceLang = 'en', qcHost = null, onOpenQc, onOpenTranslate,
   activeLang = null, trackLangs = [],
   onTranslated, onShowTrack, onApplyTextFixes, onJumpToEvent, onStateChange,
@@ -292,7 +292,7 @@ export default function CentroidModal({
       .map((t) => ({ source: t, target: null, do_not_translate: true }));
     return [...manual, ...names];
   };
-  const buildLimits = () => ({ max_cpl: Number(limits.max_cpl) || 42, max_lines: Number(limits.max_lines) || 2, max_cps: Number(limits.max_cps) || 20 });
+  const buildLimits = () => ({ max_cpl: Number(limits.max_cpl) || 42, max_lines: Number(limits.max_lines) || 2, max_cps: Number(limits.max_cps) || 20, unit: cueUnit });
 
   const handleUpload = async (file) => {
     if (!file) return;
@@ -402,7 +402,7 @@ export default function CentroidModal({
       setQcBusy(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pairsFor, sourceLang, targets, ctx, glossaryText, keepNames, glossaryTerms, limits]);
+  }, [pairsFor, sourceLang, targets, ctx, glossaryText, keepNames, glossaryTerms, limits, cueUnit]);
 
   const runTranslate = async () => {
     setError('');
@@ -486,41 +486,72 @@ export default function CentroidModal({
   const setIssueStatus = (key, status) => setQc((q) => (q ? { ...q, issues: q.issues.map((i) => (i.key === key ? { ...i, status } : i)) } : q));
   const dropIssue = (key) => setIssueStatus(key, 'dismissed');
 
-  /** Write the suggested text into the subtitles (and the language result), then mark the issues as fixed. */
+  /** A fix is new text, a new end time (reading speed), or both. */
+  const isFixable = (i) => i.status === 'open' && (i.suggestion || i.suggestion_end != null);
+
+  /** Write the suggested text and timing into the subtitles (and the language result), mark those issues as fixed,
+   *  then re-check the edited cues so the list only keeps what is still wrong. */
   const applyFixes = useCallback((issues) => {
     if (!qc) return;
-    // One fix per cue: the first suggestion wins, the others were written against the old text
+    // One edit per cue: its first text suggestion plus its first timing suggestion
     const byCue = new Map();
-    issues.filter((i) => i.suggestion && i.status === 'open').forEach((i) => { if (!byCue.has(i.index)) byCue.set(i.index, i); });
+    issues.filter(isFixable).forEach((i) => {
+      const cur = byCue.get(i.index) || { text: null, end: null, issues: [] };
+      if (i.suggestion && cur.text == null) cur.text = i.suggestion;
+      if (i.suggestion_end != null && cur.end == null) cur.end = i.suggestion_end;
+      cur.issues.push(i);
+      byCue.set(i.index, cur);
+    });
     if (!byCue.size) return;
-    const chosen = [...byCue.values()];
-    const edits = chosen.map((i) => {
-      const pair = qcPairs.pairs.find((p) => p.id === i.index);
-      return { id: pair?.editorId, index: i.index, start: pair?.start ?? i.start, text: i.suggestion };
+    const edits = [...byCue.entries()].map(([index, f]) => {
+      const pair = qcPairs.pairs.find((p) => p.id === index);
+      return { id: pair?.editorId, index, start: pair?.start, text: f.text, end: f.end };
     });
     const applied = onApplyTextFixes ? onApplyTextFixes(qc.target, edits) : 0;
+    const patchCue = (c, e) => ({ ...c, ...(e.text != null ? { target: e.text } : {}), ...(e.end != null ? { end: e.end } : {}) });
     if (qc.target !== 'editor') {
       // keep the result (and the SRT you can download) in step with the track
       setResults((prev) => {
         const r = prev[qc.target];
         if (!r) return prev;
-        const cues = r.cues.map((c, n) => { const e = edits.find((x) => x.index === (c.index ?? n + 1)); return e ? { ...c, target: e.text } : c; });
+        const cues = r.cues.map((c, n) => { const e = edits.find((x) => x.index === (c.index ?? n + 1)); return e ? patchCue(c, e) : c; });
         return { ...prev, [qc.target]: { ...r, cues, srt: cuesToSrt(cues.map((c) => ({ ...c, text: c.target || c.source })), 'text') } };
       });
     }
-    const doneKeys = new Set(chosen.map((i) => i.key));
+    const doneKeys = new Set([...byCue.values()].flatMap((f) => f.issues.map((i) => i.key)));
+    const edited = new Set(byCue.keys());
+    const dismissedKeys = new Set((qc.issues || []).filter((i) => i.status === 'dismissed').map((i) => `${i.index}|${i.category}|${i.title}`));
+    // Anything else still open on an edited cue was written against the old text: AI findings are dropped, rule checks are re-run
     setQc((q) => (q ? { ...q, issues: q.issues
-      .filter((i) => doneKeys.has(i.key) || !(byCue.has(i.index) && i.suggestion && i.status === 'open'))
+      .filter((i) => doneKeys.has(i.key) || !(edited.has(i.index) && i.status === 'open'))
       .map((i) => (doneKeys.has(i.key) ? { ...i, status: 'fixed' } : i)) } : q));
-    const word = chosen.length === 1 ? 'fix' : 'fixes';
+    const word = edits.length === 1 ? 'fix' : 'fixes';
     setQcNote(applied > 0 || qc.target !== 'editor'
-      ? `Applied ${chosen.length} ${word}. The subtitle text is updated${applied ? ' in the editor' : ''}. Ctrl+Z undoes it in the editor.`
+      ? `Applied ${edits.length} ${word}. The subtitle text is updated${applied ? ' in the editor' : ''}. Ctrl+Z undoes it in the editor.`
       : `Could not find these subtitles in the editor. Open the ${langName(qc.target)} track and try again.`);
-  }, [qc, qcPairs, onApplyTextFixes]);
+
+    // Re-check the edited cues with the rule checks (no AI call) and show what is left
+    const target = qc.target;
+    const lang = target === 'editor' ? targets[0] || sourceLang : target;
+    const patched = qcPairs.pairs.map((p) => { const e = edits.find((x) => x.index === p.id); return e ? { ...p, target: e.text ?? p.target, end: e.end ?? p.end } : p; });
+    api('/api/subtitle/qc', { cues: patched, source_lang: sourceLang, target_lang: lang, glossary: buildGlossary(), constraints: buildLimits() })
+      .then((data) => {
+        setQc((q) => {
+          if (!q || q.target !== target) return q;
+          const have = new Set(q.issues.filter((i) => i.status === 'open').map((i) => `${i.index}|${i.category}`));
+          const fresh = (data.issues || []).filter((i) => edited.has(i.index)
+            && !have.has(`${i.index}|${i.category}`) && !dismissedKeys.has(`${i.index}|${i.category}|${i.title}`))
+            .map((i, n) => ({ ...i, key: `${i.index}-${i.category}-re${Date.now()}-${n}`, status: 'open' }));
+          return fresh.length ? { ...q, issues: [...q.issues, ...fresh] } : q;
+        });
+      })
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [qc, qcPairs, onApplyTextFixes, targets, sourceLang, limits, cueUnit]);
 
   const openIssues = (qc?.issues || []).filter((i) => i.status === 'open');
   const fixedIssues = (qc?.issues || []).filter((i) => i.status === 'fixed');
-  const fixable = openIssues.filter((i) => i.suggestion).length;
+  const fixable = openIssues.filter(isFixable).length;
   const applyAll = () => applyFixes(openIssues);
   const issueGroups = [
     { key: 'error', title: 'Errors', tone: 'danger', items: openIssues.filter((i) => i.severity === 'error').sort((x, y) => x.index - y.index) },
@@ -612,14 +643,15 @@ export default function CentroidModal({
                         <div><div className="text-[11px] text-[var(--ss-faint)]">Source</div><div className="whitespace-pre-wrap">{i.source}</div></div>
                         <div><div className="text-[11px] text-[var(--ss-faint)]">Current</div><div className="whitespace-pre-wrap text-[var(--ss-danger)]">{i.target || '(empty)'}</div></div>
                       </div>
-                      {i.suggestion && (
+                      {(i.suggestion || i.suggestion_end != null) && (
                         <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 px-2.5 py-2">
                           <div className="text-[11px] text-emerald-400">Suggested fix</div>
-                          <div className="whitespace-pre-wrap text-emerald-100">{i.suggestion}</div>
+                          {i.suggestion && <div className="whitespace-pre-wrap text-emerald-100">{i.suggestion}</div>}
+                          {i.suggestion_end != null && <div className="text-emerald-100">Show until {fmtTime(i.suggestion_end)} (now {fmtTime(i.end)})</div>}
                         </div>
                       )}
                       <div className="flex gap-2">
-                        {i.suggestion && <Button size="sm" variant="primary" icon={Check} onClick={() => applyFixes([i])}>Apply fix</Button>}
+                        {(i.suggestion || i.suggestion_end != null) && <Button size="sm" variant="primary" icon={Check} onClick={() => applyFixes([i])}>Apply fix</Button>}
                         <Button size="sm" variant="ghost" onClick={() => dropIssue(i.key)}>Dismiss</Button>
                       </div>
                     </article>
@@ -637,7 +669,7 @@ export default function CentroidModal({
                 {showResolved && (
                   <ul className="px-3 pb-2 space-y-1.5 text-[12px]">
                     {fixedIssues.map((i) => (
-                      <li key={i.key}><span className="font-mono text-[11px] text-[var(--ss-faint)]">#{i.index}</span> <span className="whitespace-pre-wrap text-emerald-100">{i.suggestion}</span></li>
+                      <li key={i.key}><span className="font-mono text-[11px] text-[var(--ss-faint)]">#{i.index}</span> <span className="whitespace-pre-wrap text-emerald-100">{i.suggestion || i.title}</span></li>
                     ))}
                   </ul>
                 )}

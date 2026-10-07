@@ -11,6 +11,7 @@ Checks: empty / untranslated cue, line breaks and bad splits (phrase-aware), CPL
 punctuation (spacing, doubles, missing question/exclamation mark, unbalanced quotes), numbers, speaker labels
 and dual-speaker dashes, and consistency (glossary terms, the same source line translated two ways).
 """
+import math
 import re
 from collections import Counter, defaultdict
 from typing import Any, Dict, List, Optional
@@ -51,7 +52,7 @@ def _numbers(text: str) -> List[str]:
 
 
 def _issue(cue: Dict[str, Any], index: int, category: str, severity: str, title: str, description: str,
-           suggestion: Optional[str] = None) -> Dict[str, Any]:
+           suggestion: Optional[str] = None, suggestion_end: Optional[float] = None) -> Dict[str, Any]:
     target = cue.get("target") or ""
     if suggestion is not None and suggestion.strip() == target.strip():
         suggestion = None
@@ -67,6 +68,7 @@ def _issue(cue: Dict[str, Any], index: int, category: str, severity: str, title:
         "source": cue.get("source") or "",
         "target": target,
         "suggestion": suggestion,
+        "suggestion_end": suggestion_end,
         "origin": "local",
     }
 
@@ -86,6 +88,23 @@ def _rebreak(text: str, lang: str, max_cpl: int) -> str:
     flat = _flat(text)
     profile = get_language_profile(lang)
     return optimize_language_line_breaks(flat, profile, custom_cpl=max_cpl)
+
+
+def _extended_end(cues: List[Dict[str, Any]], n: int, chars: int, max_cps: float, cap_duration: bool) -> Optional[float]:
+    """The end time that brings cue `n` (1-based) to `max_cps`, or None when the next cue (or 7 s) leaves no room."""
+    try:
+        start, end = float(cues[n - 1].get("start")), float(cues[n - 1].get("end"))
+    except (TypeError, ValueError):
+        return None
+    need = math.ceil((start + chars / max_cps) * 1000) / 1000
+    limit = start + 7.0 if cap_duration else float("inf")
+    if n < len(cues):
+        try:
+            nxt = float(cues[n].get("start"))
+            limit = min(limit, nxt - min(max(nxt - end, 0.0), 0.083))
+        except (TypeError, ValueError):
+            pass
+    return need if end < need <= limit else None
 
 
 def _glossary_pairs(glossary: Any, lang: str) -> List[Dict[str, str]]:
@@ -108,8 +127,15 @@ def run_local_qc(
     glossary: Any = None,
     constraints: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
-    """Return local QC issues for source/target cue pairs. `index` is the 1-based position, like Centroid's."""
+    """Return local QC issues for source/target cue pairs. `index` is the 1-based position, like Centroid's.
+
+    `constraints["unit"]` says what a cue is. "cue" (default) is a finished subtitle card, so characters per line,
+    line count and line breaks are checked. "segment" is a transcript segment (a sentence or a speaker turn): its
+    text is not cut into cards yet, so those card rules are skipped here (they apply when the Netflix engine cuts the
+    cards at export) and only the checks that hold for any unit run: reading speed over the whole segment,
+    punctuation, numbers, speakers, consistency."""
     constraints = constraints or {}
+    card_rules = str(constraints.get("unit") or "cue").lower() != "segment"
     lang = (target_lang or "en").lower()
     profile = get_language_profile(lang)
     max_cpl = int(constraints.get("max_cpl") or profile.cpl_limit)
@@ -137,7 +163,7 @@ def run_local_qc(
                                  "The text is identical to the source. If this is not a name or a quoted phrase, translate it.", None))
 
         # ---- Line breaks, length, line count ------------------------------------------------------------
-        if not dual:
+        if not dual and card_rules:
             line_texts = [l.strip() for l in lines if l.strip()]
             too_long = [l for l in line_texts if len(l) > max_cpl]
             bad_joint = None
@@ -169,13 +195,15 @@ def run_local_qc(
         if dur > 0:
             body = re.sub(r"^\s*[-–—]\s*", "", flat)
             cps = len(body) / dur
-            if cps > max_cps * 1.2:
-                issues.append(_issue(cue, n, "reading-speed", "error", "Reads too fast",
-                                     f"{cps:.0f} characters per second (limit {max_cps:.0f}). Shorten the text, "
-                                     "or lengthen the cue if there is room before the next one.", None))
-            elif cps > max_cps:
-                issues.append(_issue(cue, n, "reading-speed", "warning", "Reading speed is high",
-                                     f"{cps:.0f} characters per second (limit {max_cps:.0f}).", None))
+            if cps > max_cps:
+                new_end = _extended_end(cues, n, len(body), max_cps, card_rules)
+                severe = cps > max_cps * 1.2
+                fix_note = (f" Ends {new_end - float(cue.get('end')):.2f} s later to fit." if new_end is not None
+                            else " There is no room to lengthen it, so shorten the text.")
+                issues.append(_issue(cue, n, "reading-speed", "error" if severe else "warning",
+                                     "Reads too fast" if severe else "Reading speed is high",
+                                     f"{cps:.0f} characters per second (limit {max_cps:.0f})." + fix_note,
+                                     None, new_end))
 
         # ---- Punctuation -------------------------------------------------------------------------------
         cleaned = _clean_punctuation(target, lang)
@@ -236,7 +264,7 @@ def run_local_qc(
                                  _SPEAKER_LABEL.sub("", target, count=1).strip()))
 
     # ---- Bad split between neighbouring cues --------------------------------------------------------------
-    for n in range(1, len(cues)):
+    for n in range(1, len(cues) if card_rules else 0):
         cur, nxt = cues[n - 1], cues[n]
         t, u = _flat(cur.get("target") or ""), _flat(nxt.get("target") or "")
         if not t or not u or t.endswith((".", "!", "?", "…", "।", ",", ":", ";", "—")):
