@@ -1,41 +1,46 @@
 import React from 'react';
-import { Check, Loader2 } from 'lucide-react';
 
-const STEPS = ['Ingest', 'Upload', 'Speakers', 'Gender', 'Confidence', 'QC'];
+const mmss = (sec) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
 
-export default function ProgressStrip({ stage, detail, percent, stepIndex, elapsedSeconds }) {
+/**
+ * Slim one-row progress strip, same as Subtitle Studio's. Upload bytes are measured; the server wait is an
+ * estimate and is marked with "≈". A null percent shows a moving bar with no number.
+ */
+export default function ProgressStrip({ stage, detail, percent, estimated, meta, stepIndex, stepCount, elapsedSeconds }) {
+  const determinate = typeof percent === 'number' && Number.isFinite(percent);
+  const pct = determinate ? Math.max(0, Math.min(100, percent)) : 0;
+  const shown = determinate ? (pct >= 99.5 ? '100' : pct < 10 ? pct.toFixed(1) : String(Math.round(pct))) : null;
+
   return (
-    <div role="status" aria-live="polite" className="shrink-0 px-4 py-3" style={{ background: 'var(--ts-panel)', borderBottom: '1px solid var(--ts-line)' }}>
-      <div className="flex items-center gap-3">
-        <Loader2 size={15} className="animate-spin" style={{ color: 'var(--ts-accent)' }} />
-        <span style={{ fontWeight: 600 }}>{stage}</span>
-        <span className="truncate" style={{ color: 'var(--ts-muted)' }}>{detail}</span>
+    <div role="status" aria-live="polite" className="relative shrink-0" style={{ background: 'var(--ts-panel)', borderBottom: '1px solid var(--ts-line)' }}>
+      <div className="flex items-center gap-2.5 px-3 min-w-0" style={{ height: 32, fontSize: 12, lineHeight: 1 }}>
+        <span className="relative flex shrink-0" style={{ width: 8, height: 8 }} aria-hidden="true">
+          <span className="absolute inset-0 rounded-full animate-ping" style={{ background: 'var(--ts-accent)', opacity: 0.6 }} />
+          <span className="relative rounded-full" style={{ width: 8, height: 8, background: 'var(--ts-accent)' }} />
+        </span>
+        <span style={{ fontWeight: 500, whiteSpace: 'nowrap' }}>{stage}</span>
+        {stepCount > 1 && <span className="ts-mono" style={{ color: 'var(--ts-faint)', whiteSpace: 'nowrap' }}>{stepIndex}/{stepCount}</span>}
+        {detail && <span className="truncate min-w-0" style={{ color: 'var(--ts-muted)' }}>{detail}</span>}
         <span className="flex-1" />
-        <span className="ts-mono" style={{ color: 'var(--ts-muted)' }}>{elapsedSeconds.toFixed(0)}s</span>
-        <span className="ts-mono" style={{ color: 'var(--ts-accent)', fontWeight: 600, minWidth: 40, textAlign: 'right' }}>{Math.round(percent)}%</span>
+        {meta && <span className="ts-mono hidden sm:inline" style={{ color: 'var(--ts-muted)', whiteSpace: 'nowrap' }}>{meta}</span>}
+        <span className="ts-mono hidden md:inline" style={{ color: 'var(--ts-faint)' }}>{mmss(elapsedSeconds)}</span>
+        {shown != null && (
+          <span
+            className="ts-mono" style={{ color: 'var(--ts-accent)', fontWeight: 600, minWidth: '3ch', textAlign: 'right' }}
+            title={estimated ? 'Estimated from the audio length and this server’s speed' : undefined}
+          >
+            {estimated ? '≈' : ''}{shown}%
+          </span>
+        )}
       </div>
-      <div className="ts-track mt-2.5"><div style={{ width: `${percent}%` }} /></div>
-      <ol className="flex items-center gap-4 mt-2.5" style={{ listStyle: 'none', padding: 0, margin: 0, fontSize: 12 }}>
-        {STEPS.map((label, i) => {
-          const n = i + 1;
-          const done = stepIndex > n;
-          const current = stepIndex === n;
-          return (
-            <li key={label} className="flex items-center gap-1.5" style={{ color: done || current ? 'var(--ts-text)' : 'var(--ts-faint)' }}>
-              <span
-                style={{
-                  width: 16, height: 16, borderRadius: '50%', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 10,
-                  background: done ? 'var(--ts-accent)' : 'transparent', color: done ? 'var(--ts-accent-ink)' : 'inherit',
-                  border: `1px solid ${done || current ? 'var(--ts-accent)' : 'var(--ts-line)'}`,
-                }}
-              >
-                {done ? <Check size={10} strokeWidth={3} /> : n}
-              </span>
-              {label}
-            </li>
-          );
-        })}
-      </ol>
+      <div
+        role="progressbar" aria-label={stage} aria-valuemin={0} aria-valuemax={100} aria-valuenow={determinate ? Math.round(pct) : undefined}
+        style={{ height: 2, background: 'var(--ts-line)', overflow: 'hidden' }}
+      >
+        {determinate
+          ? <div style={{ height: '100%', width: `${pct}%`, background: 'var(--ts-accent)', transition: 'width 0.5s ease-out' }} />
+          : <div className="ts-indeterminate" style={{ height: '100%', width: '100%' }} />}
+      </div>
     </div>
   );
 }

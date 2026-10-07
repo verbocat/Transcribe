@@ -23,11 +23,15 @@ import LogoutConfirmModal from './components/LogoutConfirmModal';
 import ReloadConfirmModal from './components/ReloadConfirmModal';
 import { parseSubtitles } from './utils/subtitleParser';
 import { API_BASE } from './config';
+const BUILD_ID = typeof __APP_BUILD__ !== 'undefined' ? __APP_BUILD__ : 'dev';
+if (typeof window !== 'undefined') window.__TRANSCRIBE_BUILD__ = BUILD_ID;
+import { extractAudioFromMedia } from './utils/audioExtractor';
 import { AuthProvider, useAuth } from './auth_views/AuthContext';
 import { ThemeProvider } from './context/ThemeContext';
 import AppearanceHost from './theme/AppearanceHost';
 import AuthScreen from './auth_views/AuthScreen';
 import Lenis from 'lenis';
+import { xhrPostForm, formatBytes, formatSpeed, formatEta } from './utils/xhrUpload';
 
 export default function App() {
   return (
@@ -560,6 +564,12 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
   const [progressDetail, setProgressDetail] = useState('');
   const [progressStepIndex, setProgressStepIndex] = useState(1);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [progressEstimated, setProgressEstimated] = useState(false);
+  const [progressStepCount, setProgressStepCount] = useState(3);
+  const [extractedAudioName, setExtractedAudioName] = useState('');
+  const [extractedForFile, setExtractedForFile] = useState('');
+  const [progressMeta, setProgressMeta] = useState('');
+  const extractedAudioFileRef = useRef(null); // small WAV made on this computer; uploaded instead of the video
   const progressTimerRef = useRef(null);
   const elapsedTimerRef = useRef(null);
 
@@ -676,6 +686,7 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
       setTotalErrors(0);
       setTotalWarnings(0);
       setProgressPercent(0);
+      setExtractedAudioName('');
 
       const isVideo = Boolean(
         file.type?.startsWith('video/') ||
@@ -686,24 +697,25 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
 
       setVideoUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return isVideo ? URL.createObjectURL(file) : null; });
 
+      extractedAudioFileRef.current = null;
       if (isVideo || needsServerDecode) {
         setIsExtractingAudio(true);
         setExtractionNotice(isVideo ? 'Extracting audio track from video...' : 'Converting WMA audio for playback...');
         try {
-          const formData = new FormData();
-          formData.append('file', file);
-          const res = await fetch(`${API_BASE}/api/audio/extract`, {
-            method: 'POST',
-            body: formData
-          });
-          if (res.ok) {
-            const data = await res.json();
-            setAudioUrl(`${API_BASE}${data.audio_url}`);
-            setExtractionNotice('Audio extracted successfully ✓');
-            setTimeout(() => setExtractionNotice(''), 3000);
-          } else {
-            setAudioUrl(URL.createObjectURL(file));
-          }
+          // Audio is extracted ON THIS COMPUTER (WebAssembly FFmpeg), so only ~2 MB per minute of audio is ever
+          // uploaded instead of the whole video. Falls back to the server (with live progress) on any problem.
+          const extracted = await extractAudioFromMedia(file, (p) => {
+            const pct = typeof p.percent === 'number' && Number.isFinite(p.percent) ? ` ${Math.round(p.percent)}%` : '';
+            setExtractionNotice(`${p.detail || 'Preparing audio'}${pct}`);
+          }, API_BASE);
+          const isBlob = !extracted.audioUrl || extracted.audioUrl.startsWith('blob:');
+          setAudioUrl(extracted.audioUrl || URL.createObjectURL(extracted.audioBlob));
+          extractedAudioFileRef.current = extracted.audioFile || null;
+          // A server-made WAV already sits on the server: reuse it by name instead of uploading it again
+          setExtractedAudioName(isBlob ? '' : (extracted.audioFile?.name || ''));
+          setExtractedForFile(file.name);
+          setExtractionNotice('Audio extracted successfully ✓');
+          setTimeout(() => setExtractionNotice(''), 3000);
         } catch (err) {
           console.warn("Video audio extraction fallback:", err);
           setAudioUrl(URL.createObjectURL(file));
@@ -717,134 +729,180 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
     }
   };
 
-  const startProgressSimulation = () => {
-    setProgressPercent(5);
-    setProgressStage('1. Ingesting & Audio Waveform Inspection');
-    setProgressDetail('Reading audio headers, RMS loudness and channel properties...');
-    setProgressStepIndex(1);
-    setElapsedSeconds(0);
+  // Transcription progress. Upload bytes are measured (XMLHttpRequest). The server then runs one long request, so the
+  // wait is an estimate from the audio length and this server's own measured speed (learned from earlier runs), shown
+  // as "≈" and never reaching 100% before the result arrives.
+  // Audio length from the media's own metadata (used to estimate the server wait)
+  const probeDuration = (url) => new Promise((resolve) => {
+    if (!url) return resolve(0);
+    const a = new Audio();
+    const done = (v) => { a.src = ''; resolve(v); };
+    a.preload = 'metadata';
+    a.onloadedmetadata = () => done(Number.isFinite(a.duration) ? a.duration : 0);
+    a.onerror = () => done(0);
+    setTimeout(() => done(0), 4000);
+    a.src = url;
+  });
 
-    if (progressTimerRef.current) clearInterval(progressTimerRef.current);
-    if (elapsedTimerRef.current) clearInterval(elapsedTimerRef.current);
+  const SPEED_KEY = 'transcribe_speed_ratio'; // seconds of processing per second of audio
 
-    const startTime = Date.now();
-    elapsedTimerRef.current = setInterval(() => {
-      setElapsedSeconds(parseFloat(((Date.now() - startTime) / 1000).toFixed(1)));
-    }, 100);
-
-    progressTimerRef.current = setInterval(() => {
-      setProgressPercent((prev) => {
-        if (prev < 18) {
-          setProgressStage('1. Ingesting Audio & Header Analysis');
-          setProgressDetail('Analyzing audio acoustic envelope & format headers...');
-          setProgressStepIndex(1);
-          return prev + 3;
-        } else if (prev < 38) {
-          setProgressStage('2. Uploading Audio to ElevenLabs Scribe v2');
-          setProgressDetail('Streaming audio to ElevenLabs Scribe v2 speech-to-text engine...');
-          setProgressStepIndex(2);
-          return prev + 2.5;
-        } else if (prev < 65) {
-          setProgressStage('3. Speaker Separation & Verbatim Transcription');
-          setProgressDetail('Separating every distinct speaker & recognizing verbatim speech...');
-          setProgressStepIndex(3);
-          return prev + 1.2;
-        } else if (prev < 82) {
-          setProgressStage('4. Speaker Gender Detection');
-          setProgressDetail('Listening to each line to detect gender and split mixed speakers...');
-          setProgressStepIndex(4);
-          return prev + 0.8;
-        } else if (prev < 92) {
-          setProgressStage('5. Word-Level Confidence Heatmap Computation');
-          setProgressDetail('Evaluating acoustic clarity scores for each transcribed token...');
-          setProgressStepIndex(5);
-          return prev + 0.5;
-        } else if (prev < 98) {
-          setProgressStage('6. Karya QA Linter & Final Verification');
-          setProgressDetail('Linting script compliance, numbers in words, and punctuation rules...');
-          setProgressStepIndex(6);
-          return prev + 0.3;
-        }
-        return prev;
-      });
-    }, 400);
+  const stopProgressTimers = () => {
+    if (progressTimerRef.current) { clearInterval(progressTimerRef.current); progressTimerRef.current = null; }
+    if (elapsedTimerRef.current) { clearInterval(elapsedTimerRef.current); elapsedTimerRef.current = null; }
   };
 
-  const stopProgressSimulation = (success = true) => {
-    if (progressTimerRef.current) {
-      clearInterval(progressTimerRef.current);
-      progressTimerRef.current = null;
-    }
-    if (elapsedTimerRef.current) {
-      clearInterval(elapsedTimerRef.current);
-      elapsedTimerRef.current = null;
-    }
+  const startElapsedTimer = (startTime) => {
+    if (elapsedTimerRef.current) clearInterval(elapsedTimerRef.current);
+    elapsedTimerRef.current = setInterval(() => setElapsedSeconds((Date.now() - startTime) / 1000), 250);
+  };
+
+  const beginUploadProgress = () => {
+    stopProgressTimers();
+    setProgressStepIndex(1);
+    setProgressStepCount(3);
+    setProgressStage('Uploading audio');
+    setProgressDetail(selectedFile?.name || '');
+    setProgressPercent(0);
+    setProgressEstimated(false);
+    setProgressMeta('');
+    setElapsedSeconds(0);
+    startElapsedTimer(Date.now());
+  };
+
+  const onUploadProgress = ({ percent, loaded, total, speed, eta }) => {
+    setProgressPercent(percent);
+    setProgressMeta([`${formatBytes(loaded)} of ${formatBytes(total)}`, formatSpeed(speed), formatEta(eta)].filter(Boolean).join(' · '));
+  };
+
+  const beginServerProgress = (audioSeconds) => {
+    const startedAt = Date.now();
+    let ratio = 0.15;
+    try { ratio = parseFloat(localStorage.getItem(SPEED_KEY)) || ratio; } catch {}
+    const expected = Math.max(8, (audioSeconds || 60) * ratio);
+    setProgressStepIndex(2);
+    setProgressStage('Transcribing');
+    setProgressDetail('Speech recognition, speakers, gender and Karya checks on the server');
+    setProgressEstimated(true);
+    setProgressPercent(0);
+    if (progressTimerRef.current) clearInterval(progressTimerRef.current);
+    progressTimerRef.current = setInterval(() => {
+      const t = (Date.now() - startedAt) / 1000;
+      // Approaches 95% as time passes the expected duration, never reaches it
+      const pct = 95 * (1 - Math.exp(-1.6 * t / expected));
+      setProgressPercent(pct);
+      const left = Math.max(0, Math.round(expected - t));
+      setProgressMeta(t < expected ? `about ${left >= 60 ? `${Math.floor(left / 60)} min ${left % 60} s` : `${left} s`} left` : 'taking longer than usual');
+    }, 400);
+    return startedAt;
+  };
+
+  const finishProgress = (success, startedAt, audioSeconds) => {
+    stopProgressTimers();
     if (success) {
+      if (startedAt && audioSeconds > 5) {
+        try { localStorage.setItem(SPEED_KEY, String(((Date.now() - startedAt) / 1000 / audioSeconds).toFixed(4))); } catch {}
+      }
+      setProgressStepIndex(3);
+      setProgressEstimated(false);
       setProgressPercent(100);
-      setProgressStage('✓ Completed Successfully!');
-      setProgressDetail('All segments, confidence heatmap & Karya QA linting ready.');
-      setProgressStepIndex(6);
-      setTimeout(() => {
-        setProgressPercent(0);
-      }, 1000);
     } else {
       setProgressPercent(0);
+    }
+  };
+
+  const applyTranscriptionResult = (data) => {
+    setTranscriptionResult(data);
+    const segs = data.segments || [];
+    setSegments(segs);
+    setOriginalSegments(JSON.parse(JSON.stringify(segs)));
+    setHistory([segs]);
+    setHistoryIndex(0);
+    setComplianceScore(data.compliance_score || 100.0);
+    setTotalErrors(data.total_errors || 0);
+    setTotalWarnings(data.total_warnings || 0);
+    if (segs.length > 0) setActiveSegmentId(segs[0].segment_id);
+  };
+
+  // Poll a /api/transcribe_async job: the strip shows the server's own stage, step and percent
+  const pollTranscribeJob = async (jobId) => {
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    for (;;) {
+      const res = await fetch(`${API_BASE}/api/transcribe_status/${jobId}`);
+      if (!res.ok) throw new Error(res.status === 404 ? 'The transcription job expired or the server restarted.' : `Status check failed (${res.status}).`);
+      const job = await res.json();
+      if (job.stage === 'error') throw new Error(job.error || 'Transcription failed.');
+      if (job.stage === 'done') return job.result;
+      const active = (job.stages || []).find((x) => x.status === 'active');
+      setProgressStage(active?.label || 'Preparing');
+      setProgressDetail(job.detail || '');
+      setProgressStepIndex(job.step || 1);
+      setProgressStepCount(job.step_count || 0);
+      setProgressPercent(typeof job.percent === 'number' ? job.percent : null);
+      // The speech engine answers once, so its share of the bar is the server's estimate
+      setProgressEstimated(job.stage === 'transcribing');
+      setProgressMeta(job.stage_percent != null && job.stage !== 'transcribing' ? `${Math.round(job.stage_percent)}% of this step` : '');
+      await sleep(700);
     }
   };
 
   const handleStartTranscribe = async () => {
     if (!selectedFile) return;
     setIsTranscribing(true);
-    startProgressSimulation();
+    beginUploadProgress();
+    let serverStartedAt = 0;
+    let localWav = null;
+    let audioSeconds = 0;
+    try { audioSeconds = await probeDuration(audioUrl || videoUrl); } catch {}
 
-    const formData = new FormData();
-    formData.append('file', selectedFile);
-    formData.append('language', targetLanguage);
-    formData.append('script', targetScript);
-    try {
-      const storedElevenLabsKey = (localStorage.getItem('elevenlabs_api_key') || '').trim();
-      if (storedElevenLabsKey) formData.append('elevenlabs_api_key', storedElevenLabsKey);
-    } catch {}
+    const build = (fileToSend) => {
+      const fd = new FormData();
+      if (fileToSend) fd.append('file', fileToSend);
+      fd.append('language', targetLanguage);
+      fd.append('script', targetScript);
+      try {
+        const storedElevenLabsKey = (localStorage.getItem('elevenlabs_api_key') || '').trim();
+        if (storedElevenLabsKey) fd.append('elevenlabs_api_key', storedElevenLabsKey);
+      } catch {}
+      return fd;
+    };
 
     try {
-      const res = await fetch(`${API_BASE}/api/transcribe`, {
-        method: 'POST',
-        body: formData
+      let data = null;
+      // Preferred: background job with real stages. Reuse the audio already extracted for the waveform when we have it.
+      const sameFile = selectedFile.name === extractedForFile;
+      const reuse = sameFile && extractedAudioName;
+      localWav = sameFile && !reuse ? extractedAudioFileRef.current : null;
+      const fd = build(reuse ? null : (localWav || selectedFile));
+      if (reuse) fd.append('audio_filename', extractedAudioName);
+      else setProgressStepCount(0);
+      console.info('[transcribe] POST /api/transcribe_async', { build: BUILD_ID, uploading: reuse ? 'nothing (audio already on server)' : localWav ? `audio ${formatBytes(localWav.size)}` : `original file ${formatBytes(selectedFile.size)}` });
+      const start = await xhrPostForm(`${API_BASE}/api/transcribe_async`, fd, {
+        onProgress: onUploadProgress,
+        onSent: () => { setProgressStepCount(0); setProgressStage('Starting'); setProgressDetail(''); setProgressMeta(''); setProgressPercent(null); },
       });
-
-      if (res.ok) {
-        const data = await res.json();
-        setTranscriptionResult(data);
-        const segs = data.segments || [];
-        setSegments(segs);
-        setOriginalSegments(JSON.parse(JSON.stringify(segs)));
-        setHistory([segs]);
-        setHistoryIndex(0);
-        setComplianceScore(data.compliance_score || 100.0);
-        setTotalErrors(data.total_errors || 0);
-        setTotalWarnings(data.total_warnings || 0);
-        if (segs.length > 0) {
-          setActiveSegmentId(segs[0].segment_id);
-        }
-        stopProgressSimulation(true);
+      if (start.ok && start.data?.job_id) {
+        setProgressStepCount(0);
+        data = await pollTranscribeJob(start.data.job_id);
+        finishProgress(true);
+      } else if (start.status === 404 || start.status === 405) {
+        // Older backend without the job API: the blocking endpoint, with an estimated wait
+        console.warn('[transcribe] /api/transcribe_async returned', start.status, '- falling back to the old blocking endpoint (no real-time progress). The backend is not running the new code.');
+        beginUploadProgress();
+        const res = await xhrPostForm(`${API_BASE}/api/transcribe`, build(localWav || selectedFile), {
+          onProgress: onUploadProgress,
+          onSent: () => { serverStartedAt = beginServerProgress(audioSeconds); },
+        });
+        if (!res.ok) throw new Error(res.data?.detail || res.text || 'Failed to process audio');
+        data = res.data || {};
+        finishProgress(true, serverStartedAt, audioSeconds);
       } else {
-        stopProgressSimulation(false);
-        let errorMsg = 'Failed to process audio';
-        try {
-          const errData = await res.json();
-          errorMsg = errData.detail || errorMsg;
-        } catch (e) {
-          try {
-            const errText = await res.text();
-            if (errText) errorMsg = errText;
-          } catch (textErr) {}
-        }
-        alert(`Transcription error: ${errorMsg}`);
+        throw new Error(start.data?.detail || start.text || 'Failed to start transcription');
       }
+      applyTranscriptionResult(data);
     } catch (err) {
-      stopProgressSimulation(false);
+      finishProgress(false);
       console.error("Transcribe failed:", err);
-      alert(`Transcription request failed: ${err.message || err}`);
+      alert(`Transcription error: ${err.message || err}`);
     } finally {
       setIsTranscribing(false);
     }
@@ -1367,6 +1425,10 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
         isExtractingAudio={isExtractingAudio}
         extractionNotice={extractionNotice}
         progressPercent={progressPercent}
+        progressEstimated={progressEstimated}
+        progressStepCount={progressStepCount}
+        detectedLanguage={transcriptionResult?.language || ''}
+        progressMeta={progressMeta}
         progressStage={progressStage}
         progressDetail={progressDetail}
         progressStepIndex={progressStepIndex}
@@ -1402,6 +1464,7 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
         activeSegmentId={activeSegmentId}
         setActiveSegmentId={setActiveSegmentId}
         onPlaySegment={(start, end) => setPlayTargetTime({ time: start, endTime: end, loop: true, ts: Date.now() })}
+        onPlayOnce={(start, end) => setPlayTargetTime({ time: start, endTime: end, loop: false, ts: Date.now() })}
         onStopSegment={(start) => setPlayTargetTime({ time: start, endTime: start, loop: false, pause: true, ts: Date.now() })}
         onSplit={handleSplitSegmentAtTime}
         onMerge={handleMergeSegmentWithNext}

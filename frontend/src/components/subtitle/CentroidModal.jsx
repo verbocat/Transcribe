@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import {
   X, Languages, ShieldCheck, Download, Check, AlertTriangle, Wand2, Loader2, ChevronDown,
   ChevronRight, Package, FileInput, ArrowLeftRight, BadgeCheck, Eye, EyeOff, Crosshair, Plus, Pencil, Sparkles,
@@ -25,11 +26,6 @@ const ENGLISH_USAGE = [
   { value: 'pure', label: 'Pure target language' },
   { value: 'heavy', label: 'Heavy English mix' },
 ];
-const ADDRESS_FORMS = [
-  { value: 'by_character', label: 'Per character (use the character list)' },
-  { value: 'informal', label: 'Informal “you” (tum / tu)' },
-  { value: 'polite', label: 'Polite “you” (aap)' },
-];
 const PROFANITY = [
   { value: 'keep', label: 'Keep as in the source' },
   { value: 'soften', label: 'Soften' },
@@ -42,19 +38,6 @@ const AUDIENCE_AGES = [
   { value: 'teens', label: 'Teenagers' },
   { value: 'adults', label: 'Adults' },
   { value: 'everyone', label: 'Everyone / family' },
-];
-const HUMOUR = [
-  { value: 'adapt', label: 'Adapt jokes so they are funny in the target language' },
-  { value: 'literal', label: 'Translate jokes faithfully' },
-];
-const CULTURE = [
-  { value: 'localise', label: 'Localise references (food, festivals, idioms)' },
-  { value: 'keep', label: 'Keep the original references' },
-];
-const BREVITY = [
-  { value: 'balanced', label: 'Balanced' },
-  { value: 'short', label: 'Short and quick to read' },
-  { value: 'full', label: 'Complete and faithful' },
 ];
 const NUMBERS = [
   { value: 'guide', label: '1 to 10 in words, 11+ as digits' },
@@ -69,8 +52,8 @@ const GENDERS = [
 ];
 const EMPTY_CTX = {
   title: '', content_type: '', genre: '', audience: '', setting: '',
-  tone: 'Natural everyday conversation', english_usage: 'natural', address_form: 'by_character', profanity: 'keep',
-  audience_age: '', dialect: '', humour: 'adapt', culture: 'localise', brevity: 'balanced', numbers: 'guide',
+  tone: 'Natural everyday conversation', english_usage: 'natural', profanity: 'keep',
+  audience_age: '', numbers: 'guide',
   synopsis: '', scene_notes: '', series_notes: '', style_examples: '', characters: [], dos: '', donts: '', notes: '', strict: true,
 };
 const TYPE_FROM_ANALYSIS = {
@@ -191,11 +174,10 @@ const Notice = ({ tone = 'danger', children }) => {
  */
 export default function CentroidModal({
   isOpen, onClose, events = [], glossaryTerms = [], cplLimit = 42, maxLines = 2, cpsLimit = 20,
-  fileName = 'subtitles', defaultSourceLang = 'en', startTab = 'translate', startTabNonce = 0,
+  fileName = 'subtitles', defaultSourceLang = 'en', qcHost = null, onOpenQc, onOpenTranslate,
   activeLang = null, trackLangs = [],
-  onTranslated, onShowTrack, onUpdateEvent, onJumpToEvent, onStateChange,
+  onTranslated, onShowTrack, onApplyTextFixes, onJumpToEvent, onStateChange,
 }) {
-  const [tab, setTab] = useState('translate');
   const [status, setStatus] = useState(null);
 
   // ---- translate inputs ----
@@ -233,12 +215,14 @@ export default function CentroidModal({
   const [qcTarget, setQcTarget] = useState(''); // 'editor' | lang code
   const [qcBusy, setQcBusy] = useState(false);
   const [qc, setQc] = useState(null); // {summary, issues, target}
-    const [qcError, setQcError] = useState('');
+  const [qcError, setQcError] = useState('');
+  const [qcNote, setQcNote] = useState('');
+  const [showResolved, setShowResolved] = useState(false);
 
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen && !qcHost) return;
     fetch(`${API_BASE}/api/centroid/status`).then((r) => r.json()).then(setStatus).catch(() => setStatus({ configured: false, reachable: false, error: 'Backend unreachable' }));
-  }, [isOpen]);
+  }, [isOpen, Boolean(qcHost)]);
 
   useEffect(() => { setLimits((l) => ({ ...l, max_cpl: cplLimit, max_lines: maxLines, max_cps: cpsLimit })); }, [cplLimit, maxLines, cpsLimit]);
   useEffect(() => { writeStore('centroid_src_v2', sourceLang); writeStore('centroid_tgt_v2', targetLang); }, [sourceLang, targetLang]);
@@ -265,9 +249,6 @@ export default function CentroidModal({
     if (sourceLang === targetLang) setTargetLang(sourceLang === 'en' ? 'hi' : 'en');
   }, [sourceLang, targetLang]);
 
-  // The rail asks for a specific tab ("Translate" vs "Centroid QC")
-  useEffect(() => { if (isOpen) setTab(startTab); }, [startTab, startTabNonce, isOpen]);
-
   useEffect(() => {
     if (!busy) return undefined;
     const t0 = Date.now();
@@ -277,7 +258,7 @@ export default function CentroidModal({
 
   const resultLangs = Object.keys(results);
   const hasResults = resultLangs.length > 0;
-  useEffect(() => { onStateChange?.({ hasResults, qcIssues: qc ? qc.issues.length : null }); }, [hasResults, qc, onStateChange]);
+  useEffect(() => { onStateChange?.({ hasResults, qcIssues: qc ? qc.issues.filter((i) => i.status === 'open').length : null }); }, [hasResults, qc, onStateChange]);
 
   const sourceCues = useMemo(() => {
     const raw = sourceMode === 'upload' ? uploaded.cues : events;
@@ -289,6 +270,7 @@ export default function CentroidModal({
   const buildContext = () => {
     const out = {};
     Object.entries(ctx).forEach(([k, v]) => {
+      if (!(k in EMPTY_CTX)) return; // options removed from the form may still sit in older saved drafts
       if (k === 'characters') {
         const rows = (v || []).filter((c) => (c.name || '').trim());
         if (rows.length) out.characters = rows;
@@ -400,7 +382,8 @@ export default function CentroidModal({
 
   const runQcFor = useCallback(async (code, res, snap) => {
     setQcError('');
-    setTab('qc');
+    setQcNote('');
+    onOpenQc?.();
     setQcTarget(code);
     setQc(null);
     const { pairs, error: pe } = pairsFor(code, res, snap);
@@ -412,7 +395,7 @@ export default function CentroidModal({
         cues: pairs, source_lang: sourceLang, target_lang: lang,
         context: buildContext(), glossary: buildGlossary(), constraints: buildLimits(),
       });
-      setQc({ ...data, target: code, issues: (data.issues || []).map((i, n) => ({ ...i, key: `${i.index}-${i.category}-${n}` })) });
+      setQc({ ...data, target: code, issues: (data.issues || []).map((i, n) => ({ ...i, key: `${i.index}-${i.category}-${n}`, status: 'open' })) });
     } catch (e) {
       setQcError(e.message);
     } finally {
@@ -500,44 +483,188 @@ export default function CentroidModal({
   // ---- QC actions ----
   const qcPairs = useMemo(() => pairsFor(qcTarget, results, snapshot), [pairsFor, qcTarget, results, snapshot]);
 
-  const dropIssue = (key) => setQc((q) => (q ? { ...q, issues: q.issues.filter((i) => i.key !== key) } : q));
+  const setIssueStatus = (key, status) => setQc((q) => (q ? { ...q, issues: q.issues.map((i) => (i.key === key ? { ...i, status } : i)) } : q));
+  const dropIssue = (key) => setIssueStatus(key, 'dismissed');
 
-  const applyFix = useCallback((issue) => {
-    if (!issue.suggestion) return;
-    if (qc?.target === 'editor') {
-      const pair = qcPairs.pairs.find((p) => p.id === issue.index);
-      if (pair && onUpdateEvent) onUpdateEvent(pair.editorId, 'text', issue.suggestion);
-    } else {
+  /** Write the suggested text into the subtitles (and the language result), then mark the issues as fixed. */
+  const applyFixes = useCallback((issues) => {
+    if (!qc) return;
+    // One fix per cue: the first suggestion wins, the others were written against the old text
+    const byCue = new Map();
+    issues.filter((i) => i.suggestion && i.status === 'open').forEach((i) => { if (!byCue.has(i.index)) byCue.set(i.index, i); });
+    if (!byCue.size) return;
+    const chosen = [...byCue.values()];
+    const edits = chosen.map((i) => {
+      const pair = qcPairs.pairs.find((p) => p.id === i.index);
+      return { id: pair?.editorId, index: i.index, start: pair?.start ?? i.start, text: i.suggestion };
+    });
+    const applied = onApplyTextFixes ? onApplyTextFixes(qc.target, edits) : 0;
+    if (qc.target !== 'editor') {
+      // keep the result (and the SRT you can download) in step with the track
       setResults((prev) => {
         const r = prev[qc.target];
         if (!r) return prev;
-        const cues = r.cues.map((c) => (c.index === issue.index ? { ...c, target: issue.suggestion } : c));
+        const cues = r.cues.map((c, n) => { const e = edits.find((x) => x.index === (c.index ?? n + 1)); return e ? { ...c, target: e.text } : c; });
         return { ...prev, [qc.target]: { ...r, cues, srt: cuesToSrt(cues.map((c) => ({ ...c, text: c.target || c.source })), 'text') } };
       });
     }
-    // Other issues on the same cue were written against the old text.
-    setQc((q) => (q ? { ...q, issues: q.issues.filter((i) => i.key !== issue.key && !(i.index === issue.index && i.suggestion)) } : q));
-  }, [qc, qcPairs, onUpdateEvent]);
+    const doneKeys = new Set(chosen.map((i) => i.key));
+    setQc((q) => (q ? { ...q, issues: q.issues
+      .filter((i) => doneKeys.has(i.key) || !(byCue.has(i.index) && i.suggestion && i.status === 'open'))
+      .map((i) => (doneKeys.has(i.key) ? { ...i, status: 'fixed' } : i)) } : q));
+    const word = chosen.length === 1 ? 'fix' : 'fixes';
+    setQcNote(applied > 0 || qc.target !== 'editor'
+      ? `Applied ${chosen.length} ${word}. The subtitle text is updated${applied ? ' in the editor' : ''}. Ctrl+Z undoes it in the editor.`
+      : `Could not find these subtitles in the editor. Open the ${langName(qc.target)} track and try again.`);
+  }, [qc, qcPairs, onApplyTextFixes]);
 
-  const applyAll = () => {
-    const seen = new Set();
-    (qc?.issues || []).filter((i) => i.suggestion).forEach((i) => {
-      if (seen.has(i.index)) return;
-      seen.add(i.index);
-      applyFix(i);
-    });
+  const openIssues = (qc?.issues || []).filter((i) => i.status === 'open');
+  const fixedIssues = (qc?.issues || []).filter((i) => i.status === 'fixed');
+  const fixable = openIssues.filter((i) => i.suggestion).length;
+  const applyAll = () => applyFixes(openIssues);
+  const issueGroups = [
+    { key: 'error', title: 'Errors', tone: 'danger', items: openIssues.filter((i) => i.severity === 'error').sort((x, y) => x.index - y.index) },
+    { key: 'warning', title: 'Warnings', tone: 'warn', items: openIssues.filter((i) => i.severity !== 'error').sort((x, y) => x.index - y.index) },
+  ].filter((g) => g.items.length);
+  const jumpIdFor = (i) => {
+    const pair = qcPairs.pairs.find((p) => p.id === i.index);
+    if (qc?.target === 'editor') return pair?.editorId ?? null;
+    if (activeLang && qc?.target === activeLang) { const e = events[i.index - 1]; return e ? (e.id ?? e.event_id) : null; }
+    return null;
   };
 
-  const shownIssues = qc?.issues || [];
-  const fixable = (qc?.issues || []).filter((i) => i.suggestion).length;
-
-  if (!isOpen) return null;
-
   const notReady = status && (!status.configured || !status.reachable);
+  const qcBody = (
+ <div className="flex-1 min-h-0 overflow-y-auto space-y-4 pr-0.5" data-lenis-prevent>
+    {notReady && (
+      <Notice tone="warn">
+        {!status.configured ? 'Centroid is not connected. Add CENTROID_API_URL and CENTROID_API_KEY to backend/.env and restart the backend.' : `Centroid could not be reached${status.error ? ` (${status.error})` : ''}. Check CENTROID_API_URL and the API key.`}
+      </Notice>
+    )}
+    {!hasResults && !snapshot.length && (
+      <Notice>Translate your subtitles first, then check the translation here.{onOpenTranslate && <> <button type="button" onClick={onOpenTranslate} className="underline cursor-pointer">Open Translate</button></>}</Notice>
+    )}
+      <>
+        <section className="flex flex-wrap items-end gap-3">
+          <Field label="Checking" className="flex-1 min-w-[200px]">
+            <Select
+              label="Translation to check"
+              value={qcTarget}
+              onChange={(v) => { setQcTarget(v); setQc(null); setQcError(''); }}
+              className="w-full"
+              options={[
+                ...(qcTarget ? [] : [{ value: '', label: 'Choose…' }]),
+                ...resultLangs.map((c) => ({ value: c, label: `${langName(sourceLang)} → ${langName(c)}` })),
+                ...(snapshot.length ? [{ value: 'editor', label: 'Current editor subtitles' }] : []),
+              ]}
+            />
+          </Field>
+          <Button variant="primary" size="lg" icon={qcBusy ? Loader2 : ShieldCheck} disabled={qcBusy || !qcTarget || notReady} onClick={() => runQcFor(qcTarget, results, snapshot)}>
+            {qcBusy ? 'Checking…' : qc ? 'Run again' : 'Run Centroid QC'}
+          </Button>
+        </section>
+
+        {qcBusy && <Notice tone="good"><span className="inline-flex items-center gap-2"><Loader2 size={13} className="animate-spin" /> Centroid is reviewing every cue against its source. This can take a minute.</span></Notice>}
+        {qcError && <Notice>{qcError}</Notice>}
+
+        {qc && (
+          <>
+            <div className="grid grid-cols-4 gap-2">
+              <Stat label="MQM score" value={qc.summary.mqm_score} tone={qc.summary.mqm_score >= 95 ? 'good' : qc.summary.mqm_score >= 85 ? 'warn' : 'bad'} />
+              <Stat label="Errors" value={qc.summary.error_count} tone={qc.summary.error_count ? 'bad' : 'good'} />
+              <Stat label="Warnings" value={qc.summary.warning_count} tone={qc.summary.warning_count ? 'warn' : 'good'} />
+              <Stat label="Clean cues" value={`${qc.summary.clean_percentage}%`} tone="good" />
+            </div>
+            {qc.centroid_error && <Notice tone="warn">Centroid’s AI review could not run this time, so only the built-in rule checks are shown. Run QC again to retry.</Notice>}
+            {!qc.summary.ai_checked && !qc.centroid_error && <Notice tone="warn">The AI review didn’t complete for part of the file, so only rule-based checks are shown for it. Run QC again to retry.</Notice>}
+
+            {qcNote && <Notice tone="good">{qcNote}</Notice>}
+
+            <div className="flex items-center gap-2">
+              <span className="text-[12px] text-[var(--ss-muted)]">{openIssues.length} to review{fixedIssues.length ? ` · ${fixedIssues.length} fixed` : ''}</span>
+              <span className="flex-1" />
+              {fixable > 0 && <Button variant="primary" icon={Wand2} onClick={applyAll}>Apply all {fixable} fixes</Button>}
+            </div>
+
+            {openIssues.length === 0 && <Notice tone="good">{fixedIssues.length ? 'All issues are fixed. Run QC again to confirm.' : 'No issues found. The translation passed Centroid QC.'}</Notice>}
+
+            {issueGroups.map((g) => (
+              <section key={g.key} className="space-y-2.5">
+                <h4 className="flex items-center gap-2 text-[12px] font-semibold text-[var(--ss-text)]">
+                  <Badge tone={g.tone}>{g.items.length}</Badge>{g.title}
+                </h4>
+                {g.items.map((i) => {
+                  const jumpId = jumpIdFor(i);
+                  return (
+                    <article key={i.key} className="rounded-xl border border-[var(--ss-line)] bg-[var(--ss-raised)]/50 p-3 text-[12.5px] space-y-2">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-mono text-[11.5px] text-[var(--ss-faint)]">#{i.index} · {fmtTime(i.start)}</span>
+                        <Badge tone={i.severity === 'error' ? 'danger' : 'warn'}>{i.mqm_severity}</Badge>
+                        <span className="font-medium">{i.title}</span>
+                        {i.category && <Badge tone="muted">{String(i.category).replace(/-/g, ' ')}</Badge>}
+                        <span className="text-[11px] text-[var(--ss-faint)]">{i.origin === 'ai' ? 'AI review' : 'Rule check'}</span>
+                        {jumpId != null && onJumpToEvent && (
+                          <IconButton size="sm" icon={Crosshair} label="Show this subtitle in the editor" className="ml-auto" onClick={() => onJumpToEvent(jumpId)} />
+                        )}
+                      </div>
+                      <p className="text-[var(--ss-muted)] leading-snug">{i.description}</p>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div><div className="text-[11px] text-[var(--ss-faint)]">Source</div><div className="whitespace-pre-wrap">{i.source}</div></div>
+                        <div><div className="text-[11px] text-[var(--ss-faint)]">Current</div><div className="whitespace-pre-wrap text-[var(--ss-danger)]">{i.target || '(empty)'}</div></div>
+                      </div>
+                      {i.suggestion && (
+                        <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 px-2.5 py-2">
+                          <div className="text-[11px] text-emerald-400">Suggested fix</div>
+                          <div className="whitespace-pre-wrap text-emerald-100">{i.suggestion}</div>
+                        </div>
+                      )}
+                      <div className="flex gap-2">
+                        {i.suggestion && <Button size="sm" variant="primary" icon={Check} onClick={() => applyFixes([i])}>Apply fix</Button>}
+                        <Button size="sm" variant="ghost" onClick={() => dropIssue(i.key)}>Dismiss</Button>
+                      </div>
+                    </article>
+                  );
+                })}
+              </section>
+            ))}
+
+            {fixedIssues.length > 0 && (
+              <section className="rounded-xl border border-emerald-500/25 bg-emerald-500/5">
+                <button type="button" aria-expanded={showResolved} onClick={() => setShowResolved((v) => !v)} className="w-full h-9 px-3 flex items-center gap-2 text-[12px] text-emerald-300 cursor-pointer">
+                  {showResolved ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                  <Check size={13} /> Fixed ({fixedIssues.length})
+                </button>
+                {showResolved && (
+                  <ul className="px-3 pb-2 space-y-1.5 text-[12px]">
+                    {fixedIssues.map((i) => (
+                      <li key={i.key}><span className="font-mono text-[11px] text-[var(--ss-faint)]">#{i.index}</span> <span className="whitespace-pre-wrap text-emerald-100">{i.suggestion}</span></li>
+                    ))}
+                  </ul>
+                )}
+              </section>
+            )}
+
+            {qc.target !== 'editor' && results[qc.target] && (
+              <div className="flex gap-2 pt-1">
+                <Button icon={Download} onClick={() => downloadLang(qc.target)}>Download corrected SRT</Button>
+                <Button icon={Pencil} onClick={() => openInEditor(qc.target)} disabled={activeLang === qc.target}>{activeLang === qc.target ? 'Showing in editor' : 'Show in editor'}</Button>
+              </div>
+            )}
+          </>
+        )}
+      </>
+ </div>
+  );
+
+  const qcPortal = qcHost ? createPortal(qcBody, qcHost) : null;
+  if (!isOpen) return qcPortal;
+
   const editorCount = events.filter((e) => (e.text || '').trim()).length;
   const targetNames = targets.map(langName).join(', ');
 
   return (
+    <>
+    {qcPortal}
     <aside
       role="dialog"
       aria-label="Translate with Centroid"
@@ -555,21 +682,6 @@ export default function CentroidModal({
         <IconButton icon={X} label="Close (Esc)" onClick={onClose} />
       </header>
 
-      {/* steps: QC only appears once there is something to check */}
-      {hasResults && (
-      <div className="shrink-0 px-5 pt-3">
-        <Segmented
-          label="Step"
-          value={tab}
-          onChange={setTab}
-          options={[
-            { value: 'translate', label: '1  Translate', icon: Languages },
-            { value: 'qc', label: qc ? `2  Centroid QC · ${qc.issues.length}` : '2  Centroid QC', icon: BadgeCheck },
-          ]}
-        />
-      </div>
-      )}
-
       {notReady && (
         <div className="shrink-0 mx-5 mt-3">
           <Notice tone="warn">
@@ -583,7 +695,7 @@ export default function CentroidModal({
       )}
 
       <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4 space-y-4" data-lenis-prevent>
-        {tab === 'translate' && (
+        {(
           <>
             {/* source */}
             <section>
@@ -661,12 +773,7 @@ export default function CentroidModal({
               <SubGroup title="How it should sound" hint={ctx.tone || 'Not set'} defaultOpen>
                 <div className="grid grid-cols-2 gap-3">
                   <Field label="Tone / register" className="col-span-2"><Select label="Tone" value={ctx.tone} onChange={(v) => patchCtx('tone', v)} options={[{ value: '', label: 'Not specified' }, ...TONES.map((t) => ({ value: t, label: t }))]} className="w-full" /></Field>
-                  <Field label="Language variety (optional)" className="col-span-2"><TextInput value={ctx.dialect} onChange={(e) => patchCtx('dialect', e.target.value)} placeholder="e.g. everyday Mumbai Hindi, standard Hindi, Hinglish" /></Field>
                   <Field label="English words"><Select label="English words" value={ctx.english_usage} onChange={(v) => patchCtx('english_usage', v)} options={ENGLISH_USAGE} className="w-full" /></Field>
-                  <Field label="Forms of address"><Select label="Forms of address" value={ctx.address_form} onChange={(v) => patchCtx('address_form', v)} options={ADDRESS_FORMS} className="w-full" /></Field>
-                  <Field label="Humour and wordplay"><Select label="Humour" value={ctx.humour} onChange={(v) => patchCtx('humour', v)} options={HUMOUR} className="w-full" /></Field>
-                  <Field label="Cultural references"><Select label="Cultural references" value={ctx.culture} onChange={(v) => patchCtx('culture', v)} options={CULTURE} className="w-full" /></Field>
-                  <Field label="Length"><Select label="Length" value={ctx.brevity} onChange={(v) => patchCtx('brevity', v)} options={BREVITY} className="w-full" /></Field>
                   <Field label="Numbers"><Select label="Numbers" value={ctx.numbers} onChange={(v) => patchCtx('numbers', v)} options={NUMBERS} className="w-full" /></Field>
                   <Field label="Profanity" className="col-span-2"><Select label="Profanity" value={ctx.profanity} onChange={(v) => patchCtx('profanity', v)} options={PROFANITY} className="w-full" /></Field>
                 </div>
@@ -808,96 +915,10 @@ export default function CentroidModal({
           </>
         )}
 
-        {tab === 'qc' && (
-          <>
-            <section className="flex flex-wrap items-end gap-3">
-              <Field label="Checking" className="flex-1 min-w-[200px]">
-                <Select
-                  label="Translation to check"
-                  value={qcTarget}
-                  onChange={(v) => { setQcTarget(v); setQc(null); setQcError(''); }}
-                  className="w-full"
-                  options={[
-                    ...(qcTarget ? [] : [{ value: '', label: 'Choose…' }]),
-                    ...resultLangs.map((c) => ({ value: c, label: `${langName(sourceLang)} → ${langName(c)}` })),
-                    ...(snapshot.length ? [{ value: 'editor', label: 'Current editor subtitles' }] : []),
-                  ]}
-                />
-              </Field>
-              <Button variant="primary" size="lg" icon={qcBusy ? Loader2 : ShieldCheck} disabled={qcBusy || !qcTarget || notReady} onClick={() => runQcFor(qcTarget, results, snapshot)}>
-                {qcBusy ? 'Checking…' : qc ? 'Run again' : 'Run Centroid QC'}
-              </Button>
-            </section>
-
-            {qcBusy && <Notice tone="good"><span className="inline-flex items-center gap-2"><Loader2 size={13} className="animate-spin" /> Centroid is reviewing every cue against its source. This can take a minute.</span></Notice>}
-            {qcError && <Notice>{qcError}</Notice>}
-
-            {qc && (
-              <>
-                <div className="grid grid-cols-4 gap-2">
-                  <Stat label="MQM score" value={qc.summary.mqm_score} tone={qc.summary.mqm_score >= 95 ? 'good' : qc.summary.mqm_score >= 85 ? 'warn' : 'bad'} />
-                  <Stat label="Errors" value={qc.summary.error_count} tone={qc.summary.error_count ? 'bad' : 'good'} />
-                  <Stat label="Warnings" value={qc.summary.warning_count} tone={qc.summary.warning_count ? 'warn' : 'good'} />
-                  <Stat label="Clean cues" value={`${qc.summary.clean_percentage}%`} tone="good" />
-                </div>
-                {!qc.summary.ai_checked && <Notice tone="warn">The AI review didn’t complete for part of the file, so only rule-based checks are shown for it. Run QC again to retry.</Notice>}
-
-                <div className="flex items-center gap-2">
-                  <span className="text-[12px] text-[var(--ss-muted)]">{qc.issues.length} translation {qc.issues.length === 1 ? 'issue' : 'issues'}</span>
-                  <span className="flex-1" />
-                  {fixable > 0 && <Button variant="primary" icon={Wand2} onClick={applyAll}>Apply all {fixable} fixes</Button>}
-                </div>
-
-                {qc.issues.length === 0 && <Notice tone="good">No issues left. The translation passed Centroid QC.</Notice>}
-
-                <div className="space-y-2.5">
-                  {shownIssues.map((i) => {
-                    const pair = qc.target === 'editor' ? qcPairs.pairs.find((p) => p.id === i.index) : null;
-                    return (
-                      <article key={i.key} className="rounded-xl border border-[var(--ss-line)] bg-[var(--ss-raised)]/50 p-3 text-[12.5px] space-y-2">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-mono text-[11.5px] text-[var(--ss-faint)]">#{i.index} · {fmtTime(i.start)}</span>
-                          <Badge tone={i.severity === 'error' ? 'danger' : 'warn'}>{i.mqm_severity}</Badge>
-                          <span className="font-medium">{i.title}</span>
-                          {i.origin === 'ai' && <span className="text-[11px] text-[var(--ss-faint)]">AI review</span>}
-                          {pair && onJumpToEvent && (
-                            <IconButton size="sm" icon={Crosshair} label="Show this subtitle in the editor" className="ml-auto" onClick={() => onJumpToEvent(pair.editorId)} />
-                          )}
-                        </div>
-                        <p className="text-[var(--ss-muted)] leading-snug">{i.description}</p>
-                        <div className="grid grid-cols-2 gap-2">
-                          <div><div className="text-[11px] text-[var(--ss-faint)]">Source</div><div className="whitespace-pre-wrap">{i.source}</div></div>
-                          <div><div className="text-[11px] text-[var(--ss-faint)]">Current</div><div className="whitespace-pre-wrap text-[var(--ss-danger)]">{i.target || '(empty)'}</div></div>
-                        </div>
-                        {i.suggestion && (
-                          <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 px-2.5 py-2">
-                            <div className="text-[11px] text-emerald-400">Suggested fix</div>
-                            <div className="whitespace-pre-wrap text-emerald-100">{i.suggestion}</div>
-                          </div>
-                        )}
-                        <div className="flex gap-2">
-                          {i.suggestion && <Button size="sm" variant="primary" icon={Check} onClick={() => applyFix(i)}>Apply fix</Button>}
-                          <Button size="sm" variant="ghost" onClick={() => dropIssue(i.key)}>Dismiss</Button>
-                        </div>
-                      </article>
-                    );
-                  })}
-                </div>
-
-                {qc.target !== 'editor' && results[qc.target] && (
-                  <div className="flex gap-2 pt-1">
-                    <Button icon={Download} onClick={() => downloadLang(qc.target)}>Download corrected SRT</Button>
-                    <Button icon={Pencil} onClick={() => openInEditor(qc.target)} disabled={activeLang === qc.target}>{activeLang === qc.target ? 'Showing in editor' : 'Show in editor'}</Button>
-                  </div>
-                )}
-              </>
-            )}
-          </>
-        )}
       </div>
 
       {/* sticky primary action */}
-      {tab === 'translate' && (
+      {(
         <footer className="shrink-0 px-5 py-3 border-t border-[var(--ss-line)]">
           <Button variant="primary" size="lg" className="w-full" icon={busy ? Loader2 : Languages} disabled={busy || notReady || !sourceCues.length} onClick={runTranslate}>
             {busy
@@ -908,5 +929,6 @@ export default function CentroidModal({
         </footer>
       )}
     </aside>
+    </>
   );
 }

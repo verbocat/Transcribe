@@ -1,5 +1,5 @@
 import React, { forwardRef } from 'react';
-import { RotateCcw, X } from 'lucide-react';
+import { Loader2, RotateCcw, X } from 'lucide-react';
 
 /**
  * Subtitle Studio UI kit. One set of buttons and form controls so every surface
@@ -29,7 +29,7 @@ export const Button = forwardRef(function Button(
 ) {
   return (
     <button ref={ref} type={type} className={cx(BTN_BASE, BTN_SIZE[size], BTN_VARIANT[variant], className)} {...rest}>
-      {Icon && <Icon size={size === 'sm' ? 12 : 14} className="shrink-0" />}
+      {Icon && <Icon size={size === 'sm' ? 12 : 14} className={cx('shrink-0', Icon === Loader2 && 'animate-spin')} />}
       {children}
     </button>
   );

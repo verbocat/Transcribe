@@ -34,6 +34,9 @@ GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
 # Transcription runs fully offline (local models + CMU phonetics) unless this is switched on.
 # When on, Gemini adds extra gender votes and handles words the offline phonetics do not know.
 GEMINI_ASSIST = os.getenv("GEMINI_ASSIST", "false").strip().lower() in ("1", "true", "yes", "on")
+# Text-only Gemini pass that fixes speaker labels from the conversation (merged people, wrong short replies).
+# Costs one cheap call per ~120 lines, so it is off in the pipeline by default; the Speakers panel can run it on demand.
+SPEAKER_AI_REVIEW = os.getenv("SPEAKER_AI_REVIEW", "false").strip().lower() in ("1", "true", "yes", "on")
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 DEFAULT_LANGUAGE = os.getenv("DEFAULT_LANGUAGE", "English")
 DEFAULT_SCRIPT = os.getenv("DEFAULT_SCRIPT", "Latin")

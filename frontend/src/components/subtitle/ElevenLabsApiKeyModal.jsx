@@ -27,7 +27,7 @@ export default function ElevenLabsApiKeyModal({
     e.preventDefault();
     const cleanKey = apiKey.trim();
     if (!cleanKey) {
-      setValidationError('Please enter a valid ElevenLabs API Key.');
+      setValidationError('Please enter a valid API key.');
       return;
     }
 
@@ -52,9 +52,9 @@ export default function ElevenLabsApiKeyModal({
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h3 className="text-base font-bold text-white tracking-tight">ElevenLabs API Key Required</h3>
+                <h3 className="text-base font-bold text-white tracking-tight">Speech Engine API Key Required</h3>
                 <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-[var(--ss-accent)]/20 text-[var(--ss-accent)] border border-[var(--ss-accent)]/40 font-semibold">
-                  Scribe v2
+                  Speech-to-text
                 </span>
               </div>
               <p className="text-xs text-slate-400 mt-0.5">
@@ -78,20 +78,20 @@ export default function ElevenLabsApiKeyModal({
             <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-start gap-2.5">
               <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
               <div>
-                <span className="font-semibold block">ElevenLabs Transcription Error:</span>
+                <span className="font-semibold block">Transcription Error:</span>
                 <span className="text-rose-200/90">{errorMessage}</span>
               </div>
             </div>
           )}
 
           <div className="text-xs text-slate-300 leading-relaxed">
-            The studio uses <span className="text-[var(--ss-accent)] font-semibold">ElevenLabs Scribe v2</span> for word-level acoustic synchronization and diarization across 90+ languages, without batch chunking or Whisper.
+            The studio uses <span className="text-[var(--ss-accent)] font-semibold">speech-to-text engine</span> for word-level acoustic synchronization and diarization across 90+ languages, without batch chunking or Whisper.
           </div>
 
           {/* API Key Input */}
           <div className="space-y-1.5">
             <div className="flex items-center justify-between text-xs">
-              <label className="font-semibold text-slate-200">ElevenLabs API Key</label>
+              <label className="font-semibold text-slate-200">API Key</label>
               <a
                 href="https://elevenlabs.io/app/settings/api-keys"
                 target="_blank"

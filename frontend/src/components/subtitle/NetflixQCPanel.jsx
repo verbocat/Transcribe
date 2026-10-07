@@ -1,8 +1,9 @@
 import React, { useMemo, useState } from 'react';
+import { isQcFixable } from './subtitleTools';
 import { 
   ShieldCheck, Download, AlertCircle, AlertTriangle, CheckCircle2, 
   Clock, Type, Users, Video, ChevronDown, ChevronUp, Activity, Wand2, BookOpen,
-  Sparkles, Layers, X, Volume2
+  Sparkles, Layers, X, Volume2, Check, Crosshair, Loader2
 } from 'lucide-react';
 
 export default function NetflixQCPanel({
@@ -16,6 +17,7 @@ export default function NetflixQCPanel({
   cplLimit = 42,
   cpsLimit = 20,
   onAutoFix = () => {},
+  onApplyFixes = null,
   onGeminiFix = null,
   isFixingWithGemini = false,
   onAcousticSync = null,
@@ -29,78 +31,63 @@ export default function NetflixQCPanel({
   const isPassing = complianceScore >= 98;
   const isAmber = complianceScore >= 80 && complianceScore < 98;
 
-  const [expandedCategories, setExpandedCategories] = useState({
-    Timing: true,
-    'Reading Speed': true,
-    Formatting: true,
-    Speaker: true,
-    Content: false
-  });
-
-  const toggleCategory = (cat) => {
-    setExpandedCategories(prev => ({ ...prev, [cat]: !prev[cat] }));
-  };
+  // key -> { message } for issues fixed from this list, and key -> text for ones that could not be
+  const [fixed, setFixed] = useState({});
+  const [failed, setFailed] = useState({});
+  const [busyKeys, setBusyKeys] = useState({});
+  const [showFixed, setShowFixed] = useState(false);
 
   const [showGuidelines, setShowGuidelines] = useState(false);
 
-  // Group errors by category
-  const errorGroups = useMemo(() => {
-    const groups = {
-      Timing: [],
-      'Reading Speed': [],
-      Formatting: [],
-      Speaker: [],
-      Content: []
-    };
-
-    events.forEach(event => {
+  // Flat issue list, errors first, then in subtitle order
+  const issues = useMemo(() => {
+    const out = [];
+    events.forEach((event) => {
       const errList = event.qc_errors || event.errors || [];
       const eventId = event.id ?? event.event_id;
       const start = event.start_time ?? event.start ?? 0;
-
-      errList.forEach(err => {
+      errList.forEach((err) => {
         const ruleId = (err.rule_id || err.error_type || '').toUpperCase();
         const msg = (err.message || '').toLowerCase();
-        
-        // Skip pyramid errors
-        if (ruleId.includes('PYRAMID') || msg.includes('pyramid') || msg.includes('bottom-heavy')) {
-          return;
-        }
-
-        let cat = 'Content';
-        let sev = err.severity || 'error';
-        
-        if (ruleId.includes('CPS') || ruleId.includes('SPEED') || msg.includes('cps')) {
-          cat = 'Reading Speed';
-          sev = 'warning'; // CPS is warning/yellow
-        } else if (ruleId.includes('DURATION') || ruleId.includes('GAP') || ruleId.includes('OVERLAP') || ruleId.includes('SHOT') || ruleId.includes('TIME')) {
-          cat = 'Timing';
-        } else if (ruleId.includes('CPL') || ruleId.includes('LINE') || ruleId.includes('BREAK') || ruleId.includes('ORPHAN') || ruleId.includes('ELLIPSIS')) {
-          cat = 'Formatting';
-        } else if (ruleId.includes('SPEAKER') || ruleId.includes('DUAL') || ruleId.includes('GENDER')) {
-          cat = 'Speaker';
-        }
-
-        groups[cat].push({
-          eventId: eventId,
+        if (ruleId.includes('PYRAMID') || msg.includes('pyramid') || msg.includes('bottom-heavy')) return;
+        const isCps = ruleId.includes('CPS') || ruleId.includes('SPEED') || msg.includes('cps');
+        out.push({
+          key: `${eventId}|${ruleId}|${err.message}`,
+          eventId,
           ruleId: err.rule_id || err.error_type || 'QC',
           message: err.message,
-          severity: sev,
+          severity: isCps ? 'warning' : (err.severity || 'error'),
           suggestedFix: err.suggested_fix,
-          time: start
+          time: start,
+          fixable: isQcFixable(ruleId) && !!onApplyFixes,
         });
       });
     });
+    return out.sort((a, b) => (a.severity === 'error' ? 0 : 1) - (b.severity === 'error' ? 0 : 1) || a.time - b.time);
+  }, [events, onApplyFixes]);
 
-    return groups;
-  }, [events]);
+  const openIssues = issues.filter((i) => !(i.key in fixed));
+  const groups = [
+    { key: 'error', title: 'Errors', tone: 'rose', items: openIssues.filter((i) => i.severity === 'error') },
+    { key: 'warning', title: 'Warnings', tone: 'amber', items: openIssues.filter((i) => i.severity !== 'error') },
+  ].filter((g) => g.items.length);
+  const fixableOpen = openIssues.filter((i) => i.fixable);
+  const fixedList = Object.entries(fixed);
+  const anyBusy = Object.keys(busyKeys).length > 0;
 
-  const categoryIcons = {
-    Timing: <Clock className="w-3.5 h-3.5" />,
-    'Reading Speed': <Activity className="w-3.5 h-3.5" />,
-    Formatting: <Type className="w-3.5 h-3.5" />,
-    Speaker: <Users className="w-3.5 h-3.5" />,
-    Content: <Video className="w-3.5 h-3.5" />
+  const runFixes = async (list) => {
+    if (!list.length || !onApplyFixes) return;
+    setBusyKeys((b) => ({ ...b, ...Object.fromEntries(list.map((i) => [i.key, true])) }));
+    setFailed((f) => { const n = { ...f }; list.forEach((i) => delete n[i.key]); return n; });
+    let results = [];
+    try {
+      results = await onApplyFixes(list.map((i) => ({ key: i.key, eventId: i.eventId, ruleId: i.ruleId })));
+    } catch (e) {
+      results = list.map((i) => ({ key: i.key, ok: false, message: 'The fix failed. Try again or edit the subtitle.' }));
+    }
+    setBusyKeys((b) => { const n = { ...b }; list.forEach((i) => delete n[i.key]); return n; });
+    setFixed((f) => ({ ...f, ...Object.fromEntries(results.filter((r) => r.ok).map((r) => [r.key, { message: r.message, issue: list.find((i) => i.key === r.key) }])) }));
+    setFailed((f) => ({ ...f, ...Object.fromEntries(results.filter((r) => !r.ok).map((r) => [r.key, r.message])) }));
   };
 
   const safeCpsStats = {
@@ -120,7 +107,7 @@ export default function NetflixQCPanel({
           <h3 className="font-semibold text-sm text-slate-200">Quality check</h3>
         </div>
         <div className="flex items-center gap-2">
-          <span className="text-[11px] text-slate-400">Netflix rules · target 98%</span>
+          <span className="text-[11px] text-slate-400">Guideline rules · target 98%</span>
           {onClose && (
             <button
               onClick={onClose}
@@ -198,7 +185,7 @@ export default function NetflixQCPanel({
           onClick={onAutoFix}
           disabled={!events.length || qcUnavailable}
           className="w-full py-2 px-3 bg-[var(--ss-accent)] hover:bg-[var(--ss-accent-hover)] disabled:opacity-40 disabled:cursor-not-allowed text-[var(--ss-accent-ink)] font-semibold rounded-md flex items-center justify-center gap-2 transition-colors text-xs cursor-pointer"
-          title="Fix timing, gaps, reading speed and line length using the Netflix rules (you review every change before it's kept)"
+          title="Fix timing, gaps, reading speed and line length using the guideline rules (you review every change before it's kept)"
         >
           <Wand2 className="w-4 h-4" />
           Auto-fix rule issues
@@ -221,10 +208,10 @@ export default function NetflixQCPanel({
                 onClick={onGeminiFix}
                 disabled={!events.length || isFixingWithGemini || qcUnavailable}
                 className="py-1.5 px-2 bg-[var(--ss-raised)] hover:bg-[var(--ss-hover)] disabled:opacity-40 disabled:cursor-not-allowed text-slate-200 font-medium rounded-md text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer border border-[var(--ss-line)]"
-                title="Ask Gemini AI to rewrite, split and re-time subtitles that break the rules (uses Gemini credits)"
+                title="Ask the AI to rewrite, split and re-time subtitles that break the rules (uses AI credits)"
               >
                 <Sparkles className={`w-3.5 h-3.5 ${isFixingWithGemini ? 'animate-spin' : ''}`} />
-                {isFixingWithGemini ? 'Fixing with Gemini…' : 'Fix with Gemini AI'}
+                {isFixingWithGemini ? 'Fixing with AI…' : 'Fix with AI'}
               </button>
             )}
             {onAcousticSync && (
@@ -276,67 +263,82 @@ export default function NetflixQCPanel({
       </div>
       )}
 
-      {/* Error Breakdown */}
-      <div className="flex-1 space-y-2">
-        <h4 className="text-[11px] font-bold text-slate-300 border-b border-[var(--ss-line)] pb-1 uppercase tracking-wider">
-          Issues by rule
-        </h4>
-        
-        {Object.entries(errorGroups).map(([category, catErrors]) => {
-          if (catErrors.length === 0) return null;
-          
-          const isExpanded = expandedCategories[category];
-          
-          return (
-            <div key={category} className="bg-[var(--ss-raised)] border border-[var(--ss-line)] rounded-none overflow-hidden shadow-xs">
-              <button 
-                onClick={() => toggleCategory(category)}
-                className="w-full flex items-center justify-between p-2 bg-[var(--ss-raised)] hover:bg-[var(--ss-hover)] transition-colors cursor-pointer"
+      {/* Issues: grouped by severity, each with a one-click fix */}
+      <div className="flex-1 space-y-3">
+        <div className="flex items-center gap-2 border-b border-[var(--ss-line)] pb-1.5">
+          <h4 className="text-[11px] font-bold text-slate-300 uppercase tracking-wider">
+            {openIssues.length ? `${openIssues.length} to review` : 'Issues'}
+          </h4>
+          <span className="flex-1" />
+          {fixableOpen.length > 0 && (
+            <button
+              onClick={() => runFixes(fixableOpen)}
+              disabled={anyBusy}
+              className="h-7 px-2.5 rounded-md bg-[var(--ss-accent)] hover:bg-[var(--ss-accent-hover)] text-[var(--ss-accent-ink)] text-[11px] font-semibold flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+              title="Apply every available one-click fix in one step. Ctrl+Z undoes it."
+            >
+              {anyBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Wand2 className="w-3.5 h-3.5" />}
+              Apply all {fixableOpen.length} fixes
+            </button>
+          )}
+        </div>
+
+        {groups.map((g) => (
+          <section key={g.key} className="space-y-1.5">
+            <h5 className={`flex items-center gap-1.5 text-[11px] font-semibold ${g.tone === 'rose' ? 'text-rose-300' : 'text-amber-300'}`}>
+              {g.tone === 'rose' ? <AlertCircle className="w-3.5 h-3.5" /> : <AlertTriangle className="w-3.5 h-3.5" />}
+              {g.title} ({g.items.length})
+            </h5>
+            {g.items.map((it) => (
+              <article
+                key={it.key}
+                className={`p-2.5 border text-left space-y-1.5 ${g.tone === 'rose' ? 'bg-rose-950/30 border-rose-800/70' : 'bg-amber-950/30 border-amber-800/70'}`}
               >
-                <div className="flex items-center gap-2">
-                  <div className="text-[var(--ss-accent)]">
-                    {categoryIcons[category]}
-                  </div>
-                  <span className="text-xs font-bold text-slate-200">{category}</span>
-                </div>
                 <div className="flex items-center gap-1.5">
-                  <span className="text-[9px] font-bold font-mono bg-rose-950 text-rose-300 border border-rose-800 px-1.5 py-0.2 rounded-none">
-                    {catErrors.length}
-                  </span>
-                  {isExpanded ? <ChevronUp className="w-3 h-3 text-slate-400" /> : <ChevronDown className="w-3 h-3 text-slate-400" />}
+                  <span className="font-mono font-bold text-[10px] bg-black/50 px-1.5 py-0.5 border border-[var(--ss-line)] text-white">#{it.eventId}</span>
+                  <span className="text-[10px] text-slate-400 font-mono">{it.ruleId}</span>
+                  <button
+                    onClick={() => onJumpToEvent(it.eventId)}
+                    className="ml-auto flex items-center gap-1 text-[10px] text-slate-300 hover:text-white cursor-pointer"
+                    title="Jump to this subtitle in the editor"
+                  >
+                    <Crosshair className="w-3 h-3" /> Go to
+                  </button>
                 </div>
-              </button>
-              
-              {isExpanded && (
-                <div className="p-1.5 space-y-1 max-h-40 overflow-y-auto bg-[var(--ss-panel)] custom-scrollbar">
-                  {catErrors.map((err, idx) => (
-                    <div 
-                      key={idx} 
-                      onClick={() => onJumpToEvent(err.eventId)}
-                      className={`p-2 rounded-none border text-left cursor-pointer hover:brightness-125 transition-all flex items-start gap-1.5 ${
-                        err.severity === 'warning' ? 'bg-amber-950/40 border-amber-800 text-amber-200' : 'bg-rose-950/40 border-rose-800 text-rose-200'
-                      }`}
-                    >
-                      <span className="font-mono font-bold text-[9px] bg-black/60 px-1.5 py-0.5 rounded-none border border-[var(--ss-line)] shrink-0 text-white">
-                        #{err.eventId}
-                      </span>
-                      <div className="flex-1 min-w-0">
-                        <span className="text-[10px] font-medium leading-tight block">
-                          {err.message}
-                        </span>
-                        {err.suggestedFix && (
-                          <span className="text-[9px] text-[var(--ss-accent)] block mt-0.5 font-semibold">
-                            💡 Fix: {err.suggestedFix}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          );
-        })}
+                <p className="text-[11.5px] leading-snug text-slate-100">{it.message}</p>
+                {it.suggestedFix && <p className="text-[10.5px] leading-snug text-[var(--ss-accent)]">Suggestion: {it.suggestedFix}</p>}
+                {failed[it.key] && <p className="text-[10.5px] leading-snug text-rose-300">{failed[it.key]}</p>}
+                {it.fixable && (
+                  <button
+                    onClick={() => runFixes([it])}
+                    disabled={!!busyKeys[it.key]}
+                    className="h-7 px-2.5 rounded-md bg-[var(--ss-accent)] hover:bg-[var(--ss-accent-hover)] text-[var(--ss-accent-ink)] text-[11px] font-semibold flex items-center gap-1.5 cursor-pointer disabled:opacity-60"
+                  >
+                    {busyKeys[it.key] ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                    {busyKeys[it.key] ? 'Fixing…' : 'Apply fix'}
+                  </button>
+                )}
+                {!it.fixable && <p className="text-[10.5px] text-slate-500">Needs a manual edit. Use Go to.</p>}
+              </article>
+            ))}
+          </section>
+        ))}
+
+        {fixedList.length > 0 && (
+          <section className="border border-[var(--ss-accent)]/30 bg-[var(--ss-accent)]/5">
+            <button onClick={() => setShowFixed((v) => !v)} className="w-full h-8 px-2.5 flex items-center gap-1.5 text-[11px] text-[var(--ss-accent)] cursor-pointer">
+              <CheckCircle2 className="w-3.5 h-3.5" /> Fixed ({fixedList.length})
+              {showFixed ? <ChevronUp className="w-3 h-3 ml-auto" /> : <ChevronDown className="w-3 h-3 ml-auto" />}
+            </button>
+            {showFixed && (
+              <ul className="px-2.5 pb-2 space-y-1 text-[10.5px] text-slate-300">
+                {fixedList.map(([k, v]) => (
+                  <li key={k}><span className="font-mono text-slate-400">#{v.issue?.eventId}</span> {v.message}</li>
+                ))}
+              </ul>
+            )}
+          </section>
+        )}
 
         {!qcUnavailable && totalErrors === 0 && totalWarnings === 0 && events.length > 0 && (
           <div className="p-3.5 rounded-none bg-[var(--ss-accent)]/10 border border-[var(--ss-accent)]/30 text-center text-[var(--ss-accent)] text-xs">
@@ -355,7 +357,7 @@ export default function NetflixQCPanel({
         >
           <div className="flex items-center gap-1.5">
             <BookOpen className="w-3.5 h-3.5 text-[var(--ss-accent)]" />
-            Netflix Timed Text Guide
+            Timed Text Guide
           </div>
           {showGuidelines ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
         </button>

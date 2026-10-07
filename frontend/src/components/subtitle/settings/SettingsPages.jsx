@@ -8,11 +8,11 @@ import { AUTOSAVE_CHOICES, DEFAULT_PREFS } from '../prefs';
 /* ─────────────────────────── Timing & QC ─────────────────────────── */
 
 const QC_PRESETS = [
-  { name: 'Netflix Latin / Indic', desc: '42 CPL · 20 CPS · 2 lines', cpl: 42, cps: 20, type: 'adult' },
-  { name: 'Netflix Kids', desc: '42 CPL · 17 CPS · 2 lines', cpl: 42, cps: 17, type: 'children' },
-  { name: 'Netflix Japanese', desc: '16 CPL · 7.5 CPS', cpl: 16, cps: 7.5, lang: 'ja' },
-  { name: 'Netflix Korean', desc: '16 CPL · 10.5 CPS', cpl: 16, cps: 10.5, lang: 'ko' },
-  { name: 'Netflix Chinese', desc: '16 CPL · 9.5 CPS', cpl: 16, cps: 9.5, lang: 'zh' },
+  { name: 'Standard Latin / Indic', desc: '42 CPL · 20 CPS · 2 lines', cpl: 42, cps: 20, type: 'adult' },
+  { name: 'Standard Kids', desc: '42 CPL · 17 CPS · 2 lines', cpl: 42, cps: 17, type: 'children' },
+  { name: 'Standard Japanese', desc: '16 CPL · 7.5 CPS', cpl: 16, cps: 7.5, lang: 'ja' },
+  { name: 'Standard Korean', desc: '16 CPL · 10.5 CPS', cpl: 16, cps: 10.5, lang: 'ko' },
+  { name: 'Standard Chinese', desc: '16 CPL · 9.5 CPS', cpl: 16, cps: 9.5, lang: 'zh' },
 ];
 
 const FPS_CHOICES = [23.976, 24, 25, 29.97, 30, 50, 59.94, 60];
@@ -76,8 +76,8 @@ export function QcPage({ c }) {
       </Section>
 
       <Section title="Duration">
-        <Slider label="Minimum duration" hint="Netflix default: 5/6 second (20 frames at 24 fps)." value={c.minDuration} min={0.5} max={1.5} step={0.05} unit="s" decimals={2} defaultValue={QC_DEFAULTS.minDur} onChange={c.setMinDuration} />
-        <Slider label="Maximum duration" hint="Netflix default: 7 seconds." value={c.maxDuration} min={3} max={10} step={0.5} unit="s" decimals={1} defaultValue={QC_DEFAULTS.maxDur} onChange={c.setMaxDuration} />
+        <Slider label="Minimum duration" hint="Default: 5/6 second (20 frames at 24 fps)." value={c.minDuration} min={0.5} max={1.5} step={0.05} unit="s" decimals={2} defaultValue={QC_DEFAULTS.minDur} onChange={c.setMinDuration} />
+        <Slider label="Maximum duration" hint="Default: 7 seconds." value={c.maxDuration} min={3} max={10} step={0.5} unit="s" decimals={1} defaultValue={QC_DEFAULTS.maxDur} onChange={c.setMaxDuration} />
       </Section>
 
       <Section title="Frame rate" description="Drives frame stepping, shot-change snapping and the 2-frame gap rule.">
@@ -176,9 +176,9 @@ export function AiPage({ c }) {
 
   return (
     <>
-      <Section title="Transcription engine" description="ElevenLabs Scribe v2 with word timestamps and speaker diarization.">
+      <Section title="Transcription engine" description="Speech-to-text with word timestamps and speaker diarization.">
         <Row label="Engine"><Badge>scribe_v2</Badge></Row>
-        <Row label="Expected speakers" hint="A hint that helps Scribe split speaker turns accurately.">
+        <Row label="Expected speakers" hint="A hint that helps split speaker turns accurately.">
           <Select
             label="Expected speakers"
             value={c.numSpeakers}
@@ -194,9 +194,9 @@ export function AiPage({ c }) {
             ]}
           />
         </Row>
-        <Row label="ElevenLabs API key" hint="Optional. Leave blank to use the key configured on the server. Stored only in this browser." stacked>
+        <Row label="Speech engine API key" hint="Optional. Leave blank to use the key configured on the server. Stored only in this browser." stacked>
           <div className="flex gap-2">
-            <TextInput type={keyVisible ? 'text' : 'password'} value={key} onChange={(e) => saveKey(e.target.value)} placeholder="sk_…" className="font-mono" autoComplete="off" spellCheck={false} aria-label="ElevenLabs API key" />
+            <TextInput type={keyVisible ? 'text' : 'password'} value={key} onChange={(e) => saveKey(e.target.value)} placeholder="sk_…" className="font-mono" autoComplete="off" spellCheck={false} aria-label="Speech engine API key" />
             <Button onClick={() => setKeyVisible((v) => !v)} icon={keyVisible ? EyeOff : Eye} aria-label={keyVisible ? 'Hide key' : 'Show key'} />
           </div>
           <p className="h-4 mt-1 text-[11.5px] text-[var(--ss-accent)]" role="status">{saved ? 'Saved' : ''}</p>
@@ -204,7 +204,7 @@ export function AiPage({ c }) {
       </Section>
 
       <Section title="Quality control">
-        <SwitchRow label="Gemini self-correction pass" hint="After generating, send QC errors back to Gemini to rewrite line breaks and split dense subtitles." checked={c.geminiAutoFix} onChange={c.setGeminiAutoFix} />
+        <SwitchRow label="AI self-correction pass" hint="After generating, send QC errors back to the AI to rewrite line breaks and split dense subtitles." checked={c.geminiAutoFix} onChange={c.setGeminiAutoFix} />
       </Section>
     </>
   );
@@ -313,7 +313,7 @@ export function EditorPage({ c }) {
         <Row label="Placeholder text" hint="What a freshly added subtitle says until you type.">
           <TextInput value={prefs.newSubText} onChange={(e) => setPref('newSubText', e.target.value)} className="w-64" maxLength={120} aria-label="Placeholder text" />
         </Row>
-        <SwitchRow label="Confirm before generating" hint="Generating replaces the current subtitles and uses ElevenLabs credits." checked={prefs.confirmGenerate} onChange={(v) => setPref('confirmGenerate', v)} />
+        <SwitchRow label="Confirm before generating" hint="Generating replaces the current subtitles and uses transcription credits." checked={prefs.confirmGenerate} onChange={(v) => setPref('confirmGenerate', v)} />
       </Section>
 
       <Section title="Large files">
@@ -376,7 +376,7 @@ export function ConnectionPage() {
       if (!res || !res.ok) res = await fetch(`${raw}/`).catch(() => null);
       if (res && res.ok) {
         const data = await res.json().catch(() => ({}));
-        setStatus({ ok: true, text: `Connected${data.has_gemini_api_key === false ? ' · Gemini API key missing on the server' : ''}` });
+        setStatus({ ok: true, text: `Connected${data.has_gemini_api_key === false ? ' · AI API key missing on the server' : ''}` });
       } else setStatus({ ok: false, text: res ? `Server answered ${res.status}` : 'Could not reach the server (cold start?)' });
     } catch (_) {
       setStatus({ ok: false, text: 'Failed: check the URL, HTTPS and CORS' });

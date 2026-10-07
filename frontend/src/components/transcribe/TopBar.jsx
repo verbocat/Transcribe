@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   ArrowLeft, Sparkles, Upload, Undo2, Redo2, Download, Save, MoreHorizontal, Loader2, Check,
-  FolderOpen, BarChart2, GitCompare, StickyNote, BookOpen, FileUp, Clapperboard, Languages, Palette
+  FolderOpen, BarChart2, GitCompare, StickyNote, BookOpen, FileUp, Clapperboard, Languages, Palette, ShieldCheck
 } from 'lucide-react';
 import NotificationBellDropdown from '../NotificationBellDropdown';
 import AccountMenuDropdown from '../AccountMenuDropdown';
@@ -17,12 +17,12 @@ const FORMATS = [
   { id: 'json', label: 'JSON', ext: '.json', note: 'Segment list' },
 ];
 
-const LANGUAGES = [
+export const LANGUAGES = [
   ['Auto-Detect', 'Auto-detect'], ['Hindi', 'Hindi (हिन्दी)'], ['English', 'English'], ['Marathi', 'Marathi (मराठी)'],
   ['Bengali', 'Bengali (বাংলা)'], ['Tamil', 'Tamil (தமிழ்)'], ['Telugu', 'Telugu (తెలుగు)'],
   ['Gujarati', 'Gujarati (ગુજરાતી)'], ['Kannada', 'Kannada (ಕನ್ನಡ)'],
 ];
-const SCRIPTS = [
+export const SCRIPTS = [
   ['Auto-Detect', 'Auto-detect'], ['Devanagari', 'Devanagari'], ['Latin', 'Latin / English'], ['Bengali', 'Bengali'],
   ['Tamil', 'Tamil'], ['Telugu', 'Telugu'], ['Gujarati', 'Gujarati'], ['Kannada', 'Kannada'],
 ];
@@ -141,6 +141,7 @@ export default function TopBar(p) {
 
       <input id="ts-media-input" type="file" className="hidden" onChange={p.onFileSelect}
         accept="audio/*,video/*,.wav,.mp3,.m4a,.flac,.ogg,.aac,.mp4,.mkv,.mov,.webm,.avi,.flv,.wmv,.wma,audio/x-ms-wma,audio/wma" />
+      {(hasSegments || p.isTranscribing) && (<>
       <label htmlFor="ts-media-input" className="ts-btn" style={{ cursor: 'pointer' }}>
         {p.isExtractingAudio ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
         {p.isExtractingAudio ? 'Preparing audio' : p.filename ? 'Change media' : 'Import media'}
@@ -159,6 +160,7 @@ export default function TopBar(p) {
       <button type="button" className="ts-btn ts-btn-primary" disabled={!p.canTranscribe || p.isTranscribing} onClick={p.onTranscribe}>
         {p.isTranscribing ? <><Loader2 size={14} className="animate-spin" /> Transcribing {Math.round(p.progressPercent)}%</> : <><Sparkles size={14} /> Transcribe</>}
       </button>
+      </>)}
 
       <span className="flex-1" />
 
@@ -172,6 +174,13 @@ export default function TopBar(p) {
         <button type="button" className="ts-btn ts-btn-ghost ts-btn-icon" title="Undo (Ctrl+Z)" aria-label="Undo" disabled={!p.canUndo} onClick={p.onUndo}><Undo2 size={15} /></button>
         <button type="button" className="ts-btn ts-btn-ghost ts-btn-icon" title="Redo (Ctrl+Y)" aria-label="Redo" disabled={!p.canRedo} onClick={p.onRedo}><Redo2 size={15} /></button>
       </div>
+
+      <button type="button" className={`ts-btn ${p.translateOpen ? 'ts-chip-accent' : ''}`} disabled={!hasSegments} onClick={p.onOpenTranslate} aria-pressed={p.translateOpen} title="Translate the transcript with Centroid">
+        <Languages size={14} /> Translate
+      </button>
+      <button type="button" className={`ts-btn ${p.qcOpen ? 'ts-chip-accent' : ''}`} disabled={!hasSegments} onClick={p.onOpenQc} aria-pressed={p.qcOpen} title="Karya checks and Centroid translation QC">
+        <ShieldCheck size={14} /> QC{p.centroidQcIssues != null ? ` · ${p.centroidQcIssues}` : ''}
+      </button>
 
       <button type="button" className="ts-btn" disabled={!hasSegments || p.isSaving} onClick={p.onSave} title="Save to cloud (Ctrl+S)">
         {p.isSaving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Save
