@@ -9,6 +9,7 @@ layer in segment_gender.py and the cast list in the UI cover that.
 import logging
 import os
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Lock
 from typing import Dict, Optional
@@ -54,7 +55,7 @@ def _get_session():
                 return None
             import onnxruntime as ort
             opts = ort.SessionOptions()
-            opts.intra_op_num_threads = max(1, (os.cpu_count() or 4) - 1)
+            opts.intra_op_num_threads = 1  # parallelism comes from running several lines at once (see local_gender_probs)
             _session = ort.InferenceSession(str(path), sess_options=opts, providers=["CPUExecutionProvider"])
         return _session
 
@@ -71,8 +72,8 @@ def local_gender_probs(audio_path: str, segments) -> Dict[int, float]:
         logger.warning(f"[Gender] Cannot read audio for local model: {e}")
         return {}
     sr = info.samplerate
-    out: Dict[int, float] = {}
-    for seg in segments:
+
+    def score(seg):
         start, end = seg.start_time, seg.end_time
         if end - start > MAX_CLIP_SEC:
             mid = (start + end) / 2
@@ -81,14 +82,22 @@ def local_gender_probs(audio_path: str, segments) -> Dict[int, float]:
             data, _ = sf.read(audio_path, start=int(max(0.0, start) * sr), stop=int(min(end, info.duration) * sr),
                               dtype="float32", always_2d=True)
         except Exception:
-            continue
+            return None
         y = data.mean(axis=1)
         if sr != 16000 and len(y) > 1:
             y = np.interp(np.linspace(0, len(y) - 1, int(len(y) * 16000 / sr)), np.arange(len(y)), y).astype(np.float32)
         if len(y) < MIN_CLIP_SAMPLES:
-            continue
+            return None
         y = (y - y.mean()) / (y.std() + 1e-7)
         logits = session.run(None, {input_name: y[None, :].astype(np.float32)})[0][0]
         e = np.exp(logits - logits.max())
-        out[seg.segment_id] = float((e / e.sum())[0])  # index 0 = female
+        return seg.segment_id, float((e / e.sum())[0])  # index 0 = female
+
+    # One single-threaded inference per line, several lines at once: faster than letting one
+    # inference spread over every core, and the scores are identical.
+    out: Dict[int, float] = {}
+    with ThreadPoolExecutor(max_workers=max(1, os.cpu_count() or 4)) as pool:
+        for res in pool.map(score, segments):
+            if res:
+                out[res[0]] = res[1]
     return out

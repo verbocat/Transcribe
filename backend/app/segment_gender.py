@@ -242,32 +242,49 @@ def assign_genders_and_split_speakers(audio_path: str, segments, video_path=None
     health = {"down": False, "reason": None}
     sources: List[tuple] = []
 
-    local = local_gender_probs(audio_path, segments)
+    # The four signals are independent: run them at the same time so the slow Gemini round trips
+    # overlap with the local model and pitch instead of queueing behind them.
+    def _video():
+        if not (GEMINI_ASSIST and video_path):
+            return {}
+        try:
+            out = _gemini_video_labels(video_path, segments, health)
+            logger.info(f"[Gender] Video labelled {len(out)}/{len(segments)} segments")
+            return out
+        except Exception as e:
+            logger.warning(f"[Gender] Video gender detection failed: {e}")
+            return {}
+
+    def _clips():
+        if not GEMINI_ASSIST:
+            return {}
+        try:
+            out = _gemini_clip_labels(audio_path, segments, health)
+            logger.info(f"[Gender] Audio clips labelled {len(out)}/{len(segments)} segments")
+            return out
+        except Exception as e:
+            logger.warning(f"[Gender] Audio-clip gender detection failed: {e}")
+            return {}
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        f_local = pool.submit(local_gender_probs, audio_path, segments)
+        f_pitch = pool.submit(_pitch_probs, audio_path, segments)
+        f_video = pool.submit(_video)
+        f_clip = pool.submit(_clips)
+        local, pitch, video, clips = f_local.result(), f_pitch.result(), f_video.result(), f_clip.result()
+
     if local:
         sources.append((W_LOCAL, local))
     else:
         notes.append("The local gender model could not run, so gender relied on pitch and Gemini only.")
-    sources.append((W_PITCH, _pitch_probs(audio_path, segments)))
+    sources.append((W_PITCH, pitch))
     if not GEMINI_ASSIST:
         notes.append("Gender is estimated from the voice and can be wrong, especially for children. "
                      "Assign characters from the Cast list to set it exactly.")
-
-    if GEMINI_ASSIST and video_path:
-        try:
-            video = _gemini_video_labels(video_path, segments, health)
-            logger.info(f"[Gender] Video labelled {len(video)}/{len(segments)} segments")
-            if video:
-                sources.append((W_VIDEO, video))
-        except Exception as e:
-            logger.warning(f"[Gender] Video gender detection failed: {e}")
-    if GEMINI_ASSIST and not health["down"]:
-        try:
-            clips = _gemini_clip_labels(audio_path, segments, health)
-            logger.info(f"[Gender] Audio clips labelled {len(clips)}/{len(segments)} segments")
-            if clips:
-                sources.append((W_CLIP, clips))
-        except Exception as e:
-            logger.warning(f"[Gender] Audio-clip gender detection failed: {e}")
+    if video:
+        sources.append((W_VIDEO, video))
+    if clips:
+        sources.append((W_CLIP, clips))
     if health["down"]:
         notes.append(f"Gemini was unavailable ({health['reason']}), so gender used the local model and pitch only. "
                      "Children are the least reliable: assign characters from the cast list or fix them in the speaker panel.")

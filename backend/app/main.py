@@ -271,6 +271,12 @@ async def lifespan(app: FastAPI):
     init_db()
     init_auth_db()
     monitor_task = asyncio.create_task(_hardware_monitor_loop())
+    # Load the local gender model now so the first transcription does not pay for it
+    try:
+        from app.gender_local import _get_session as _warm_gender_model
+        asyncio.get_running_loop().run_in_executor(None, _warm_gender_model)
+    except Exception:
+        pass
     yield
     monitor_task.cancel()
 
@@ -786,6 +792,143 @@ async def delete_project(project_id: str):
         return {"status": "success", "deleted_id": project_id}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Transcription with live step-by-step progress ───────────────────────────────
+# POST /api/transcribe_async runs the same pipeline as POST /api/transcribe in the background;
+# GET /api/transcribe_status/{job_id} reports the current stage, overall percent and a stage list.
+# (/api/transcribe is unchanged and still returns the finished result in one response.)
+_transcribe_jobs: dict = {}
+TRANSCRIBE_STAGES = [
+    ("extracting", "Extracting audio"),
+    ("preparing", "Preparing audio"),
+    ("uploading", "Uploading to speech engine"),
+    ("transcribing", "Transcribing and identifying speakers"),
+    ("script", "Fixing script and loanwords"),
+    ("segmenting", "Building segments"),
+    ("gender", "Detecting speaker gender"),
+    ("linting", "Checking Karya rules"),
+]
+
+
+def _prune_transcribe_jobs():
+    cutoff = time.time() - 3600
+    for jid in [j for j, v in _transcribe_jobs.items() if v.get("updated", 0) < cutoff]:
+        _transcribe_jobs.pop(jid, None)
+
+
+async def _run_transcribe_job(job_id, target_path, original_media_path, language, script, elevenlabs_api_key, needs_extract=True):
+    job = _transcribe_jobs[job_id]
+    stages = [s for s in TRANSCRIBE_STAGES if needs_extract or s[0] != "extracting"]
+    order = [k for k, _ in stages]
+    started = time.time()
+    # Stage list is rebuilt on every update so the UI can draw a checklist from one response
+    def set_state(**kw):
+        job.update(kw)
+        job["updated"] = time.time()
+        job["elapsed_sec"] = round(time.time() - started, 1)
+        cur = job.get("stage")
+        idx = order.index(cur) if cur in order else (len(order) if cur in ("saving", "done") else -1)
+        if cur in order:
+            job["step"], job["step_count"] = idx + 1, len(order)
+        job["stages"] = [
+            {"id": k, "label": lbl, "status": "done" if (i < idx or cur == "done") else ("active" if i == idx else "pending")}
+            for i, (k, lbl) in enumerate(stages)
+        ]
+
+    def on_progress(stage, overall, detail, stage_pct=None):
+        # Never let the bar move backwards (stages can report from worker threads)
+        overall = max(overall, job.get("percent") or 0.0)
+        set_state(stage=stage, percent=min(99.0, overall), stage_percent=stage_pct, detail=detail)
+
+    try:
+        from app.video_processor import get_supported_video_extensions, extract_audio_from_video
+        ext = Path(target_path).suffix.lower()
+        if needs_extract and (ext in get_supported_video_extensions() or ext == ".wma" or ext not in [".wav", ".mp3", ".m4a", ".aac", ".flac", ".ogg", ".opus"]):
+            # FFmpeg's own progress drives the first 10% of the bar
+            def on_ffmpeg(pct, done, total):
+                on_progress("extracting", 0.0 if pct is None else 10.0 * pct / 100.0, "Extracting the audio track with FFmpeg",
+                            None if pct is None else round(pct, 1))
+            set_state(stage="extracting", percent=0.0, detail="Extracting the audio track with FFmpeg")
+            try:
+                audio_info = await asyncio.to_thread(extract_audio_from_video, target_path, None, on_ffmpeg)
+                extracted = audio_info.get("audio_path")
+                if extracted and os.path.exists(extracted):
+                    target_path = extracted
+            except Exception as extract_err:
+                print(f"Video audio extraction fallback note: {extract_err}")
+        set_state(stage="preparing", percent=max(job.get("percent") or 0.0, 10.0), detail="Preparing audio")
+
+        is_video = Path(original_media_path).suffix.lower() in get_supported_video_extensions()
+        result = await process_audio_file(
+            audio_path=target_path,
+            language=language,
+            script=script,
+            elevenlabs_api_key=elevenlabs_api_key,
+            video_path=original_media_path if is_video else None,
+            progress_cb=on_progress,
+        )
+        result.filename = Path(target_path).name
+        active_sessions[result.audio_id] = {"filename": result.filename, "file_path": target_path, "result": result}
+        set_state(stage="saving", percent=99.0, detail="Saving the project")
+        await asyncio.to_thread(_save_transcription_to_db, result, target_path)
+        set_state(stage="done", percent=100.0, detail="Done", result=result.model_dump(mode="json"))
+    except Exception as err:
+        import traceback
+        traceback.print_exc()
+        set_state(stage="error", error=f"Transcription failed: {err}")
+
+
+@app.post("/api/transcribe_async")
+async def transcribe_audio_async(
+    request: Request,
+    file: Optional[UploadFile] = File(None),
+    audio_id: Optional[str] = Form(None),
+    language: str = Form("Auto-Detect"),
+    script: str = Form("Auto-Detect"),
+    elevenlabs_api_key: Optional[str] = Form(None),
+    audio_filename: Optional[str] = Form(None)
+):
+    """Start a transcription in the background and return a job id to poll.
+
+    Send `audio_filename` (from /api/audio/extract_async's result) to reuse audio that was already
+    extracted: nothing is uploaded or extracted a second time."""
+    client_ip = request.client.host if request.client else "127.0.0.1"
+    _check_rate_limit(client_ip)
+    _prune_transcribe_jobs()
+    original_path = None
+    needs_extract = True
+    if audio_filename:
+        wav_path = UPLOAD_DIR / Path(audio_filename).name
+        if not wav_path.exists():
+            raise HTTPException(status_code=404, detail="Extracted audio not found; upload the file again.")
+        target_path = str(wav_path)
+        needs_extract = False
+        # The source video sits next to its extracted audio (same stem); gender detection can watch it
+        from app.video_processor import get_supported_video_extensions as _vid_exts
+        original_path = next((str(p) for p in UPLOAD_DIR.glob(f"{wav_path.stem}.*") if p.suffix.lower() in _vid_exts()), None)
+    elif file:
+        file_path = UPLOAD_DIR / f"{uuid.uuid4().hex[:8]}_{file.filename}"
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+        target_path = str(file_path)
+    elif audio_id and audio_id in active_sessions:
+        target_path = active_sessions[audio_id]["file_path"]
+    else:
+        raise HTTPException(status_code=400, detail="Audio file, audio_filename or valid audio_id is required.")
+
+    job_id = uuid.uuid4().hex
+    _transcribe_jobs[job_id] = {"stage": "queued", "percent": 0.0, "updated": time.time()}
+    asyncio.create_task(_run_transcribe_job(job_id, target_path, original_path or target_path, language, script, elevenlabs_api_key, needs_extract))
+    return {"job_id": job_id}
+
+
+@app.get("/api/transcribe_status/{job_id}")
+async def transcribe_status(job_id: str):
+    job = _transcribe_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Transcription job not found or expired.")
+    return {k: v for k, v in job.items() if k != "updated"}
 
 
 @app.get("/api/audio/{filename}")
