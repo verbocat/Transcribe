@@ -5,6 +5,8 @@ import {
   Bold, Italic, Underline, Scissors, Merge, WrapText, User, LogIn, LogOut, Crosshair
 } from 'lucide-react';
 import { langName } from './languages';
+import { getPlayhead } from '../../utils/playheadBus';
+import { usePlayheadSelector } from '../../utils/usePlayheadSelector';
 
 function toSMPTE(seconds) {
   if (seconds === undefined || seconds === null || isNaN(seconds)) return '00:00:00.000';
@@ -167,12 +169,17 @@ function ToolButton({ title, onClick, children, danger = false, disabled = false
 const SubtitleRow = memo(function SubtitleRow({
   ev, pos, isActive, isPlaying, isSelected, prevEnd, nextStart,
   cpsLimit, cplLimit, minDuration, maxDuration, frameRate,
-  currentTime, availableSpeakers, focusOnActivate, actions,
+  availableSpeakers, focusOnActivate, actions,
   sourceText,
 }) {
   const comparing = sourceText !== undefined;
   const id = idOf(ev);
   const m = getEventMetrics(ev, cpsLimit, cplLimit, minDuration, maxDuration);
+  // Only the selected row watches the playhead, and only re-renders when it crosses this cue's start or end
+  const playheadZone = usePlayheadSelector(
+    isActive ? (t) => (t <= m.start ? 'before' : t >= m.end ? 'after' : 'inside') : null,
+    [isActive, m.start, m.end]
+  );
   const textareaRef = useRef(null);
   const frame = 1 / (frameRate || 24);
 
@@ -223,7 +230,7 @@ const SubtitleRow = memo(function SubtitleRow({
   return (
     <div
       data-event-id={id}
-      className={`relative border-b border-[var(--ss-line-soft)] ${
+      className={`relative border-b border-[var(--ss-line-soft)] transition-colors duration-200 ${
         isActive ? 'bg-[var(--ss-selected)]' : isPlaying ? 'bg-white/[0.045]' : 'hover:bg-[var(--ss-raised)]'
       }`}
     >
@@ -369,11 +376,11 @@ const SubtitleRow = memo(function SubtitleRow({
           <span className="text-slate-500 font-semibold">In</span>
           <ToolButton title="Start −1 frame" onClick={() => actions.timeChange(id, Math.max(0, m.start - frame), m.end)}><ChevronDown size={11} /></ToolButton>
           <ToolButton title="Start +1 frame" disabled={m.start + frame >= m.end} onClick={() => actions.timeChange(id, m.start + frame, m.end)}><ChevronUp size={11} /></ToolButton>
-          <ToolButton title="Set start to playhead" disabled={currentTime >= m.end} onClick={() => actions.timeChange(id, currentTime, m.end)}><LogIn size={11} /></ToolButton>
+          <ToolButton title="Set start to playhead" disabled={playheadZone === 'after'} onClick={() => { const t = getPlayhead(); if (t < m.end) actions.timeChange(id, t, m.end); }}><LogIn size={11} /></ToolButton>
           <span className="text-slate-500 font-semibold ml-1">Out</span>
           <ToolButton title="End −1 frame" disabled={m.end - frame <= m.start} onClick={() => actions.timeChange(id, m.start, m.end - frame)}><ChevronDown size={11} /></ToolButton>
           <ToolButton title="End +1 frame" onClick={() => actions.timeChange(id, m.start, m.end + frame)}><ChevronUp size={11} /></ToolButton>
-          <ToolButton title="Set end to playhead" disabled={currentTime <= m.start} onClick={() => actions.timeChange(id, m.start, currentTime)}><LogOut size={11} /></ToolButton>
+          <ToolButton title="Set end to playhead" disabled={playheadZone === 'before'} onClick={() => { const t = getPlayhead(); if (t > m.start) actions.timeChange(id, m.start, t); }}><LogOut size={11} /></ToolButton>
 
           <span className="font-mono text-slate-500 ml-1">
             gap in <span className={gapIn !== null && gapIn < 0 ? 'text-rose-400' : 'text-slate-300'}>{gapIn === null ? '—' : `${gapIn.toFixed(2)}s`}</span>
@@ -432,7 +439,6 @@ export default function SubtitleTablePanel({
   onRebreakEvent = () => {},
   onAddSubtitle = () => {},
   onExport = () => {},
-  currentTime = 0,
   availableSpeakers = ['Speaker 1', 'Speaker 2'],
   frameRate = 24.0,
   cplLimit = 42,
@@ -451,6 +457,7 @@ export default function SubtitleTablePanel({
   const containerRef = useRef(null);
   const searchRef = useRef(null);
   const focusOnActivate = useRef(false);
+  const clickedInListRef = useRef(false);
 
   useEffect(() => {
     const onKey = (e) => {
@@ -472,6 +479,7 @@ export default function SubtitleTablePanel({
       const p = latest.current;
       if (id === p.activeEventId) return;
       focusOnActivate.current = focusText;
+      clickedInListRef.current = true;
       p.setActiveEventId(id);
       p.onSeek(start);
     },
@@ -519,7 +527,8 @@ export default function SubtitleTablePanel({
     });
   }, [events, searchQuery, filterMode, errorFlags, sourceTextById]);
 
-  const playingId = useMemo(() => findPlayingId(events, currentTime), [events, currentTime]);
+  // Which cue is under the playhead; re-renders the list only when that changes, not every frame
+  const playingId = usePlayheadSelector((t) => findPlayingId(events, t), [events]);
 
   // Drop selections for cues that no longer exist (after delete / renumber)
   useEffect(() => {
@@ -542,19 +551,38 @@ export default function SubtitleTablePanel({
     return tag === 'textarea' || tag === 'input' || tag === 'select';
   };
 
-  const scrollToId = useCallback((id) => {
-    const el = containerRef.current?.querySelector(`[data-event-id="${id}"]`);
-    if (el) el.scrollIntoView({ block: 'nearest' });
+  // Bring a row into view. `center` keeps the cue being played in the middle of the list with the next ones
+  // visible. Short hops glide; long jumps snap, so the list never trails behind the video.
+  const scrollToId = useCallback((id, center = false) => {
+    const box = containerRef.current;
+    const el = box?.querySelector(`[data-event-id="${id}"]`);
+    if (!el) return;
+    const b = box.getBoundingClientRect();
+    const r = el.getBoundingClientRect();
+    let delta;
+    if (center) delta = (r.top + r.height / 2) - (b.top + b.height / 2);
+    else if (r.top < b.top) delta = r.top - b.top;
+    else if (r.bottom > b.bottom) delta = Math.min(r.bottom - b.bottom, r.top - b.top);
+    else return;
+    if (Math.abs(delta) < 2) return;
+    box.scrollTo({ top: box.scrollTop + delta, behavior: Math.abs(delta) < b.height * 1.5 ? 'smooth' : 'auto' });
   }, []);
 
-  // Keep the selected cue visible
+  // Keep the selected cue visible. When the selection came from playback, follow it (centred) unless
+  // "follow playback" is off; a row the user just clicked is only nudged into view, never moved under the pointer.
   useEffect(() => {
-    if (activeEventId != null && !isEditingInList()) scrollToId(activeEventId);
+    const clicked = clickedInListRef.current;
+    clickedInListRef.current = false;
+    if (activeEventId == null || isEditingInList()) return;
+    const fromPlayback = !clicked && activeEventId === playingId;
+    if (fromPlayback && !followPlayback) return;
+    scrollToId(activeEventId, fromPlayback);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeEventId, scrollToId]);
 
-  // Follow playback, unless the user is typing in the list
+  // Playhead over a gap or a cue that isn't selected (e.g. while typing): still follow it
   useEffect(() => {
-    if (followPlayback && playingId != null && playingId !== activeEventId && !isEditingInList()) scrollToId(playingId);
+    if (followPlayback && playingId != null && playingId !== activeEventId && !isEditingInList()) scrollToId(playingId, true);
   }, [playingId, followPlayback, activeEventId, scrollToId]);
 
   return (
@@ -619,7 +647,7 @@ export default function SubtitleTablePanel({
             </button>
           )}
 
-          <Button size="sm" icon={Plus} onClick={() => onAddSubtitle(currentTime)} title="Add a new subtitle at the playhead">
+          <Button size="sm" icon={Plus} onClick={() => onAddSubtitle(getPlayhead())} title="Add a new subtitle at the playhead">
             Add
           </Button>
         </div>
@@ -692,7 +720,6 @@ export default function SubtitleTablePanel({
                 minDuration={minDuration}
                 maxDuration={maxDuration}
                 frameRate={frameRate}
-                currentTime={isActive ? currentTime : 0}
                 availableSpeakers={isActive ? availableSpeakers : null}
                 focusOnActivate={focusOnActivate}
                 actions={actions}
