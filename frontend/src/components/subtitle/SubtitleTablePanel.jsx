@@ -4,6 +4,7 @@ import {
   Search, Play, Trash2, AlertCircle, Plus, Download, ChevronUp, ChevronDown,
   Bold, Italic, Underline, Scissors, Merge, WrapText, User, LogIn, LogOut, Crosshair
 } from 'lucide-react';
+import { langName } from './languages';
 
 function toSMPTE(seconds) {
   if (seconds === undefined || seconds === null || isNaN(seconds)) return '00:00:00.000';
@@ -33,7 +34,36 @@ const startOf = (ev) => ev.start_time ?? ev.start ?? 0;
 const endOf = (ev) => ev.end_time ?? ev.end ?? 0;
 const idOf = (ev) => ev.id ?? ev.event_id;
 
+/**
+ * Source-language text for each translated cue, so both can be read side by side.
+ * Matched by subtitle id (translations keep the source cue's id); a cue added or split
+ * since then falls back to the source cue it overlaps most in time.
+ */
+function buildSourceTextMap(events, sourceEvents) {
+  const map = new Map();
+  if (!sourceEvents?.length) return map;
+  const byId = new Map(sourceEvents.map((s) => [idOf(s), s]));
+  const sorted = [...sourceEvents].sort((a, b) => startOf(a) - startOf(b));
+  let j = 0;
+  events.forEach((ev) => {
+    const id = idOf(ev);
+    const same = byId.get(id);
+    const s0 = startOf(ev), e0 = endOf(ev);
+    if (same && Math.min(e0, endOf(same)) > Math.max(s0, startOf(same))) { map.set(id, same.text || ''); return; }
+    while (j < sorted.length && endOf(sorted[j]) <= s0) j++;
+    let best = null, bestOverlap = 0;
+    for (let k = j; k < sorted.length && startOf(sorted[k]) < e0; k++) {
+      const overlap = Math.min(e0, endOf(sorted[k])) - Math.max(s0, startOf(sorted[k]));
+      if (overlap > bestOverlap) { bestOverlap = overlap; best = sorted[k]; }
+    }
+    map.set(id, best ? (best.text || '') : null);
+  });
+  return map;
+}
+
 const GRID = 'grid grid-cols-[28px_34px_100px_100px_52px_1fr_56px_52px]';
+// Translation review: one time column (in / out stacked), then original and translation side by side
+const GRID_COMPARE = 'grid grid-cols-[24px_28px_96px_minmax(0,1fr)_minmax(0,1fr)_40px_44px] gap-x-2';
 
 // Speaker → color strip for the left side and the timeline
 const SPEAKER_STRIP_COLORS = ['#10b981', '#f59e0b', '#8b5cf6', '#3b82f6', '#ec4899', 'var(--kt-accent)'];
@@ -138,7 +168,9 @@ const SubtitleRow = memo(function SubtitleRow({
   ev, pos, isActive, isPlaying, isSelected, prevEnd, nextStart,
   cpsLimit, cplLimit, minDuration, maxDuration, frameRate,
   currentTime, availableSpeakers, focusOnActivate, actions,
+  sourceText,
 }) {
+  const comparing = sourceText !== undefined;
   const id = idOf(ev);
   const m = getEventMetrics(ev, cpsLimit, cplLimit, minDuration, maxDuration);
   const textareaRef = useRef(null);
@@ -199,7 +231,7 @@ const SubtitleRow = memo(function SubtitleRow({
 
       <div
         onClick={() => actions.activate(id, m.start, false)}
-        className={`${GRID} items-start px-2 py-2 text-xs cursor-pointer group`}
+        className={`${comparing ? GRID_COMPARE : GRID} items-start px-2 ${comparing ? 'py-1.5' : 'py-2'} text-xs cursor-pointer group`}
       >
         <div className="flex items-center justify-center pl-1 pt-1" onClick={(e) => e.stopPropagation()}>
           <input
@@ -215,39 +247,67 @@ const SubtitleRow = memo(function SubtitleRow({
           {pos + 1}
         </div>
 
-        {isActive ? (
-          <div onClick={(e) => e.stopPropagation()}>
-            <TimeInput
-              label="Start time"
-              value={m.start}
-              invalid={m.hasDurErr}
-              onCommit={(s) => { if (s < 0 || s >= m.end) return false; actions.timeChange(id, s, m.end); return true; }}
-            />
+        {comparing ? (
+          <div className="flex flex-col gap-0.5" onClick={isActive ? (e) => e.stopPropagation() : undefined}>
+            {isActive ? (
+              <>
+                <TimeInput label="Start time" value={m.start} invalid={m.hasDurErr}
+                  onCommit={(s) => { if (s < 0 || s >= m.end) return false; actions.timeChange(id, s, m.end); return true; }} />
+                <TimeInput label="End time" value={m.end} invalid={m.hasDurErr}
+                  onCommit={(e) => { if (e <= m.start) return false; actions.timeChange(id, m.start, e); return true; }} />
+              </>
+            ) : (
+              <>
+                <span className="font-mono text-[11px] leading-4 tabular-nums text-slate-300">{toSMPTE(m.start)}</span>
+                <span className={`font-mono text-[11px] leading-4 tabular-nums ${m.hasDurErr ? 'text-rose-400' : 'text-slate-500'}`}>{toSMPTE(m.end)}</span>
+              </>
+            )}
           </div>
         ) : (
-          <div className="font-mono text-[11px] tabular-nums pt-0.5 text-slate-300">{toSMPTE(m.start)}</div>
-        )}
+          <>
+          {isActive ? (
+            <div onClick={(e) => e.stopPropagation()}>
+              <TimeInput
+                label="Start time"
+                value={m.start}
+                invalid={m.hasDurErr}
+                onCommit={(s) => { if (s < 0 || s >= m.end) return false; actions.timeChange(id, s, m.end); return true; }}
+              />
+            </div>
+          ) : (
+            <div className="font-mono text-[11px] tabular-nums pt-0.5 text-slate-300">{toSMPTE(m.start)}</div>
+          )}
 
-        {isActive ? (
-          <div onClick={(e) => e.stopPropagation()}>
-            <TimeInput
-              label="End time"
-              value={m.end}
-              invalid={m.hasDurErr}
-              onCommit={(e) => { if (e <= m.start) return false; actions.timeChange(id, m.start, e); return true; }}
-            />
+          {isActive ? (
+            <div onClick={(e) => e.stopPropagation()}>
+              <TimeInput
+                label="End time"
+                value={m.end}
+                invalid={m.hasDurErr}
+                onCommit={(e) => { if (e <= m.start) return false; actions.timeChange(id, m.start, e); return true; }}
+              />
+            </div>
+          ) : (
+            <div className={`font-mono text-[11px] tabular-nums pt-0.5 ${m.hasDurErr ? 'text-rose-400' : 'text-slate-400'}`}>{toSMPTE(m.end)}</div>
+          )}
+
+          <div className={`font-mono text-[11px] tabular-nums pt-0.5 ${m.hasDurErr ? 'text-rose-400 font-bold' : 'text-slate-500'}`}>
+            {m.dur.toFixed(2)}s
           </div>
-        ) : (
-          <div className={`font-mono text-[11px] tabular-nums pt-0.5 ${m.hasDurErr ? 'text-rose-400' : 'text-slate-400'}`}>{toSMPTE(m.end)}</div>
+
+          </>
         )}
 
-        <div className={`font-mono text-[11px] tabular-nums pt-0.5 ${m.hasDurErr ? 'text-rose-400 font-bold' : 'text-slate-500'}`}>
-          {m.dur.toFixed(2)}s
-        </div>
+        {/* While a translation is shown, the original-language text sits in its own column, read-only */}
+        {comparing && (
+          <div className="min-w-0 pt-px ss-script text-[13px] leading-[1.45] whitespace-pre-wrap break-words text-[var(--ss-muted)]">
+            {sourceText === null ? <span className="italic text-slate-600">No original here</span> : (stripTags(sourceText) || <span className="italic text-slate-600">Empty</span>)}
+          </div>
+        )}
 
         {/* Text: plain when idle, the editor itself when selected (never shown twice) */}
         {isActive ? (
-          <div className="pr-2" onClick={(e) => e.stopPropagation()}>
+          <div className="pr-2 min-w-0" onClick={(e) => e.stopPropagation()}>
             <textarea
               ref={textareaRef}
               rows={1}
@@ -262,13 +322,13 @@ const SubtitleRow = memo(function SubtitleRow({
               }}
               placeholder="Type subtitle text…"
               aria-label="Subtitle text"
-              className="w-full -my-0.5 bg-[var(--ss-panel)] border border-[var(--ss-line)] focus:border-[var(--ss-accent)] rounded-md px-1.5 py-1 text-white ss-script text-[14px] leading-[1.45] focus:outline-none resize-none overflow-hidden font-medium placeholder-slate-500"
+              className={`w-full -my-0.5 bg-[var(--ss-panel)] border border-[var(--ss-line)] focus:border-[var(--ss-accent)] rounded-md px-1.5 py-1 text-white ss-script ${comparing ? 'text-[13px]' : 'text-[14px]'} leading-[1.45] focus:outline-none resize-none overflow-hidden font-medium placeholder-slate-500`}
             />
           </div>
         ) : (
           <div
             onClick={(e) => { e.stopPropagation(); actions.activate(id, m.start, true); }}
-            className={`pr-2 ss-script text-[14px] leading-[1.45] whitespace-pre-wrap break-words cursor-text text-[var(--ss-text)] ${
+            className={`pr-2 min-w-0 ss-script ${comparing ? 'text-[13px]' : 'text-[14px]'} leading-[1.45] whitespace-pre-wrap break-words cursor-text text-[var(--ss-text)] ${
               m.hasCplErr ? 'underline decoration-wavy decoration-rose-400/70 underline-offset-2' : ''
             }`}
             title="Click to edit"
@@ -379,6 +439,10 @@ export default function SubtitleTablePanel({
   cpsLimit = 20,
   minDuration = 0.833,
   maxDuration = 7.0,
+  // Set while a translation is shown: the original-language cues and both language codes
+  sourceEvents = null,
+  sourceLang = null,
+  targetLang = null,
 }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedIds, setSelectedIds] = useState(() => new Set());
@@ -432,6 +496,12 @@ export default function SubtitleTablePanel({
     return map;
   }, [events]);
 
+  const comparing = !!sourceEvents;
+  const sourceTextById = useMemo(
+    () => (comparing ? buildSourceTextMap(events, sourceEvents) : null),
+    [comparing, events, sourceEvents]
+  );
+
   const errorFlags = useMemo(
     () => events.map(ev => getEventMetrics(ev, cpsLimit, cplLimit, minDuration, maxDuration).hasError),
     [events, cpsLimit, cplLimit, minDuration, maxDuration]
@@ -441,11 +511,13 @@ export default function SubtitleTablePanel({
   const filteredEvents = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     return events.filter((ev, i) => {
-      if (q && !(ev.text || '').toLowerCase().includes(q) && String(i + 1) !== q) return false;
+      if (q && !(ev.text || '').toLowerCase().includes(q)
+        && !(sourceTextById?.get(idOf(ev)) || '').toLowerCase().includes(q)
+        && String(i + 1) !== q) return false;
       if (filterMode === 'errors') return errorFlags[i];
       return true;
     });
-  }, [events, searchQuery, filterMode, errorFlags]);
+  }, [events, searchQuery, filterMode, errorFlags, sourceTextById]);
 
   const playingId = useMemo(() => findPlayingId(events, currentTime), [events, currentTime]);
 
@@ -554,7 +626,7 @@ export default function SubtitleTablePanel({
       </div>
 
       {/* ── Column headers ── */}
-      <div className={`${GRID} items-center px-2 py-1.5 text-[10px] font-bold text-slate-500 uppercase tracking-wider border-b border-[var(--ss-line)] bg-[var(--ss-bg)] shrink-0 select-none`}>
+      <div className={`${comparing ? GRID_COMPARE : GRID} items-center px-2 py-1.5 text-[10px] font-bold text-slate-500 uppercase tracking-wider border-b border-[var(--ss-line)] bg-[var(--ss-bg)] shrink-0 select-none`}>
         <div className="flex items-center justify-center">
           <input
             type="checkbox"
@@ -566,10 +638,20 @@ export default function SubtitleTablePanel({
           />
         </div>
         <div className="text-center">#</div>
-        <div>Start</div>
-        <div>End</div>
-        <div>Dur</div>
-        <div>Text</div>
+        {comparing ? (
+          <>
+            <div>Time</div>
+            <div className="truncate" title={`${langName(sourceLang)} (original)`}>{langName(sourceLang)}</div>
+            <div className="truncate text-[var(--ss-accent)]" title={`${langName(targetLang)} (translation, editable)`}>{langName(targetLang)}</div>
+          </>
+        ) : (
+          <>
+            <div>Start</div>
+            <div>End</div>
+            <div>Dur</div>
+            <div>Text</div>
+          </>
+        )}
         <div className="text-right pr-1">CPS</div>
         <div />
       </div>
@@ -614,6 +696,7 @@ export default function SubtitleTablePanel({
                 availableSpeakers={isActive ? availableSpeakers : null}
                 focusOnActivate={focusOnActivate}
                 actions={actions}
+                sourceText={comparing ? sourceTextById.get(id) : undefined}
               />
             );
           })

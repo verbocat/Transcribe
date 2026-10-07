@@ -3038,6 +3038,9 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
                 cpsLimit={cpsLimit}
                 minDuration={minDuration}
                 maxDuration={maxDuration}
+                sourceEvents={activeTrack && sourceTrack && activeTrack !== sourceTrack ? tracks[sourceTrack] || null : null}
+                sourceLang={sourceTrack}
+                targetLang={activeTrack}
               />
                 </div>
               }
