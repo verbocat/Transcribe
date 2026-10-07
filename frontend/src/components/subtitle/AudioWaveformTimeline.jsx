@@ -1,5 +1,6 @@
 import { subscribePlayhead, publishPlayhead, getPlayhead } from '../../utils/playheadBus';
 import { themeColor, withAlpha } from '../../theme/themeEngine';
+import { stripFormatting } from './formatTags';
 import React, { useRef, useState, useEffect, useLayoutEffect, useCallback, useMemo } from 'react';
 import {
   ZoomIn, ZoomOut, Volume2, Split, AlertCircle,
@@ -57,9 +58,9 @@ const TimelineSubtitleBlock = React.memo(function TimelineSubtitleBlock({
 
   const dur    = Math.max(0.1, end - start);
   const text   = event.text || '';
-  const rawLen = text.replace(/<[^>]+>/g, '').trim().length;
+  const rawLen = stripFormatting(text).trim().length;
   const cps    = rawLen / dur;
-  const maxCpl = Math.max(...text.split('\n').map(l => l.replace(/<[^>]+>/g, '').trim().length), 0);
+  const maxCpl = Math.max(...stripFormatting(text).split('\n').map(l => l.trim().length), 0);
   const hasErr = cps > cpsLimit || maxCpl > cplLimit || dur < 0.833 || dur > 7;
 
   return (
@@ -105,7 +106,7 @@ const TimelineSubtitleBlock = React.memo(function TimelineSubtitleBlock({
         style={{ pointerEvents: 'auto' }}
       >
         <span className="ss-script text-[12px] font-medium leading-tight truncate select-none">
-          {text ? text.replace(/\n/g, ' ') : `#${id}`}
+          {text ? stripFormatting(text).replace(/\n/g, ' ') : `#${id}`}
         </span>
       </div>
 

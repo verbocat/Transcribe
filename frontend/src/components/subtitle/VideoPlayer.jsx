@@ -7,6 +7,7 @@ import {
   ArrowUpDown, Camera, ChevronDown, Crop, Layers, Sparkles
 } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
+import { stripFormatting, getAlignment, alignmentParts, formattedRuns } from './formatTags';
 
 
 // Cue under time t using half-open [start, end) so touching cues never resolve to the previous one.
@@ -791,17 +792,30 @@ export default function VideoPlayer({
         )}
 
         {/* Live Subtitle Overlay - Modern Pill Card Style matching reference */}
-        <div 
-          className={`absolute left-0 right-0 px-8 pointer-events-none flex flex-col items-center justify-center z-10 transition-all ${
-            subtitlePosition === 'top' ? 'top-[8%]' : 'bottom-[7%]'
-          }`}
-        >
-          {currentSubtitle?.text && (
-            <div className="ss-script bg-black/70 text-white px-3 py-1 rounded-md text-[clamp(14px,1.6vw,22px)] font-medium text-center max-w-[85%] leading-snug whitespace-pre-line [text-shadow:0_1px_2px_rgba(0,0,0,0.8)]">
-              {currentSubtitle.text.replace(/<[^>]+>/g, '')}
+        {(() => {
+          // A subtitle's own {\anN} tag places it; untagged subtitles follow the top/bottom toggle
+          const text = currentSubtitle?.text || '';
+          const tagged = /\{\\an[1-9]\}/.test(text);
+          const { horizontal, vertical } = alignmentParts(getAlignment(text));
+          const v = tagged ? vertical : subtitlePosition;
+          return (
+            <div
+              className={`absolute left-0 right-0 px-8 pointer-events-none flex flex-col justify-center z-10 transition-all ${
+                v === 'top' ? 'top-[8%]' : v === 'middle' ? 'top-1/2 -translate-y-1/2' : 'bottom-[7%]'
+              } ${horizontal === 'left' ? 'items-start' : horizontal === 'right' ? 'items-end' : 'items-center'}`}
+            >
+              {stripFormatting(text).trim() && (
+                <div className={`ss-script bg-black/70 text-white px-3 py-1 rounded-md text-[clamp(14px,1.6vw,22px)] font-medium max-w-[85%] leading-snug whitespace-pre-line [text-shadow:0_1px_2px_rgba(0,0,0,0.8)] ${
+                  horizontal === 'left' ? 'text-left' : horizontal === 'right' ? 'text-right' : 'text-center'
+                }`}>
+                  {formattedRuns(text).map((r, i) => (
+                    <span key={i} className={`${r.bold ? 'font-bold' : ''} ${r.italic ? 'italic' : ''} ${r.underline ? 'underline' : ''}`}>{r.text}</span>
+                  ))}
+                </div>
+              )}
             </div>
-          )}
-        </div>
+          );
+        })()}
 
         {/* Loop Banner */}
         {loopRef.current && (
