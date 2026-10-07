@@ -115,50 +115,108 @@
   to { background-position: 150% 0; }
 }
 
-/* ── Tool rail: each feature gets its own accent "power" ───────────────────
-   --rail-a / --rail-b are the two gradient stops; mixed with the text colour so
-   they stay readable on both light and dark themes. */
+/* ── Tool rail: 3D "power keys" ────────────────────────────────────────────
+   Each feature is a raised glossy key with its own colour pair (--rail-a / --rail-b),
+   a rotating energy ring behind it and an icon animation that matches its job.
+   Hover tilts the key in 3D, press sinks it, active lights it up. */
 .rail-btn {
   --rail-a: var(--ss-accent);
   --rail-b: var(--ss-accent-hover);
-  color: color-mix(in srgb, var(--rail-a) 78%, var(--ss-text));
-  background: color-mix(in srgb, var(--rail-a) 8%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--rail-a) 22%, transparent);
-  transition: transform 160ms ease, box-shadow 160ms ease, background 160ms ease, color 160ms ease;
+  --rail-edge: color-mix(in srgb, var(--rail-a) 45%, #000);
+  position: relative;
+  isolation: isolate;
+  color: #fff;
+  border-radius: 10px;
+  border: 0;
+  background:
+    linear-gradient(180deg, rgb(255 255 255 / 0.38) 0%, rgb(255 255 255 / 0) 48%),
+    linear-gradient(145deg, color-mix(in srgb, var(--rail-a) 80%, #000) 0%, color-mix(in srgb, var(--rail-b) 80%, #000) 100%);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.55),
+    inset 0 -2px 3px rgb(0 0 0 / 0.35),
+    0 3px 0 var(--rail-edge),
+    0 6px 10px -2px rgb(0 0 0 / 0.5),
+    0 0 10px -2px color-mix(in srgb, var(--rail-a) 60%, transparent);
+  transform: perspective(160px) rotateX(0) translateY(0);
+  transform-style: preserve-3d;
+  transition: transform 180ms cubic-bezier(.3,1.4,.5,1), box-shadow 180ms ease, filter 180ms ease;
+  margin-bottom: 3px; /* room for the 3D edge */
 }
-.rail-btn[data-power="generate"] { --rail-a: #8b5cf6; --rail-b: #ec4899; }
-.rail-btn[data-power="context"]  { --rail-a: #f59e0b; --rail-b: #f97316; }
-.rail-btn[data-power="translate"]{ --rail-a: #06b6d4; --rail-b: #3b82f6; }
+.rail-btn[data-power="generate"] { --rail-a: #a855f7; --rail-b: #ec4899; }
+.rail-btn[data-power="context"]  { --rail-a: #f59e0b; --rail-b: #ef4444; }
+.rail-btn[data-power="translate"]{ --rail-a: #06b6d4; --rail-b: #6366f1; }
 .rail-btn[data-power="qc"]       { --rail-a: #10b981; --rail-b: #84cc16; }
 
-.rail-btn:not(:disabled):hover {
-  transform: translateY(-1px) scale(1.06);
-  background: linear-gradient(135deg, color-mix(in srgb, var(--rail-a) 22%, transparent), color-mix(in srgb, var(--rail-b) 18%, transparent));
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--rail-a) 55%, transparent), 0 0 12px -2px color-mix(in srgb, var(--rail-a) 55%, transparent);
+/* rotating energy ring behind the key */
+.rail-btn::before {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: 13px;
+  z-index: -1;
+  background: conic-gradient(from 0deg, var(--rail-a), transparent 30%, var(--rail-b) 55%, transparent 80%, var(--rail-a));
+  filter: blur(3px);
+  opacity: 0.45;
+  animation: rail-spin 5s linear infinite;
 }
-.rail-btn:not(:disabled):active { transform: scale(0.96); }
-
-.rail-btn[data-on="true"] {
-  color: #fff;
-  background: linear-gradient(135deg, var(--rail-a), var(--rail-b));
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--rail-a) 70%, transparent), 0 2px 12px -2px color-mix(in srgb, var(--rail-a) 70%, transparent);
-}
-.rail-btn[data-on="true"] svg { filter: drop-shadow(0 1px 1px rgb(0 0 0 / 0.25)); }
-
-/* a slow shimmer on the hero action so Generate reads as the main power */
-.rail-btn[data-hero="true"]:not(:disabled):not([data-on="true"])::after {
+/* glossy sweep across the key face */
+.rail-btn::after {
   content: '';
   position: absolute;
   inset: 0;
   border-radius: inherit;
-  background: linear-gradient(115deg, transparent 35%, color-mix(in srgb, var(--rail-b) 45%, transparent) 50%, transparent 65%);
-  background-size: 250% 100%;
-  animation: rail-shimmer 3.6s ease-in-out infinite;
+  background: linear-gradient(110deg, transparent 35%, rgb(255 255 255 / 0.5) 50%, transparent 65%);
+  background-size: 260% 100%;
+  background-position: 160% 0;
+  animation: rail-gloss 4.5s ease-in-out infinite;
   pointer-events: none;
 }
-@keyframes rail-shimmer { 0% { background-position: 150% 0; } 60%, 100% { background-position: -50% 0; } }
+.rail-btn svg { position: relative; z-index: 1; filter: drop-shadow(0 1px 1px rgb(0 0 0 / 0.45)); transform: translateZ(8px); }
+
+.rail-btn:not(:disabled):hover {
+  transform: perspective(160px) rotateX(14deg) translateY(-3px) scale(1.08);
+  filter: brightness(1.12) saturate(1.15);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.7),
+    inset 0 -2px 3px rgb(0 0 0 / 0.3),
+    0 5px 0 var(--rail-edge),
+    0 12px 16px -3px rgb(0 0 0 / 0.55),
+    0 0 18px 0 color-mix(in srgb, var(--rail-a) 75%, transparent);
+}
+.rail-btn:not(:disabled):hover::before { opacity: 0.9; animation-duration: 2s; }
+.rail-btn:not(:disabled):active {
+  transform: perspective(160px) rotateX(0) translateY(3px) scale(0.97);
+  box-shadow: inset 0 2px 4px rgb(0 0 0 / 0.45), 0 0 0 var(--rail-edge), 0 1px 2px rgb(0 0 0 / 0.4);
+}
+
+/* active = powered on: bright pulsing aura, key stays lit */
+.rail-btn[data-on="true"] {
+  filter: brightness(1.18) saturate(1.2);
+  animation: rail-pulse 1.8s ease-in-out infinite;
+}
+.rail-btn[data-on="true"]::before { opacity: 1; animation-duration: 2.2s; }
+
+/* per-feature icon animations */
+.rail-btn[data-power="generate"] svg { animation: rail-sparkle 2.4s ease-in-out infinite; }
+.rail-btn[data-power="context"]  svg { animation: rail-bob 2.6s ease-in-out infinite; }
+.rail-btn[data-power="translate"] svg { animation: rail-flip 4s ease-in-out infinite; }
+.rail-btn[data-power="qc"]       svg { animation: rail-breathe 2.2s ease-in-out infinite; }
+.rail-btn svg.animate-spin { animation: rail-working 1s linear infinite; }
+
+@keyframes rail-spin { to { transform: rotate(360deg); } }
+@keyframes rail-gloss { 0%, 55% { background-position: 160% 0; } 80%, 100% { background-position: -60% 0; } }
+@keyframes rail-pulse { 0%, 100% { box-shadow: inset 0 1px 0 rgb(255 255 255 / .6), inset 0 -2px 3px rgb(0 0 0 / .3), 0 3px 0 var(--rail-edge), 0 6px 10px -2px rgb(0 0 0 / .5), 0 0 10px 0 color-mix(in srgb, var(--rail-a) 70%, transparent); }
+                           50% { box-shadow: inset 0 1px 0 rgb(255 255 255 / .6), inset 0 -2px 3px rgb(0 0 0 / .3), 0 3px 0 var(--rail-edge), 0 6px 10px -2px rgb(0 0 0 / .5), 0 0 22px 3px color-mix(in srgb, var(--rail-b) 85%, transparent); } }
+@keyframes rail-sparkle { 0%, 100% { transform: translateZ(8px) scale(1) rotate(0); } 50% { transform: translateZ(8px) scale(1.18) rotate(18deg); } }
+@keyframes rail-bob { 0%, 100% { transform: translateZ(8px) translateY(0); } 50% { transform: translateZ(8px) translateY(-2px) rotate(-6deg); } }
+@keyframes rail-flip { 0%, 70%, 100% { transform: translateZ(8px) rotateY(0); } 85% { transform: translateZ(8px) rotateY(180deg); } }
+@keyframes rail-breathe { 0%, 100% { transform: translateZ(8px) scale(1); } 50% { transform: translateZ(8px) scale(1.14); } }
+@keyframes rail-working { to { transform: translateZ(8px) rotate(360deg); } }
+
+.rail-btn:disabled { filter: grayscale(0.85) brightness(0.7); box-shadow: 0 2px 0 var(--rail-edge); animation: none; }
+.rail-btn:disabled::before, .rail-btn:disabled::after, .rail-btn:disabled svg { animation: none; opacity: 0.25; }
+
 @media (prefers-reduced-motion: reduce) {
-  .rail-btn, .rail-btn::after { transition: none; animation: none !important; }
+  .rail-btn, .rail-btn::before, .rail-btn::after, .rail-btn svg { animation: none !important; transition: none; }
   .rail-btn:not(:disabled):hover { transform: none; }
 }
-.rail-btn:disabled { box-shadow: none; background: transparent; color: var(--ss-faint); }
