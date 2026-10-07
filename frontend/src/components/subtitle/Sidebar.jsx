@@ -97,16 +97,16 @@ export default function Sidebar({
         data-on={on ? 'true' : 'false'}
         data-hero={item.accent ? 'true' : undefined}
         className={`rail-btn group relative shrink-0 rounded-lg inline-flex items-center justify-center cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed outline-none focus-visible:ring-1 focus-visible:ring-[var(--ss-accent)] ${
-          horizontal && showLabels && !small ? 'h-7 px-2 gap-1.5' : 'w-9 h-9'
+          horizontal && showLabels && !small ? 'h-6 px-2 gap-1.5' : 'w-7 h-7'
         }`}
       >
-        {on && !horizontal && <span aria-hidden="true" className={`absolute top-1.5 bottom-1.5 w-[3px] rounded-full bg-[var(--rail-a)] shadow-[0_0_8px_var(--rail-a)] ${position === 'right' ? '-right-[5px]' : '-left-[5px]'}`} />}
-        <Icon size={16} strokeWidth={1.8} className={item.spin ? 'animate-spin' : ''} />
+        {on && !horizontal && <span aria-hidden="true" className={`absolute top-1.5 bottom-1.5 w-[2px] rounded-full bg-[var(--rail-a)] shadow-[0_0_6px_var(--rail-a)] ${position === 'right' ? '-right-[5px]' : '-left-[5px]'}`} />}
+        <Icon size={14} strokeWidth={2} className={item.spin ? 'animate-spin' : ''} />
         {horizontal && showLabels && !small && <span className="text-[12px] font-medium leading-none">{item.label}</span>}
         {item.badge != null && (
           <span className="absolute -top-0.5 -right-0.5 min-w-[14px] h-[14px] px-1 rounded-full bg-[var(--ss-warn)] text-[9px] font-bold leading-[14px] text-black text-center">{item.badge}</span>
         )}
-        {item.dot && !item.badge && <span aria-hidden="true" className="absolute top-1 right-1 w-2 h-2 rounded-full bg-white ring-2 ring-[var(--rail-b)]" />}
+        {item.dot && !item.badge && <span aria-hidden="true" className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-white ring-1 ring-[var(--rail-b)]" />}
         {!(horizontal && showLabels && !small) && <Tip>{item.title || item.label}</Tip>}
       </button>
     );
@@ -117,10 +117,10 @@ export default function Sidebar({
       aria-label="Tools"
       style={{ order: first ? 0 : 3 }}
       className={`shrink-0 bg-[var(--ss-bg)] ${edge} border-[var(--ss-line)] flex justify-between select-none z-30 ${
-        horizontal ? 'flex-row items-center w-full px-2 h-10' : 'flex-col items-center h-full w-12 py-2'
+        horizontal ? 'flex-row items-center w-full px-2 h-10' : 'flex-col items-center h-full w-10 py-2'
       }`}
     >
-      <div className={`flex ${horizontal ? 'flex-row items-center gap-1.5' : 'flex-col items-center gap-1.5'}`}>
+      <div className={`flex ${horizontal ? 'flex-row items-center gap-1.5' : 'flex-col items-center gap-2'}`}>
         {groups.map((group, gi) => (
           <React.Fragment key={gi}>
             {gi > 0 && <span aria-hidden="true" className={horizontal ? 'w-px h-4 mx-1 bg-[var(--ss-line)]' : 'h-px w-5 my-1 bg-[var(--ss-line)]'} />}
