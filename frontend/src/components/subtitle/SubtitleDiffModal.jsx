@@ -170,7 +170,7 @@ export default function SubtitleDiffModal({ isOpen, onClose, originalEvents = []
               <Diff className="w-5 h-5 text-[var(--ss-accent)]" />
             </div>
             <div>
-              <h2 className="text-base font-bold text-white uppercase tracking-wider">Netflix Auto-Fix Diff Preview</h2>
+              <h2 className="text-base font-bold text-white uppercase tracking-wider">Auto-Fix Diff Preview</h2>
               <p className="text-xs text-slate-400">{totalChanges} subtitle event{totalChanges !== 1 ? 's' : ''} corrected</p>
             </div>
           </div>
@@ -211,7 +211,7 @@ export default function SubtitleDiffModal({ isOpen, onClose, originalEvents = []
             <div className="text-center py-12 text-slate-500">
               <CheckCheck className="w-10 h-10 mx-auto mb-2 text-[var(--ss-accent)]" />
               <p className="text-xs font-bold text-slate-300">No Auto-Fix Adjustments Needed</p>
-              <p className="text-[11px] text-slate-400 mt-0.5">All subtitles currently comply with Netflix timing and formatting rules.</p>
+              <p className="text-[11px] text-slate-400 mt-0.5">All subtitles currently comply with the timing and formatting rules.</p>
             </div>
           ) : (
             changes.map((change) => (

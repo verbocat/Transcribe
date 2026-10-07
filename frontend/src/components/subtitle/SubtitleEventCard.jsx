@@ -564,7 +564,7 @@ function SubtitleEventCard({
                 onRebreak(event.id);
               }}
               className="p-1 rounded text-slate-400 hover:text-[var(--kt-accent)] hover:bg-[var(--kt-s2)] transition-colors cursor-pointer"
-              title="Auto-balance lines (Netflix syntax rules)"
+              title="Auto-balance lines (syntax rules)"
             >
               <CornerDownLeft className="w-3 h-3" />
             </button>
@@ -678,7 +678,7 @@ function SubtitleEventCard({
             <div className="flex items-center justify-between text-[11px] font-bold">
               <span className="flex items-center gap-1 text-rose-300">
                 <AlertTriangle size={12} className="text-rose-400" />
-                <span>Netflix QC Violations ({qcErrors.length}):</span>
+                <span>Guideline QC Violations ({qcErrors.length}):</span>
               </span>
               <button
                 type="button"

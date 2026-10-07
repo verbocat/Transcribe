@@ -852,7 +852,7 @@ function SubtitleGridView({
                 type="button"
                 onClick={() => activeEvent && onRebreakEvent(activeEvent.id ?? activeEvent.event_id)}
                 className="px-2 py-1 rounded-none text-[11px] font-bold border border-indigo-500/50 bg-indigo-950/40 text-indigo-300 hover:bg-indigo-900/60 cursor-pointer transition-colors flex items-center gap-1"
-                title="Auto-rebreak subtitle lines conforming to Netflix grammar (Ctrl+B)"
+                title="Auto-rebreak subtitle lines conforming to line-break grammar (Ctrl+B)"
               >
                 <Sparkles size={11} />
                 <span>Auto-Break</span>
@@ -875,7 +875,7 @@ function SubtitleGridView({
               <div className="flex items-center gap-1.5 truncate">
                 <AlertTriangle size={12} className="text-amber-400 shrink-0" />
                 <span className="font-semibold truncate">
-                  {activeErrors[0].message || 'Subtitle exceeds Netflix reading speed limit.'}
+                  {activeErrors[0].message || 'Subtitle exceeds the reading speed limit.'}
                 </span>
               </div>
               <button

@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { X, Sparkles, Loader2, Plus, BookText, ChevronDown, ChevronRight, Wand2, Check, AlertTriangle, ArrowRight } from 'lucide-react';
+import { X, Sparkles, Loader2, BookText, ChevronDown, ChevronRight, Wand2, Check, AlertTriangle, ArrowRight } from 'lucide-react';
 import { API_BASE } from '../../config';
 import { Button, IconButton, Select, TextInput, Switch, Badge } from './ui/controls';
 
@@ -19,22 +19,13 @@ const CONTENT_TYPES = [
   { value: 'tutorial', label: 'Tutorial / training' }, { value: 'other', label: 'Other' },
 ];
 const WRITING_STYLES = [
-  { value: 'spoken', label: 'Exactly as spoken (natural)' },
-  { value: 'light', label: 'Light cleanup' },
-  { value: 'clean', label: 'Clean written text' },
+  { value: 'spoken', label: 'Verbatim' },
+  { value: 'clean', label: 'Non-verbatim' },
 ];
-const FILLERS = [{ value: 'keep', label: 'Keep (um, uh, matlab…)' }, { value: 'remove', label: 'Remove' }];
-const STUTTERS = [{ value: 'keep', label: 'Keep as spoken' }, { value: 'clean', label: 'Clean up repeats' }];
-const NUMBERS = [
-  { value: 'guide', label: '1 to 10 in words, 11+ digits' },
-  { value: 'digits', label: 'Always digits' },
-  { value: 'words', label: 'Words where natural' },
-];
-const PROFANITY = [{ value: 'keep', label: 'Keep as spoken' }, { value: 'mask', label: 'Mask (f***)' }];
 
 export const EMPTY_CONTEXT = {
-  title: '', content_type: '', topic: '', summary: '', region: '', language_mix: '', variety: '',
-  speakers: [], key_terms: '', corrections: '',
+  title: '', content_type: '', topic: '', summary: '', region: '',
+  key_terms: '', corrections: '',
   writing_style: 'spoken', fillers: 'keep', stutters: 'keep', numbers: 'guide', profanity: 'keep',
   dos: '', donts: '', notes: '', strict: true,
 };
@@ -58,10 +49,8 @@ export function saveContext(fileName, ctx) {
 export function contextForRequest(ctx) {
   const out = {};
   Object.entries(ctx || {}).forEach(([k, v]) => {
-    if (k === 'speakers') {
-      const rows = (v || []).filter((s) => (s.name || '').trim());
-      if (rows.length) out.speakers = rows;
-    } else if (k === 'strict') {
+    if (!(k in EMPTY_CONTEXT)) return; // fields from older saved drafts that no longer exist
+    if (k === 'strict') {
       out.strict = !!v;
     } else if (String(v ?? '').trim()) {
       out[k] = String(v).trim();
@@ -70,7 +59,7 @@ export function contextForRequest(ctx) {
   return out;
 }
 
-const hasContent = (ctx) => Object.keys(contextForRequest(ctx)).some((k) => !['strict', 'writing_style', 'fillers', 'stutters', 'numbers', 'profanity'].includes(k));
+const hasContent = (ctx) => Object.keys(contextForRequest(ctx)).some((k) => !['strict', 'writing_style'].includes(k));
 
 const AREA = 'w-full rounded-lg border border-[var(--ss-line)] bg-[var(--ss-bg)] px-2.5 py-1.5 text-[12px] placeholder:text-[var(--ss-faint)] focus:border-[var(--ss-accent)] focus:outline-none';
 
@@ -140,13 +129,12 @@ export default function ContextPanel({
         language,
       });
       const next = { ...ctx };
-      ['title', 'topic', 'summary', 'region', 'language_mix', 'variety'].forEach((k) => { if (!String(next[k]).trim() && d[k]) next[k] = d[k]; });
+      ['title', 'topic', 'summary', 'region'].forEach((k) => { if (!String(next[k]).trim() && d[k]) next[k] = d[k]; });
       if (!next.content_type && d.content_type) next.content_type = d.content_type;
-      if (!(next.speakers || []).length && (d.speakers || []).length) next.speakers = d.speakers;
       next.key_terms = mergeLines(next.key_terms, d.key_terms);
       next.corrections = mergeLines(next.corrections, d.corrections);
       onChange(next);
-      setNote({ tone: 'good', text: `Centroid read ${d.lines_read} of ${d.lines_total} subtitles and drafted the context: ${(d.speakers || []).length} speakers, ${(d.key_terms || []).length} key terms, ${(d.corrections || []).length} spelling fixes. Please check them. They are applied as rules.` });
+      setNote({ tone: 'good', text: `Centroid read ${d.lines_read} of ${d.lines_total} subtitles and drafted the context: ${(d.key_terms || []).length} key terms, ${(d.corrections || []).length} spelling fixes. Please check them. They are applied as rules.` });
     } catch (e) {
       setNote({ tone: 'danger', text: e.message });
     } finally {
@@ -221,29 +209,7 @@ export default function ContextPanel({
           </div>
         </Group>
 
-        <Group title="People" hint={`${(ctx.speakers || []).filter((s) => s.name).length} added`} defaultOpen>
-          <div className="mb-2 flex items-center justify-between gap-3">
-            <p className="text-[11.5px] text-[var(--ss-faint)]">Names of the people who speak, spelled the way you want them.</p>
-            <Button size="sm" variant="ghost" icon={Plus} onClick={() => patch('speakers', [...(ctx.speakers || []), { name: '', role: '', style: '' }])}>Add</Button>
-          </div>
-          <div className="space-y-2">
-            {(ctx.speakers || []).map((s, i) => {
-              const setRow = (p) => patch('speakers', ctx.speakers.map((r, j) => (j === i ? { ...r, ...p } : r)));
-              return (
-                <div key={i} className="rounded-lg border border-[var(--ss-line)] p-2 space-y-1.5">
-                  <div className="grid grid-cols-[1fr_auto] gap-2 items-center">
-                    <TextInput value={s.name} onChange={(e) => setRow({ name: e.target.value })} placeholder="Name" aria-label="Speaker name" />
-                    <IconButton size="sm" icon={X} label="Remove speaker" onClick={() => patch('speakers', ctx.speakers.filter((_, j) => j !== i))} />
-                  </div>
-                  <TextInput value={s.role || ''} onChange={(e) => setRow({ role: e.target.value })} placeholder="Role, e.g. host, guest, the villain" aria-label="Speaker role" />
-                  <TextInput value={s.style || ''} onChange={(e) => setRow({ style: e.target.value })} placeholder="How they talk, e.g. fast, slangy, strong accent" aria-label="Speaking style" />
-                </div>
-              );
-            })}
-          </div>
-        </Group>
-
-        <Group title="Names and terms" hint="Spelled exactly" defaultOpen>
+        <Group title="Key names and terms" hint="Spelled exactly" defaultOpen>
           <Field label="Key terms: names, brands, places, technical words">
             <textarea rows={4} className={`${AREA} font-mono`} value={ctx.key_terms} onChange={(e) => patch('key_terms', e.target.value)} placeholder={'One per line.\nEldrador\nGanadore\nSuper Crystal'} />
           </Field>
@@ -255,16 +221,8 @@ export default function ContextPanel({
         </Group>
 
         <Group title="How to write it" hint={WRITING_STYLES.find((w) => w.value === ctx.writing_style)?.label} defaultOpen>
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Writing style" className="col-span-2"><Select label="Writing style" value={ctx.writing_style} onChange={(v) => patch('writing_style', v)} options={WRITING_STYLES} className="w-full" /></Field>
-            <Field label="Filler words"><Select label="Filler words" value={ctx.fillers} onChange={(v) => patch('fillers', v)} options={FILLERS} className="w-full" /></Field>
-            <Field label="Stutters and repeats"><Select label="Stutters" value={ctx.stutters} onChange={(v) => patch('stutters', v)} options={STUTTERS} className="w-full" /></Field>
-            <Field label="Numbers"><Select label="Numbers" value={ctx.numbers} onChange={(v) => patch('numbers', v)} options={NUMBERS} className="w-full" /></Field>
-            <Field label="Profanity"><Select label="Profanity" value={ctx.profanity} onChange={(v) => patch('profanity', v)} options={PROFANITY} className="w-full" /></Field>
-            <Field label="Spoken language and mixing" className="col-span-2"><TextInput value={ctx.language_mix} onChange={(e) => patch('language_mix', e.target.value)} placeholder="e.g. Hindi with many English words" /></Field>
-            <Field label="Accent or dialect" className="col-span-2"><TextInput value={ctx.variety} onChange={(e) => patch('variety', e.target.value)} placeholder="e.g. everyday Mumbai Hindi, Indian English" /></Field>
-          </div>
-          <p className="mt-2 text-[11.5px] text-[var(--ss-faint)] leading-snug">With “Exactly as spoken”, everyday and slang words stay as the speaker said them. The AI is never allowed to swap them for formal or bookish words.</p>
+          <Field label="Writing style"><Select label="Writing style" value={ctx.writing_style === 'spoken' ? 'spoken' : 'clean'} onChange={(v) => patch('writing_style', v)} options={WRITING_STYLES} className="w-full" /></Field>
+          <p className="mt-2 text-[11.5px] text-[var(--ss-faint)] leading-snug">Verbatim keeps everyday and slang words exactly as the speaker said them. Non-verbatim gives clean written text.</p>
         </Group>
 
         <Group title="Rules" hint="Always do, never do">

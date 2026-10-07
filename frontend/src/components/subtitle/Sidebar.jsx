@@ -1,36 +1,29 @@
 import React from 'react';
 import {
-  FolderOpen,
-  FileText,
   Sparkles,
   Languages,
-  BadgeCheck,
   ShieldCheck,
-  Download,
-  HelpCircle,
   Loader2,
-  LayoutDashboard,
   BookText,
 } from 'lucide-react';
 
 /**
- * Left tool rail: a slim, icon-only strip (labels appear as tooltips), grouped by job:
- * media in | AI steps | review and out. Panels (Context, Translate, QC, Export) stay highlighted while open.
- * "Centroid QC" only appears once a translation exists. When docked top or bottom it becomes a compact row with labels.
+ * Left tool rail: a slim, icon-only strip (labels appear as tooltips) for the working tools:
+ * AI steps | quality check. Panels (Context, Translate, QC) stay highlighted while open.
+ * File actions (open, import, export), layout and shortcuts live in the top menu bar only.
+ * "QC" opens one view with Guideline and Centroid tabs; the badge counts Centroid issues.
+ * When docked top or bottom it becomes a compact row with labels.
  */
 export default function Sidebar({
   activeTab = null,
   isGenerating = false,
   canGenerate = true,
-  hasTranslation = false,
   translateOpen = false,
   contextOpen = false,
   contextActive = false,
   centroidQcCount = null,
   onTabChange = () => {},
-  onOpenHelp = () => {},
-  onOpenLayout = () => {},
-  layoutOpen = false,
+  qcOpen = false,
   position = 'left',
   showLabels = true,
 }) {
@@ -39,15 +32,11 @@ export default function Sidebar({
 
   const groups = [
     [
-      { id: 'media', label: 'Open', icon: FolderOpen, title: 'Open a video or audio file' },
-      { id: 'import', label: 'Import', icon: FileText, title: 'Import subtitles from an SRT / VTT file' },
-    ],
-    [
       {
         id: 'generate',
         label: isGenerating ? 'Working' : 'Generate',
         icon: isGenerating ? Loader2 : Sparkles,
-        title: !canGenerate ? 'Open a video or audio file first' : isGenerating ? 'Generating subtitles…' : 'Generate subtitles with ElevenLabs Scribe',
+        title: !canGenerate ? 'Open a video or audio file first' : isGenerating ? 'Generating subtitles…' : 'Generate subtitles',
         disabled: !canGenerate || isGenerating,
         spin: isGenerating,
         accent: true,
@@ -67,19 +56,16 @@ export default function Sidebar({
         title: 'Translate the subtitles into another language with Centroid',
         active: translateOpen,
       },
-      ...(hasTranslation
-        ? [{
-          id: 'centroid-qc',
-          label: 'Centroid QC',
-          icon: BadgeCheck,
-          title: 'Check the translation with Centroid QC',
-          badge: centroidQcCount,
-        }]
-        : []),
     ],
     [
-      { id: 'qa', label: 'QC', icon: ShieldCheck, title: 'Open the Netflix compliance (QC) panel' },
-      { id: 'export', label: 'Export', icon: Download, title: 'Export subtitles (SRT, VTT, TTML…)' },
+      {
+        id: 'qc',
+        label: 'QC',
+        icon: ShieldCheck,
+        title: 'Quality check: Guideline QC and Centroid translation QC',
+        active: qcOpen,
+        badge: centroidQcCount,
+      },
     ],
   ];
 
@@ -106,7 +92,7 @@ export default function Sidebar({
         onClick={() => item.onClick ? item.onClick() : onTabChange(item.id)}
         disabled={item.disabled}
         aria-label={item.label}
-        aria-pressed={item.active !== undefined || item.id === 'qa' || item.id === 'export' ? on : undefined}
+        aria-pressed={item.active !== undefined ? on : undefined}
         className={`group relative shrink-0 rounded-lg inline-flex items-center justify-center transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed outline-none focus-visible:ring-1 focus-visible:ring-[var(--ss-accent)] ${
           horizontal && showLabels && !small ? 'h-7 px-2 gap-1.5' : 'w-8 h-8'
         } ${
@@ -144,11 +130,6 @@ export default function Sidebar({
             {group.map((item) => btn(item))}
           </React.Fragment>
         ))}
-      </div>
-
-      <div className={`flex items-center gap-1 ${horizontal ? 'flex-row' : 'flex-col'}`}>
-        {btn({ id: 'layout', label: 'Layout', icon: LayoutDashboard, title: 'Layout & panels (Ctrl+Shift+L)', active: layoutOpen, onClick: onOpenLayout }, true)}
-        {btn({ id: 'help', label: 'Shortcuts', icon: HelpCircle, title: 'Keyboard shortcuts', active: false, onClick: onOpenHelp }, true)}
       </div>
     </aside>
   );

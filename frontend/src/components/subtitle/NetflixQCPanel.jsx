@@ -120,7 +120,7 @@ export default function NetflixQCPanel({
           <h3 className="font-semibold text-sm text-slate-200">Quality check</h3>
         </div>
         <div className="flex items-center gap-2">
-          <span className="text-[11px] text-slate-400">Netflix rules · target 98%</span>
+          <span className="text-[11px] text-slate-400">Guideline rules · target 98%</span>
           {onClose && (
             <button
               onClick={onClose}
@@ -198,7 +198,7 @@ export default function NetflixQCPanel({
           onClick={onAutoFix}
           disabled={!events.length || qcUnavailable}
           className="w-full py-2 px-3 bg-[var(--ss-accent)] hover:bg-[var(--ss-accent-hover)] disabled:opacity-40 disabled:cursor-not-allowed text-[var(--ss-accent-ink)] font-semibold rounded-md flex items-center justify-center gap-2 transition-colors text-xs cursor-pointer"
-          title="Fix timing, gaps, reading speed and line length using the Netflix rules (you review every change before it's kept)"
+          title="Fix timing, gaps, reading speed and line length using the guideline rules (you review every change before it's kept)"
         >
           <Wand2 className="w-4 h-4" />
           Auto-fix rule issues
@@ -221,10 +221,10 @@ export default function NetflixQCPanel({
                 onClick={onGeminiFix}
                 disabled={!events.length || isFixingWithGemini || qcUnavailable}
                 className="py-1.5 px-2 bg-[var(--ss-raised)] hover:bg-[var(--ss-hover)] disabled:opacity-40 disabled:cursor-not-allowed text-slate-200 font-medium rounded-md text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer border border-[var(--ss-line)]"
-                title="Ask Gemini AI to rewrite, split and re-time subtitles that break the rules (uses Gemini credits)"
+                title="Ask the AI to rewrite, split and re-time subtitles that break the rules (uses AI credits)"
               >
                 <Sparkles className={`w-3.5 h-3.5 ${isFixingWithGemini ? 'animate-spin' : ''}`} />
-                {isFixingWithGemini ? 'Fixing with Gemini…' : 'Fix with Gemini AI'}
+                {isFixingWithGemini ? 'Fixing with AI…' : 'Fix with AI'}
               </button>
             )}
             {onAcousticSync && (
@@ -355,7 +355,7 @@ export default function NetflixQCPanel({
         >
           <div className="flex items-center gap-1.5">
             <BookOpen className="w-3.5 h-3.5 text-[var(--ss-accent)]" />
-            Netflix Timed Text Guide
+            Timed Text Guide
           </div>
           {showGuidelines ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
         </button>
