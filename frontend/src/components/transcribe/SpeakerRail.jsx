@@ -85,7 +85,7 @@ function SpeakerCard({ speaker, isFiltered, onFilter, onRename, onSetGender, cas
   );
 }
 
-export default function SpeakerRail({ roster, filterSpeaker, onFilter, onRename, onSetGender, onOpenBulk, video, cast, onOpenCast, onAssign }) {
+export default function SpeakerRail({ roster, filterSpeaker, onFilter, onRename, onSetGender, onOpenBulk, onOpenPanel, video, cast, onOpenCast, onAssign }) {
   return (
     <aside
       aria-label="Speakers"
@@ -100,6 +100,9 @@ export default function SpeakerRail({ roster, filterSpeaker, onFilter, onRename,
           <span className="ts-chip">{roster.length}</span>
         </div>
         <div className="flex items-center gap-1">
+          <button type="button" className="ts-btn ts-btn-sm ts-btn-primary" onClick={onOpenPanel} title="Listen to each speaker, name them, merge or move lines">
+            Edit
+          </button>
           <button type="button" className="ts-btn ts-btn-sm" onClick={onOpenCast} title="Characters and genders for this show">
             Cast{cast.length ? ` (${cast.length})` : ''}
           </button>

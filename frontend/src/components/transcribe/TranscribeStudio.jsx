@@ -8,6 +8,9 @@ import EmptyState from './EmptyState';
 import AudioWaveform from '../AudioWaveform';
 import VideoPane, { createMediaBus } from './VideoPane';
 import CastModal from './CastModal';
+import SpeakerPanel from './SpeakerPanel';
+import { rememberSpeakerName } from './speakerNames';
+import { API_BASE } from '../../config';
 import QcDrawer from './QcDrawer';
 import CentroidModal from '../subtitle/CentroidModal';
 import { ALL_LANGS } from '../subtitle/languages';
@@ -23,6 +26,7 @@ export default function TranscribeStudio(p) {
   const [mediaBus] = useState(createMediaBus);
   const [cast, setCast] = useState(loadCast);
   const [showCast, setShowCast] = useState(false);
+  const [showSpeakers, setShowSpeakers] = useState(false);
   const [dismissedNotes, setDismissedNotes] = useState(null);
   // Translate (Centroid) and QC. Subtitle Studio's Centroid panel is reused as is; it works on {id, start_time, end_time, text}.
   const [showTranslate, setShowTranslate] = useState(false);
@@ -46,10 +50,64 @@ export default function TranscribeStudio(p) {
   const renameSpeaker = (oldName, newName) => {
     // A name that matches a cast member also takes that member's gender
     const member = findCastMember(cast, newName);
+    rememberSpeakerName(member ? member.name : newName);
     applyToSegments(p.segments.map((s) => (s.speaker === oldName
       ? { ...s, speaker: member ? member.name : newName, ...(member ? { gender: member.gender } : {}) }
       : s)));
     if (filterSpeaker === oldName) setFilterSpeaker(member ? member.name : newName);
+  };
+
+  // Gender most lines of a speaker agree on (ignores Unknown); null when nothing is known
+  const speakerGender = (segs, name) => {
+    const tally = {};
+    segs.forEach((s) => { if (s.speaker === name && s.gender && s.gender !== 'Unknown') tally[s.gender] = (tally[s.gender] || 0) + 1; });
+    return Object.keys(tally).sort((a, b) => tally[b] - tally[a])[0] || null;
+  };
+
+  const mergeSpeakers = (from, into) => {
+    if (from === into) return;
+    const g = speakerGender(p.segments, into);
+    applyToSegments(p.segments.map((s) => (s.speaker === from ? { ...s, speaker: into, ...(g ? { gender: g } : {}) } : s)));
+    if (filterSpeaker === from) setFilterSpeaker(into);
+  };
+
+  // `to` null starts a new speaker
+  const moveLine = (id, to) => {
+    let target = to;
+    if (!target) {
+      const used = new Set(p.segments.map((s) => s.speaker));
+      let n = 1;
+      while (used.has(`Speaker ${n}`)) n += 1;
+      target = `Speaker ${n}`;
+    }
+    const g = speakerGender(p.segments, target);
+    applyToSegments(p.segments.map((s) => (s.segment_id === id ? { ...s, speaker: target, ...(g ? { gender: g } : {}) } : s)));
+  };
+
+  // AI second pass: the server only suggests (merge two speakers, move single lines); applying is one undoable edit
+  const aiReviewSpeakers = async () => {
+    const res = await fetch(`${API_BASE}/api/speakers/refine`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ segments: p.segments, language: p.detectedLanguage || 'Hindi' }),
+    });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `server said ${res.status}`);
+    const { speaker_map: map = {}, reassign = {}, notes = [] } = await res.json();
+    const merged = Object.keys(map).length;
+    let moved = 0;
+    const next = p.segments.map((s) => {
+      const to = reassign[String(s.segment_id)] || map[s.speaker];
+      if (!to || to === s.speaker) return s;
+      if (reassign[String(s.segment_id)]) moved += 1;
+      const g = speakerGender(p.segments, to);
+      return { ...s, speaker: to, ...(g ? { gender: g } : {}) };
+    });
+    const extra = notes.join(' ');
+    if (!merged && !moved) return `AI found nothing to fix. ${extra}`.trim();
+    applyToSegments(next);
+    const parts = [];
+    if (merged) parts.push(`merged ${Object.entries(map).map(([a, b]) => `${a} into ${b}`).join(', ')}`);
+    if (moved) parts.push(`moved ${moved} line${moved === 1 ? '' : 's'}`);
+    return `AI ${parts.join(' and ')}. Use Undo to revert. ${extra}`.trim();
   };
 
   const updateCast = (next) => { setCast(next); saveCast(next); };
@@ -153,7 +211,7 @@ export default function TranscribeStudio(p) {
           <SpeakerRail
             roster={roster} filterSpeaker={filterSpeaker}
             onFilter={(name) => setFilterSpeaker(filterSpeaker === name ? null : name)}
-            onRename={renameSpeaker} onSetGender={setSpeakerGender} onOpenBulk={p.onOpenSpeakerSwap} video={video}
+            onRename={renameSpeaker} onSetGender={setSpeakerGender} onOpenBulk={p.onOpenSpeakerSwap} onOpenPanel={() => setShowSpeakers(true)} video={video}
             cast={cast} onOpenCast={() => setShowCast(true)} onAssign={renameSpeaker}
           />
           <TranscriptList
@@ -223,6 +281,14 @@ export default function TranscribeStudio(p) {
         trackLangs={Object.keys(tracks)}
         onTranslated={({ built }) => { setTracks(built); setActiveTrack(null); }}
         onShowTrack={({ code, events: cues }) => { setTracks((prev) => ({ ...prev, [code]: cues })); setActiveTrack(code); }}
+      />
+
+      <SpeakerPanel
+        isOpen={showSpeakers} onClose={() => setShowSpeakers(false)}
+        roster={roster} segments={p.segments} cast={cast} mediaBus={mediaBus} canPlay={Boolean(p.audioUrl)}
+        onPlayOnce={p.onPlayOnce} onStop={p.onStopSegment}
+        onRename={renameSpeaker} onMerge={mergeSpeakers} onMoveLine={moveLine} onAiReview={aiReviewSpeakers}
+        canUndo={p.canUndo} canRedo={p.canRedo} onUndo={p.onUndo} onRedo={p.onRedo}
       />
 
       <CastModal isOpen={showCast} cast={cast} onSave={updateCast} onClose={() => setShowCast(false)} />

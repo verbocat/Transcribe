@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from app.config import (
-    GEMINI_API_KEY, GEMINI_MODEL, DEFAULT_LANGUAGE,
+    GEMINI_API_KEY, GEMINI_MODEL, DEFAULT_LANGUAGE, SPEAKER_AI_REVIEW,
     MAX_SEGMENT_DURATION, MIN_SEGMENT_DURATION
 )
 from app.models import Segment, TranscriptionResult, AudioAnalysis, WordConfidence
@@ -37,6 +37,7 @@ from app.elevenlabs_service import transcribe_with_scribe_v2, LANGUAGE_CODE_MAP
 from app.transliteration_service import enforce_native_script_for_words, get_language_script_info
 from app.netflix_engine import filter_diarization_flickers
 from app.segment_gender import assign_genders_and_split_speakers
+from app.speaker_refine import refine_segments_in_place
 from app.terminal_logger import log_terminal
 
 logger = logging.getLogger(__name__)
@@ -463,6 +464,8 @@ async def process_audio_file(
     segments = await asyncio.to_thread(_build_segments, runs, audio_path, resolved_language, audio_info.duration)
     report("gender", 0.0, "Detecting speaker gender")
     processing_notes = await asyncio.to_thread(assign_genders_and_split_speakers, audio_path, segments, video_path)
+    if SPEAKER_AI_REVIEW:
+        processing_notes += await asyncio.to_thread(refine_segments_in_place, segments, resolved_language)
     roster = sorted({(s.speaker, s.gender) for s in segments}, key=lambda x: int(x[0].split()[-1]))
     log_terminal("ELEVENLABS-STT", f"[OK] Speakers: {', '.join(f'{n} ({g})' for n, g in roster)}")
     log_terminal("ELEVENLABS-STT", f"[OK] Built {len(segments)} Karya segments from {sum(1 for t in tokens if t['type'] == 'word')} words | Language: {resolved_language} | Script: {resolved_script}")
