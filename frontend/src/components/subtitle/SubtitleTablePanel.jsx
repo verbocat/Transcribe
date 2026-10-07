@@ -4,6 +4,7 @@ import {
   Search, Play, Trash2, AlertCircle, Plus, Download, ChevronUp, ChevronDown,
   Bold, Italic, Underline, Scissors, Merge, WrapText, User, LogIn, LogOut, Crosshair
 } from 'lucide-react';
+import { langName } from './languages';
 
 function toSMPTE(seconds) {
   if (seconds === undefined || seconds === null || isNaN(seconds)) return '00:00:00.000';
@@ -32,6 +33,33 @@ const stripTags = (t) => (t || '').replace(/<[^>]+>/g, '');
 const startOf = (ev) => ev.start_time ?? ev.start ?? 0;
 const endOf = (ev) => ev.end_time ?? ev.end ?? 0;
 const idOf = (ev) => ev.id ?? ev.event_id;
+
+/**
+ * Source-language text for each translated cue, so both can be read side by side.
+ * Matched by subtitle id (translations keep the source cue's id); a cue added or split
+ * since then falls back to the source cue it overlaps most in time.
+ */
+function buildSourceTextMap(events, sourceEvents) {
+  const map = new Map();
+  if (!sourceEvents?.length) return map;
+  const byId = new Map(sourceEvents.map((s) => [idOf(s), s]));
+  const sorted = [...sourceEvents].sort((a, b) => startOf(a) - startOf(b));
+  let j = 0;
+  events.forEach((ev) => {
+    const id = idOf(ev);
+    const same = byId.get(id);
+    const s0 = startOf(ev), e0 = endOf(ev);
+    if (same && Math.min(e0, endOf(same)) > Math.max(s0, startOf(same))) { map.set(id, same.text || ''); return; }
+    while (j < sorted.length && endOf(sorted[j]) <= s0) j++;
+    let best = null, bestOverlap = 0;
+    for (let k = j; k < sorted.length && startOf(sorted[k]) < e0; k++) {
+      const overlap = Math.min(e0, endOf(sorted[k])) - Math.max(s0, startOf(sorted[k]));
+      if (overlap > bestOverlap) { bestOverlap = overlap; best = sorted[k]; }
+    }
+    map.set(id, best ? (best.text || '') : null);
+  });
+  return map;
+}
 
 const GRID = 'grid grid-cols-[28px_34px_100px_100px_52px_1fr_56px_52px]';
 
@@ -133,11 +161,22 @@ function ToolButton({ title, onClick, children, danger = false, disabled = false
   );
 }
 
+function LangTag({ children, accent }) {
+  return (
+    <span className={`shrink-0 mt-[3px] px-1 rounded text-[9px] font-bold uppercase tracking-wider leading-[14px] border ${
+      accent ? 'border-[var(--ss-accent)]/40 text-[var(--ss-accent)] bg-[var(--ss-accent)]/10' : 'border-[var(--ss-line)] text-[var(--ss-faint)] bg-[var(--ss-raised)]'
+    }`}>
+      {children}
+    </span>
+  );
+}
+
 /** One cue. Memoized: re-renders only when its own data or state flags change. */
 const SubtitleRow = memo(function SubtitleRow({
   ev, pos, isActive, isPlaying, isSelected, prevEnd, nextStart,
   cpsLimit, cplLimit, minDuration, maxDuration, frameRate,
   currentTime, availableSpeakers, focusOnActivate, actions,
+  sourceText, sourceLabel, targetLabel,
 }) {
   const id = idOf(ev);
   const m = getEventMetrics(ev, cpsLimit, cplLimit, minDuration, maxDuration);
@@ -245,9 +284,21 @@ const SubtitleRow = memo(function SubtitleRow({
           {m.dur.toFixed(2)}s
         </div>
 
-        {/* Text: plain when idle, the editor itself when selected (never shown twice) */}
+        {/* Text: plain when idle, the editor itself when selected (never shown twice).
+            While a translation is shown, the source-language text sits above it under the same timestamp. */}
+        <div className="min-w-0">
+        {sourceText !== undefined && (
+          <div className="pr-2 mb-1 flex items-start gap-1.5" title={`${sourceLabel} (original)`}>
+            <LangTag>{sourceLabel}</LangTag>
+            <div className="min-w-0 ss-script text-[13px] leading-[1.45] whitespace-pre-wrap break-words text-[var(--ss-muted)]">
+              {sourceText === null ? <span className="italic text-slate-600">No original subtitle at this time</span> : (stripTags(sourceText) || <span className="italic text-slate-600">Empty subtitle</span>)}
+            </div>
+          </div>
+        )}
+        <div className={sourceText !== undefined ? 'flex items-start gap-1.5' : ''}>
+        {sourceText !== undefined && <LangTag accent>{targetLabel}</LangTag>}
         {isActive ? (
-          <div className="pr-2" onClick={(e) => e.stopPropagation()}>
+          <div className="pr-2 flex-1 min-w-0" onClick={(e) => e.stopPropagation()}>
             <textarea
               ref={textareaRef}
               rows={1}
@@ -268,7 +319,7 @@ const SubtitleRow = memo(function SubtitleRow({
         ) : (
           <div
             onClick={(e) => { e.stopPropagation(); actions.activate(id, m.start, true); }}
-            className={`pr-2 ss-script text-[14px] leading-[1.45] whitespace-pre-wrap break-words cursor-text text-[var(--ss-text)] ${
+            className={`pr-2 flex-1 min-w-0 ss-script text-[14px] leading-[1.45] whitespace-pre-wrap break-words cursor-text text-[var(--ss-text)] ${
               m.hasCplErr ? 'underline decoration-wavy decoration-rose-400/70 underline-offset-2' : ''
             }`}
             title="Click to edit"
@@ -276,6 +327,8 @@ const SubtitleRow = memo(function SubtitleRow({
             {stripTags(ev.text) || <span className="italic text-slate-600">Empty subtitle</span>}
           </div>
         )}
+        </div>
+        </div>
 
         <div className="flex items-start justify-end pr-1 pt-0.5">
           <CpsBadge cps={m.cps} cpsLimit={cpsLimit} />
@@ -379,6 +432,10 @@ export default function SubtitleTablePanel({
   cpsLimit = 20,
   minDuration = 0.833,
   maxDuration = 7.0,
+  // Set while a translation is shown: the original-language cues and both language codes
+  sourceEvents = null,
+  sourceLang = null,
+  targetLang = null,
 }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedIds, setSelectedIds] = useState(() => new Set());
@@ -432,6 +489,12 @@ export default function SubtitleTablePanel({
     return map;
   }, [events]);
 
+  const comparing = !!sourceEvents;
+  const sourceTextById = useMemo(
+    () => (comparing ? buildSourceTextMap(events, sourceEvents) : null),
+    [comparing, events, sourceEvents]
+  );
+
   const errorFlags = useMemo(
     () => events.map(ev => getEventMetrics(ev, cpsLimit, cplLimit, minDuration, maxDuration).hasError),
     [events, cpsLimit, cplLimit, minDuration, maxDuration]
@@ -441,11 +504,13 @@ export default function SubtitleTablePanel({
   const filteredEvents = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     return events.filter((ev, i) => {
-      if (q && !(ev.text || '').toLowerCase().includes(q) && String(i + 1) !== q) return false;
+      if (q && !(ev.text || '').toLowerCase().includes(q)
+        && !(sourceTextById?.get(idOf(ev)) || '').toLowerCase().includes(q)
+        && String(i + 1) !== q) return false;
       if (filterMode === 'errors') return errorFlags[i];
       return true;
     });
-  }, [events, searchQuery, filterMode, errorFlags]);
+  }, [events, searchQuery, filterMode, errorFlags, sourceTextById]);
 
   const playingId = useMemo(() => findPlayingId(events, currentTime), [events, currentTime]);
 
@@ -569,7 +634,7 @@ export default function SubtitleTablePanel({
         <div>Start</div>
         <div>End</div>
         <div>Dur</div>
-        <div>Text</div>
+        <div>{comparing ? `${langName(sourceLang)} original · ${langName(targetLang)} translation` : 'Text'}</div>
         <div className="text-right pr-1">CPS</div>
         <div />
       </div>
@@ -614,6 +679,9 @@ export default function SubtitleTablePanel({
                 availableSpeakers={isActive ? availableSpeakers : null}
                 focusOnActivate={focusOnActivate}
                 actions={actions}
+                sourceText={comparing ? sourceTextById.get(id) : undefined}
+                sourceLabel={sourceLang?.toUpperCase()}
+                targetLabel={targetLang?.toUpperCase()}
               />
             );
           })
