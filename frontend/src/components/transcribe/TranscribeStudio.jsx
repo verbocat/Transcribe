@@ -238,6 +238,7 @@ export default function TranscribeStudio(p) {
             filename={p.canTranscribe ? p.filename : null} isExtractingAudio={p.isExtractingAudio} extractionNotice={p.extractionNotice}
             onDropFile={(file) => p.onFileSelect({ target: { files: [file] } })}
             onTranscribe={p.onTranscribe} onOpenProjects={p.onOpenProjects} video={video}
+            language={p.language} setLanguage={p.setLanguage} script={p.script} setScript={p.setScript}
           />
         )
       )}
