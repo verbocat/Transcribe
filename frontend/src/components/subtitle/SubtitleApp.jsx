@@ -3286,8 +3286,8 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
           {showQcDrawer && (
             <div
               className={layout.qcDock === 'overlay'
-                ? 'fixed inset-y-0 right-0 z-50 w-80 md:w-96 shadow-2xl border-l p-4 flex flex-col animate-in slide-in-from-right duration-200 border-[var(--kt-s4)] bg-[var(--ss-panel)] text-slate-200'
-                : 'shrink-0 min-h-0 min-w-0 flex flex-col p-4 border-[var(--kt-s4)] bg-[var(--ss-panel)] text-slate-200 overflow-hidden ' + (layout.qcDock === 'bottom' ? 'border-t' : layout.qcDock === 'left' ? 'border-r' : 'border-l')}
+                ? 'qc-panel fixed inset-y-0 right-0 z-50 w-[92vw] md:w-[460px] shadow-2xl border-l p-4 flex flex-col animate-in slide-in-from-right duration-200 border-[var(--kt-s4)] bg-[var(--ss-panel)] text-slate-200'
+                : 'qc-panel shrink-0 min-h-0 min-w-0 flex flex-col p-4 border-[var(--kt-s4)] bg-[var(--ss-panel)] text-slate-200 overflow-hidden ' + (layout.qcDock === 'bottom' ? 'border-t' : layout.qcDock === 'left' ? 'border-r' : 'border-l')}
               style={layout.qcDock === 'overlay' ? undefined : (layout.qcDock === 'bottom' ? { height: layout.qcSize, order: 2 } : { width: layout.qcSize, order: layout.qcDock === 'left' ? 0 : 2 })}
             >
             <div className="shrink-0 flex items-center gap-2 pb-3">
