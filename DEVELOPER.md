@@ -1,6 +1,6 @@
 # Developer Setup & Server Deployment Guide
 
-How to install, run, test and deploy the **Karya Transcription & Subtitle Studio** on a local machine and on a Linux server. For what the app does and how to use it, see [README.md](README.md).
+How to install, run, test and deploy the **Lower Third Transcription & Subtitle Studio** on a local machine and on a Linux server. For what the app does and how to use it, see [README.md](README.md).
 
 ---
 

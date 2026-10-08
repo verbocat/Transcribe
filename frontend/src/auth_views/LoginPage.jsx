@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import BrandLogo from '../components/BrandLogo';
 import { Mail, Lock, User as UserIcon, Building2, Eye, EyeOff, AlertCircle, CheckCircle2, ArrowRight, ArrowLeft, Loader2, Sparkles, ShieldCheck, RotateCw, Clock, Monitor, ShieldAlert } from 'lucide-react';
 import { useAuth } from './AuthContext';
 import { useTheme } from '../context/ThemeContext';
@@ -391,7 +392,7 @@ export default function LoginPage({ onSwitchToSignup, onSwitchToForgotPassword, 
           ) : step === 'mfa' ? (
             <ShieldCheck size={22} className={isDark ? 'text-[var(--kt-accent)]' : 'text-blue-600'} />
           ) : (
-            <Building2 size={20} className={isDark ? 'text-[var(--kt-accent)]' : 'text-blue-600'} />
+            <BrandLogo size={30} />
           )}
         </div>
         <h1 className={`text-lg sm:text-xl font-extrabold tracking-tight ${isDark ? 'text-white' : 'text-slate-900'}`}>
@@ -400,7 +401,7 @@ export default function LoginPage({ onSwitchToSignup, onSwitchToForgotPassword, 
           ) : step === 'mfa' ? (
             <>Enter <span className={`${isDark ? 'text-[var(--kt-accent)]' : 'text-blue-600'} drop-shadow-[0_0_10px_rgba(var(--kt-accent-rgb),0.35)]`}>Code</span></>
           ) : (
-            <>Karya <span className={`${isDark ? 'text-[var(--kt-accent)]' : 'text-blue-600'} drop-shadow-[0_0_10px_rgba(var(--kt-accent-rgb),0.35)]`}>Studio</span></>
+            <>Lower <span className={`${isDark ? 'text-[var(--kt-accent)]' : 'text-blue-600'} drop-shadow-[0_0_10px_rgba(var(--kt-accent-rgb),0.35)]`}>Third</span></>
           )}
         </h1>
         <p className={`text-xs mt-0.5 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>

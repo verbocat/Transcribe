@@ -70,7 +70,7 @@ export default function LogoutConfirmModal({ isOpen, onClose, onConfirm, user })
             <LogOut size={22} className="stroke-[2.2]" />
           </div>
           <div>
-            <h3 className="text-base font-bold text-white tracking-tight">Sign Out of Karya Studio?</h3>
+            <h3 className="text-base font-bold text-white tracking-tight">Sign Out of Lower Third?</h3>
             <p className="text-xs text-slate-400">End your active workstation session</p>
           </div>
         </div>

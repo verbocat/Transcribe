@@ -156,7 +156,7 @@ def test_export_all_formats():
 
     # 3. TXT
     txt_out = export_to_txt(res)
-    assert "KARYA TRANSCRIPTION DELIVERABLE" in txt_out
+    assert "LOWER THIRD TRANSCRIPTION DELIVERABLE" in txt_out
 
     # 4. SRT (Clean speaker prefix)
     srt_out = export_to_srt(res)

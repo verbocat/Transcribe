@@ -72,7 +72,7 @@ export default function AuthProcessModal({ isOpen, type = 'login', stage, errorM
               ? (type === 'signup' ? 'Registration Failed' : 'Sign In Failed')
               : isSuccess
               ? (type === 'signup' ? 'Account Provisioned!' : 'Authentication Successful!')
-              : (type === 'signup' ? 'Creating VerboLabs Account' : 'Signing In to Karya Studio')}
+              : (type === 'signup' ? 'Creating VerboLabs Account' : 'Signing In to Lower Third')}
           </h3>
           <p className="text-xs text-slate-400 mt-1 max-w-xs">
             {isError
