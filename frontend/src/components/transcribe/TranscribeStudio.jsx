@@ -8,6 +8,9 @@ import EmptyState from './EmptyState';
 import TranscribeTimeline from './TranscribeTimeline';
 import VideoPane, { createMediaBus } from './VideoPane';
 import CastModal from './CastModal';
+import LayoutPanel from './LayoutPanel';
+import Splitter from './Splitter';
+import { useTranscribeLayout, DEFAULT_LAYOUT, LIMITS, TIMELINE_MIN } from './layoutModel';
 import SpeakerPanel from './SpeakerPanel';
 import { rememberSpeakerName } from './speakerNames';
 import { API_BASE } from '../../config';
@@ -15,6 +18,7 @@ import QcDrawer from './QcDrawer';
 import CentroidModal from '../subtitle/CentroidModal';
 import { ALL_LANGS } from '../subtitle/languages';
 import { buildRoster } from './speakerUtils';
+import { exportLanguageOptions, isValidExportLanguage, segmentsForExport, parseExportLanguage } from '../../utils/exportLanguage';
 import { loadCast, saveCast, findCastMember } from './castUtils';
 
 /**
@@ -22,6 +26,9 @@ import { loadCast, saveCast, findCastMember } from './castUtils';
  * this component only arranges the screen and applies speaker-level edits.
  */
 export default function TranscribeStudio(p) {
+  const studio = useTranscribeLayout(Boolean(p.user));
+  const { layout } = studio;
+  const [showLayout, setShowLayout] = useState(false);
   const [filterSpeaker, setFilterSpeaker] = useState(null);
   const [mediaBus] = useState(createMediaBus);
   const [cast, setCast] = useState(loadCast);
@@ -36,6 +43,7 @@ export default function TranscribeStudio(p) {
   const [centroidState, setCentroidState] = useState({ hasResults: false, qcIssues: null });
   const [tracks, setTracks] = useState({}); // language code -> translated cues
   const [activeTrack, setActiveTrack] = useState(null);
+  const [exportChoice, setExportChoice] = useState(null); // null = follow the active track
   const roster = useMemo(() => buildRoster(p.segments), [p.segments]);
   const hasSegments = p.segments.length > 0;
   const video = p.videoUrl ? <VideoPane src={p.videoUrl} bus={mediaBus} /> : null;
@@ -124,7 +132,26 @@ export default function TranscribeStudio(p) {
     ? { code: activeTrack, byId: new Map(tracks[activeTrack].map((e) => [e.id, e.text])) } : null), [activeTrack, tracks]);
 
   // A new transcript invalidates the translations of the old one
-  useEffect(() => { setTracks({}); setActiveTrack(null); }, [p.audioUrl, p.filename]);
+  useEffect(() => { setTracks({}); setActiveTrack(null); setExportChoice(null); }, [p.audioUrl, p.filename]);
+
+  // Export language: follows the track on screen until the user picks one
+  const trackCodes = Object.keys(tracks);
+  const exportLang = exportChoice && isValidExportLanguage(exportChoice, trackCodes)
+    ? exportChoice : (activeTrack && tracks[activeTrack] ? `tr:${activeTrack}` : 'src');
+  const exportLangOptions = useMemo(
+    () => exportLanguageOptions(Object.keys(tracks), p.detectedLanguage || p.language),
+    [tracks, p.detectedLanguage, p.language],
+  );
+  /** Segments and language label for an export in the chosen language */
+  const exportPayload = () => {
+    const { kind, code } = parseExportLanguage(exportLang);
+    const label = code ? (ALL_LANGS.find(([c]) => c === code) || [code, code])[1] : null;
+    return {
+      segments: segmentsForExport(exportLang, p.segments, code ? tracks[code] : null),
+      translationLanguage: kind === 'both' ? label : null,
+      suffix: kind === 'tr' ? `.${code}` : kind === 'both' ? `.${code}+orig` : '',
+    };
+  };
 
   const openTranslate = () => { setShowTranslate((v) => !v); };
   const openQc = (view) => { if (view) setQcView(view); setShowQc(true); };
@@ -165,6 +192,11 @@ export default function TranscribeStudio(p) {
 
   const jumpTo = (seg) => { p.setActiveSegmentId(seg.segment_id); p.onPlaySegment(seg.start_time, seg.end_time); };
 
+  const cards = layout.paneStyle === 'cards';
+  const paneStyle = cards
+    ? { borderRadius: layout.radius, border: '1px solid var(--ts-line)', overflow: 'hidden' }
+    : undefined;
+
   const notes = (p.notes || []).filter((n) => n !== dismissedNotes);
 
   const setSpeakerGender = (name, gender) => {
@@ -186,11 +218,14 @@ export default function TranscribeStudio(p) {
         canUndo={p.canUndo} canRedo={p.canRedo} onUndo={p.onUndo} onRedo={p.onRedo}
         isSaving={p.isSaving} onSave={p.onSave}
         exportFormats={p.exportFormats} onToggleFormat={p.onToggleFormat}
-        onDownload={p.onDownload} onDubbing={p.onDubbing} isExporting={p.isExporting} onCancelExport={p.onCancelExport}
+        onDownload={() => p.onDownload(exportPayload())} onDubbing={() => p.onDubbing(exportPayload())}
+        exportLang={exportLang} exportLangOptions={exportLangOptions} onExportLang={setExportChoice} isExporting={p.isExporting} onCancelExport={p.onCancelExport}
         onOpenProjects={p.onOpenProjects} onOpenStats={p.onOpenStats} onOpenDiff={p.onOpenDiff}
         onOpenNotes={p.onOpenNotes} onOpenGuidelines={p.onOpenGuidelines}
         onImportSubtitles={p.onImportSubtitles}
         user={p.user} onOpenLogoutModal={p.onOpenLogoutModal}
+        onOpenSpeakers={() => setShowSpeakers(true)} speakersOpen={showSpeakers}
+        onOpenLayout={() => setShowLayout(true)} onResetLayout={studio.reset}
         onOpenTranslate={openTranslate} translateOpen={showTranslate}
         onOpenQc={() => (showQc ? setShowQc(false) : openQc())} qcOpen={showQc} centroidQcIssues={centroidState.qcIssues}
       />
@@ -215,13 +250,27 @@ export default function TranscribeStudio(p) {
       )}
 
       {hasSegments ? (
-        <div className="flex flex-1 min-h-0">
-          <SpeakerRail
-            roster={roster} filterSpeaker={filterSpeaker}
-            onFilter={(name) => setFilterSpeaker(filterSpeaker === name ? null : name)}
-            onRename={renameSpeaker} onSetGender={setSpeakerGender} onOpenBulk={p.onOpenSpeakerSwap} onOpenPanel={() => setShowSpeakers(true)} video={video}
-            cast={cast} onOpenCast={() => setShowCast(true)} onAssign={renameSpeaker}
-          />
+        <div
+          className="flex flex-1 min-h-0 min-w-0"
+          style={{ flexDirection: layout.speakersPos === 'right' ? 'row-reverse' : 'row', padding: cards ? layout.gap : 0, gap: cards ? 0 : undefined }}
+        >
+          {layout.speakersPos !== 'hidden' && (<>
+            <div className="flex min-h-0 shrink-0" style={{ width: layout.speakersW, ...paneStyle }}>
+              <SpeakerRail
+                roster={roster} filterSpeaker={filterSpeaker}
+                onFilter={(name) => setFilterSpeaker(filterSpeaker === name ? null : name)}
+                onRename={renameSpeaker} onSetGender={setSpeakerGender} onOpenPanel={() => setShowSpeakers(true)} video={layout.showVideo ? video : null}
+                cast={cast} onOpenCast={() => setShowCast(true)} onAssign={renameSpeaker}
+              />
+            </div>
+            <Splitter
+              axis="x" sign={layout.speakersPos === 'right' ? -1 : 1} label="Resize speaker list"
+              value={layout.speakersW} min={LIMITS.speakersW[0]} max={LIMITS.speakersW[1]}
+              onChange={(v) => studio.patch({ speakersW: v })} onReset={() => studio.patch({ speakersW: DEFAULT_LAYOUT.speakersW })}
+              thickness={cards ? layout.gap || 6 : 6}
+            />
+          </>)}
+          <div className="flex flex-1 min-w-0 min-h-0" style={paneStyle}>
           <TranscriptList
             segments={p.segments} roster={roster}
             filterSpeaker={filterSpeaker} setFilterSpeaker={setFilterSpeaker}
@@ -232,6 +281,7 @@ export default function TranscribeStudio(p) {
             onOpenSrtPreview={p.onOpenSrtPreview}
             translation={translation} onClearTranslation={() => setActiveTrack(null)}
           />
+          </div>
           {showQc && (
             <QcDrawer
               view={qcView} onView={setQcView} centroidIssues={centroidState.qcIssues} onClose={() => setShowQc(false)}
@@ -252,8 +302,16 @@ export default function TranscribeStudio(p) {
       )}
       {!hasSegments && p.isTranscribing && <div className="flex-1" />}
 
-      {p.audioUrl && (
-        <footer className="shrink-0" style={{ background: 'var(--ts-panel)', borderTop: '1px solid var(--ts-line)', height: '38vh', minHeight: 260 }}>
+      {p.audioUrl && layout.timelinePos !== 'hidden' && (<>
+        <Splitter
+          axis="y" sign={-1} label="Resize timeline" thickness={cards ? layout.gap || 6 : 6}
+          value={layout.timelineH || Math.max(310, Math.round(window.innerHeight * 0.42))} min={TIMELINE_MIN} max={LIMITS.timelineH[1]}
+          onChange={(v) => studio.patch({ timelineH: v })} onReset={() => studio.patch({ timelineH: 0 })}
+        />
+        <footer
+          className="shrink-0 min-h-0"
+          style={{ background: 'var(--ts-panel)', borderTop: '1px solid var(--ts-line)', height: layout.timelineH || '42vh', minHeight: layout.timelineH ? undefined : 310, maxHeight: '75vh', ...(cards ? { margin: `0 ${layout.gap}px ${layout.gap}px`, borderRadius: layout.radius, border: '1px solid var(--ts-line)', overflow: 'hidden' } : {}) }}
+        >
           <TranscribeTimeline
             audioUrl={p.audioUrl}
             videoUrl={p.videoUrl}
@@ -271,7 +329,7 @@ export default function TranscribeStudio(p) {
             onPlayStateChange={(playing) => mediaBus.emit({ playing })}
           />
         </footer>
-      )}
+      </>)}
 
       {/* Kept mounted so translations and QC results survive closing the panels */}
       <CentroidModal
@@ -301,6 +359,8 @@ export default function TranscribeStudio(p) {
         onRename={renameSpeaker} onMerge={mergeSpeakers} onMoveLine={moveLine} onAiReview={aiReviewSpeakers}
         canUndo={p.canUndo} canRedo={p.canRedo} onUndo={p.onUndo} onRedo={p.onRedo}
       />
+
+      <LayoutPanel isOpen={showLayout} onClose={() => setShowLayout(false)} studio={studio} />
 
       <CastModal isOpen={showCast} cast={cast} onSave={updateCast} onClose={() => setShowCast(false)} />
 

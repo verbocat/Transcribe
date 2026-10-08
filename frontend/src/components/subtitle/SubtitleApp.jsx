@@ -47,7 +47,7 @@ import { extractAudioFromMedia, computeWaveformPeaks } from '../../utils/audioEx
 import { xhrPostForm, createRateMeter } from '../../utils/xhrUpload';
 import { takeLaunchIntent } from '../../utils/launchIntent';
 import MediaProgress, { GenerateProgress, TaskStrip } from './MediaProgress';
-import { startJob, jobHeaders, isCancelError, CancelledError, sleepCancellable, useTaskRunner } from '../../utils/cancellable';
+import { startJob, jobHeaders, isCancelError, CancelledError, sleepCancellable, useTaskRunner, abortable } from '../../utils/cancellable';
 import ContextPanel, { loadContext, saveContext, contextForRequest } from './ContextPanel';
 import { draftKey, buildDraft, readDraft } from './draftStorage';
 
@@ -69,11 +69,16 @@ function PlayheadTimecode({ format, frameRate }) {
 }
 
 // Sliced multi-part chunked upload for files > 90MB (bypasses Cloudflare 100MB proxy limits)
-async function uploadFileInChunks(file, apiBase, onProgress, onAllSent, signal) {
+async function uploadFileInChunks(file, apiBase, onProgress, onAllSent, signal, headers) {
   const chunkSize = 12 * 1024 * 1024; // 12 MB slices (safe for any proxy/cloud gateway)
   const totalChunks = Math.ceil(file.size / chunkSize);
   const uploadId = 'up_' + Math.random().toString(36).substring(2, 10);
   const meter = createRateMeter();
+
+  // Cancelling leaves a half-written file on the server: ask it to delete the slices received so far
+  signal?.addEventListener('abort', () => {
+    try { fetch(`${apiBase}/api/subtitle/upload_chunk/${uploadId}`, { method: 'DELETE', keepalive: true }).catch(() => {}); } catch (_) { /* best effort */ }
+  }, { once: true });
 
   let lastData = null;
   for (let i = 0; i < totalChunks; i++) {
@@ -99,6 +104,7 @@ async function uploadFileInChunks(file, apiBase, onProgress, onAllSent, signal) 
         const res = await xhrPostForm(`${apiBase}/api/subtitle/upload_chunk`, buildForm(), {
           meter,
           signal,
+          headers,
           baseLoaded: start,
           grandTotal: file.size,
           onProgress: (p) => { if (onProgress) onProgress({ ...p, detail: `Uploading slice ${i + 1} of ${totalChunks}` }); },
@@ -347,15 +353,15 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
       try {
         const AudioContextClass = window.AudioContext || window.webkitAudioContext;
         const audioCtx = new AudioContextClass();
-        const buf = await fileToProcess.arrayBuffer();
-        const decoded = await audioCtx.decodeAudioData(buf);
+        const buf = await abortable(fileToProcess.arrayBuffer(), signal);
+        const decoded = await abortable(audioCtx.decodeAudioData(buf), signal);
         audioCtx.close().catch(() => { });
         const channel = decoded.getChannelData(0);
         const peaks = computeWaveformPeaks(channel, decoded.duration, 50);
         if (peaks.length > 0) {
           setInitialWaveformPeaks(peaks);
         }
-      } catch (_) { }
+      } catch (peakErr) { if (isCancelError(peakErr) || signal.aborted) throw new CancelledError(); }
     }
 
     // 2. Upload to backend (chunked if > 20MB or if direct upload fails)
@@ -365,7 +371,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
         report({ stage: 'send', percent: 0, loaded: 0, total: uploadTarget.size, detail: 'Uploading the audio to your workspace' });
         const chunkData = await uploadFileInChunks(uploadTarget, API_BASE, (p) => {
           report({ stage: 'send', ...p });
-        }, prepareStage, signal);
+        }, prepareStage, signal, jobHeaders(mediaJob));
         if (chunkData?.video_id) {
           setCurrentVideoId(chunkData.video_id);
           if (chunkData.peaks && chunkData.peaks.length > 0) {
@@ -426,7 +432,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
           console.log("[Subtitle Studio] Fallback: uploading media in resilient sliced chunks...");
           const chunkData = await uploadFileInChunks(uploadTarget, API_BASE, (p) => {
             report({ stage: 'send', ...p });
-          }, prepareStage, signal);
+          }, prepareStage, signal, jobHeaders(mediaJob));
           if (chunkData?.video_id) {
             setCurrentVideoId(chunkData.video_id);
             if (chunkData.peaks && chunkData.peaks.length > 0) {
@@ -3587,9 +3593,10 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
           onClose={() => setShowExportModal(false)}
           events={events}
           complianceScore={complianceScore}
-          filename={(activeTrack && sourceTrack && activeTrack !== sourceTrack)
-            ? (selectedFile?.name || 'subtitles').replace(/(\.[^.]+)?$/, `.${activeTrack}$1`)
-            : (selectedFile?.name || 'subtitles')}
+          filename={selectedFile?.name || 'subtitles'}
+          tracks={tracks}
+          activeTrack={activeTrack}
+          sourceTrack={sourceTrack}
           API_BASE={API_BASE}
         />
       )}

@@ -15,7 +15,8 @@ from .models import (
     LoginOTP,
     AuthFailedAttempt,
     SessionTakeoverRequest,
-    AdminNotification
+    AdminNotification,
+    UserPreference
 )
 from .security import (
     validate_verbolabs_email,
@@ -1329,3 +1330,54 @@ def update_profile(
         }
     }
 
+
+
+
+# ── Per-account UI preferences (studio layouts) ──────────────────────────────
+PREFERENCE_KEYS = {"transcribe_layout"}
+PREFERENCE_MAX_BYTES = 32 * 1024
+
+
+class PreferencePayload(BaseModel):
+    value: dict
+
+
+@auth_router.get("/preferences/{key}")
+def get_preference(
+    key: str,
+    current_user: User = Depends(get_current_user_from_token),
+    db: Session = Depends(get_auth_db),
+):
+    """Returns the saved value for `key`, or {"value": null} when the account has none yet."""
+    import json
+    if key not in PREFERENCE_KEYS:
+        raise HTTPException(status_code=404, detail="Unknown preference.")
+    row = db.query(UserPreference).filter(UserPreference.user_id == current_user.id, UserPreference.key == key).first()
+    if not row:
+        return {"value": None}
+    try:
+        return {"value": json.loads(row.value), "updated_at": row.updated_at.isoformat() if row.updated_at else None}
+    except ValueError:
+        return {"value": None}
+
+
+@auth_router.put("/preferences/{key}")
+def put_preference(
+    key: str,
+    payload: PreferencePayload,
+    current_user: User = Depends(get_current_user_from_token),
+    db: Session = Depends(get_auth_db),
+):
+    import json
+    if key not in PREFERENCE_KEYS:
+        raise HTTPException(status_code=404, detail="Unknown preference.")
+    text = json.dumps(payload.value, separators=(",", ":"))
+    if len(text.encode("utf-8")) > PREFERENCE_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="Preference is too large.")
+    row = db.query(UserPreference).filter(UserPreference.user_id == current_user.id, UserPreference.key == key).first()
+    if row:
+        row.value = text
+    else:
+        db.add(UserPreference(user_id=current_user.id, key=key, value=text))
+    db.commit()
+    return {"ok": True}

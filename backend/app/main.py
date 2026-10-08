@@ -1290,6 +1290,7 @@ def sanitize_transcription_result(data: dict) -> TranscriptionResult:
                 end_time_str=str(s.get("end_time_str") or f"{e_time:.3f}"),
                 duration=float(s.get("duration") or (e_time - s_time)),
                 transcript=str(s.get("transcript") or ""),
+                translation=(str(s.get("translation")) if s.get("translation") not in (None, "") else None),
                 confidence=float(s.get("confidence") or 1.0),
                 words=s.get("words") or [],
                 qc_errors=[],
@@ -1315,7 +1316,8 @@ def sanitize_transcription_result(data: dict) -> TranscriptionResult:
         segments=clean_segs,
         compliance_score=compliance_score,
         total_errors=total_errors,
-        total_warnings=total_warnings
+        total_warnings=total_warnings,
+        translation_language=(str(data.get("translation_language")) if data.get("translation_language") else None)
     )
 
 
@@ -1766,6 +1768,22 @@ async def upload_video_chunk(
     shutil.move(str(part_path), str(final_file_path))
 
     return await _process_saved_media(final_file_path, safe_filename, clean_stem, raw_stem, ext, request=request)
+
+
+@app.delete("/api/subtitle/upload_chunk/{upload_id}")
+async def cancel_chunked_upload(upload_id: str):
+    """Cancelled upload: delete the slices received so far for this upload id."""
+    clean_upload_id = re.sub(r'[^\w\.-]', '_', upload_id).strip()
+    if not clean_upload_id:
+        return {"removed": 0}
+    removed = 0
+    for part in UPLOAD_DIR.glob(f"{clean_upload_id}_*.part"):
+        try:
+            part.unlink()
+            removed += 1
+        except OSError:
+            pass
+    return {"removed": removed}
 
 
 def resolve_active_session_video(video_id: str) -> Optional[str]:

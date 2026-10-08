@@ -82,7 +82,7 @@ export function encodeWAV(samples, sampleRate) {
 }
 
 import { xhrPostForm, fetchBlobWithProgress, createRateMeter } from './xhrUpload';
-import { CancelledError, cancelServerJob, isCancelError, jobHeaders, sleepCancellable } from './cancellable';
+import { CancelledError, abortable, cancelServerJob, isCancelError, jobHeaders, sleepCancellable } from './cancellable';
 
 export async function extractAudioFromMedia(file, onProgress, apiBase = '', { preferLocal = true, signal, job } = {}) {
   if (signal?.aborted) throw new CancelledError();
@@ -101,7 +101,7 @@ export async function extractAudioFromMedia(file, onProgress, apiBase = '', { pr
   if (!isVideo && !isWma) {
     try {
       if (onProgress) onProgress({ stage: 'decode', percent: null, detail: 'Reading the audio file' });
-      const arrayBuffer = await file.arrayBuffer();
+      const arrayBuffer = await abortable(file.arrayBuffer(), signal);
 
       if (onProgress) onProgress({ stage: 'decode', percent: null, detail: 'Decoding the audio in your browser' });
       const AudioContextClass = window.AudioContext || window.webkitAudioContext;
@@ -109,7 +109,7 @@ export async function extractAudioFromMedia(file, onProgress, apiBase = '', { pr
 
       let audioBuffer;
       try {
-        audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+        audioBuffer = await abortable(audioCtx.decodeAudioData(arrayBuffer), signal);
       } finally {
         audioCtx.close().catch(() => {});
       }

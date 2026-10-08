@@ -28,6 +28,7 @@ class Segment(BaseModel):
     end_time_str: str = "00:00:00.000"
     duration: float = 0.0
     transcript: str = ""
+    translation: Optional[str] = None  # second language shown next to the transcript on export
     confidence: float = 1.0
     words: List[WordConfidence] = []
     qc_errors: List[QCError] = []
@@ -58,6 +59,7 @@ class TranscriptionResult(BaseModel):
     rejection_category: Optional[str] = None
     rejection_reason: Optional[str] = None
     processing_notes: List[str] = []  # warnings about degraded detectors, shown in the UI
+    translation_language: Optional[str] = None  # label for Segment.translation on export
 
 class BatchTask(BaseModel):
     task_id: str
