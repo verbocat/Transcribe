@@ -3587,9 +3587,10 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
           onClose={() => setShowExportModal(false)}
           events={events}
           complianceScore={complianceScore}
-          filename={(activeTrack && sourceTrack && activeTrack !== sourceTrack)
-            ? (selectedFile?.name || 'subtitles').replace(/(\.[^.]+)?$/, `.${activeTrack}$1`)
-            : (selectedFile?.name || 'subtitles')}
+          filename={selectedFile?.name || 'subtitles'}
+          tracks={tracks}
+          activeTrack={activeTrack}
+          sourceTrack={sourceTrack}
           API_BASE={API_BASE}
         />
       )}

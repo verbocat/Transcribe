@@ -42,7 +42,7 @@ function usePopover() {
   return { open, setOpen, ref };
 }
 
-function ExportMenu({ formats, onToggle, onDownload, onDubbing, isExporting, hasSegments, onCancelExport }) {
+function ExportMenu({ formats, onToggle, onDownload, onDubbing, isExporting, hasSegments, onCancelExport, lang, langOptions, onLang }) {
   const { open, setOpen, ref } = usePopover();
   if (isExporting && onCancelExport) {
     return (
@@ -58,6 +58,18 @@ function ExportMenu({ formats, onToggle, onDownload, onDubbing, isExporting, has
       </button>
       {open && (
         <div className="ts-popover" role="menu" style={{ width: 320 }}>
+          <label style={{ display: 'block', padding: '6px 10px 4px' }}>
+            <span style={{ color: 'var(--ts-faint)', fontSize: 12, display: 'block', marginBottom: 4 }}>Language</span>
+            <select
+              className="ts-field" style={{ width: '100%' }} value={lang} onChange={(e) => onLang(e.target.value)}
+              aria-label="Export language" disabled={langOptions.length < 2}
+            >
+              {langOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+            {langOptions.length < 2 && (
+              <span style={{ color: 'var(--ts-faint)', fontSize: 12, display: 'block', marginTop: 4 }}>Translate the transcript to export other languages</span>
+            )}
+          </label>
           <p style={{ color: 'var(--ts-faint)', fontSize: 12, padding: '6px 10px 4px' }}>Choose one or more formats</p>
           {FORMATS.map((f) => {
             const on = formats.includes(f.id);
@@ -195,6 +207,7 @@ export default function TopBar(p) {
       <ExportMenu
         formats={p.exportFormats} onToggle={p.onToggleFormat} onDownload={p.onDownload}
         onDubbing={p.onDubbing} isExporting={p.isExporting} hasSegments={hasSegments} onCancelExport={p.onCancelExport}
+        lang={p.exportLang} langOptions={p.exportLangOptions} onLang={p.onExportLang}
       />
 
       <input ref={importRef} type="file" accept=".srt,.vtt,.txt" className="hidden"
