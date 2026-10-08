@@ -19,6 +19,7 @@ from .models import (
 )
 from .security import (
     validate_verbolabs_email,
+    validate_signup_email,
     validate_password,
     check_password_policy,
     hash_password,
@@ -40,12 +41,9 @@ def is_super_admin(email: Optional[str]) -> bool:
 
 auth_router = APIRouter()
 
-# A login challenge is created as soon as the password is accepted, but the 6-digit code is only
-# generated and emailed when the user asks for it (POST /request-otp). Until then the stored hash
-# is this marker, which can never match a real HMAC digest.
-OTP_NOT_REQUESTED = "PENDING"
-PASSWORD_STEP_VALID_MINUTES = 10   # how long a verified password can be exchanged for a code
-CHALLENGE_MAX_LIFETIME_MINUTES = 15  # hard cap: after this the user must enter the password again
+OTP_VALID_MINUTES = 5
+OTP_RESEND_COOLDOWN_SECONDS = 60
+CHALLENGE_MAX_LIFETIME_MINUTES = 15  # hard cap on one sign-in attempt, however many codes are requested
 
 def get_client_ip(request: Request) -> str:
     """Extract client IP address, handling proxy headers."""
@@ -54,8 +52,8 @@ def get_client_ip(request: Request) -> str:
         return x_forwarded.split(",")[0].strip()
     return request.client.host if request.client else "127.0.0.1"
 
-def get_device_summary(request: Request, op_loc: str = "In Office") -> str:
-    """Creates a user-friendly device & location description."""
+def get_device_summary(request: Request) -> str:
+    """Creates a user-friendly device description."""
     ua = request.headers.get("user-agent", "")
     browser = "Browser"
     if "Chrome" in ua and "Edg" not in ua:
@@ -79,7 +77,7 @@ def get_device_summary(request: Request, op_loc: str = "In Office") -> str:
     elif "iPhone" in ua or "iPad" in ua:
         os_name = "iOS"
 
-    return f"{os_name} {browser} • {op_loc}"
+    return f"{os_name} {browser}"
 
 def verify_bot_challenge(token: Optional[str]) -> bool:
     """Verifies a signed bot defense challenge token."""
@@ -119,7 +117,6 @@ class SignupRequest(BaseModel):
     email: str = Field(..., min_length=5, max_length=255)
     password: str = Field(...)
     confirm_password: str = Field(...)
-    employee_id: Optional[str] = Field(None, max_length=64)
 
 
 class ForgotPasswordRequest(BaseModel):
@@ -136,7 +133,11 @@ class LoginRequest(BaseModel):
     name: Optional[str] = Field(None, max_length=100)
     email: str = Field(...)
     password: str = Field(...)
-    operating_location: str = Field(...)  # "In Office" or "Remote"
+    bot_challenge_token: Optional[str] = None
+
+
+class RequestLoginOtpRequest(BaseModel):
+    email: str = Field(...)
     bot_challenge_token: Optional[str] = None
 
 
@@ -260,7 +261,7 @@ def signup(payload: SignupRequest, request: Request, db: Session = Depends(get_a
     name_clean = payload.name.strip()
 
     # 1. Domain verification
-    is_valid_domain, domain_err = validate_verbolabs_email(email_clean)
+    is_valid_domain, domain_err = validate_signup_email(email_clean)
     if not is_valid_domain:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=domain_err)
 
@@ -296,7 +297,6 @@ def signup(payload: SignupRequest, request: Request, db: Session = Depends(get_a
         email=email_clean,
         password_hash=pwd_hash,
         salt=salt,
-        employee_id=payload.employee_id.strip() if payload.employee_id else None,
         is_verified=False
     )
     db.add(new_user)
@@ -409,7 +409,6 @@ def get_takeover_status(takeover_id: str, db: Session = Depends(get_auth_db)):
             new_session = AuthSession(
                 user_id=takeover.user_id,
                 session_token=takeover.new_session_token,
-                operating_location=takeover.new_operating_location,
                 device_info=takeover.new_device_info,
                 is_active=True,
                 expires_at=now_utc + timedelta(hours=4)
@@ -429,8 +428,8 @@ def get_takeover_status(takeover_id: str, db: Session = Depends(get_auth_db)):
                 "id": user.id if user else takeover.user_id,
                 "name": user.name if user else "Editor",
                 "email": user.email if user else "",
-                "employee_id": user.employee_id if user else None,
-                "operating_location": takeover.new_operating_location
+                "role": user.role if user else "editor",
+                "is_admin": bool(user and (user.is_admin or (user.role and user.role.lower() == "admin")))
             }
         }
 
@@ -493,38 +492,20 @@ def submit_takeover_decision(
         }
 
 
-@auth_router.post("/login")
-def login(payload: LoginRequest, request: Request, db: Session = Depends(get_auth_db)):
+def _masked_email(email: str) -> str:
+    parts = email.split("@")
+    masked_name = parts[0][0] + "***" + (parts[0][-1] if len(parts[0]) > 1 else "")
+    return f"{masked_name}@{parts[1]}"
+
+
+def _check_login_throttle(db: Session, email_clean: str, client_ip: str, bot_challenge_token: Optional[str]) -> int:
     """
-    Authenticates a VerboLabs user:
-    - Checks @verbolabs.com domain
-    - Validates required operating location dropdown
-    - Checks IP & Account brute-force lockout (5 attempts in 10 min -> 15 min lock)
-    - Enforces bot challenge after 2 failed attempts to protect Brevo quota
-    - Verifies password against salt and PBKDF2 hash
-    - Issues an MFA challenge_id but does NOT email anything yet: the user must choose
-      "Login with OTP" (POST /request-otp) before a code is generated and sent
+    Shared brute-force guard for password and OTP sign-in.
+    Raises 429 after 5 failures in 10 minutes (15 minute lock) and 403 for a missing human check
+    after 2 failures. Returns the number of recent failures.
     """
-    email_clean = payload.email.strip().lower()
-    client_ip = get_client_ip(request)
     now_utc = datetime.now(timezone.utc)
     window_start = now_utc - timedelta(minutes=10)
-
-    # 1. Domain verification
-    is_valid_domain, domain_err = validate_verbolabs_email(email_clean)
-    if not is_valid_domain:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=domain_err)
-
-    # 2. Operating location check
-    op_loc = payload.operating_location.strip()
-    if not op_loc or op_loc.lower() not in ["in office", "remote", "in-office"]:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Please select a valid operating location ('In Office' or 'Remote')."
-        )
-    op_loc_normalized = "In Office" if "office" in op_loc.lower() else "Remote"
-
-    # 3. Brute-Force & Lockout Check (>= 5 failures within 10 minutes)
     recent_failures = db.query(AuthFailedAttempt).filter(
         (AuthFailedAttempt.email == email_clean) | (AuthFailedAttempt.ip_address == client_ip),
         AuthFailedAttempt.attempt_time >= window_start
@@ -546,64 +527,34 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_aut
                     detail=f"Access temporarily locked due to {recent_failures} failed attempts. Please try again in {rem_min} minute{'s' if rem_min != 1 else ''}."
                 )
 
-    # 4. Brevo Email Quota & Bot Defense (>= 2 failures requires human verification)
     if recent_failures >= 2:
-        if not payload.bot_challenge_token or not verify_bot_challenge(payload.bot_challenge_token):
+        if not bot_challenge_token or not verify_bot_challenge(bot_challenge_token):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Security verification required. Please solve the human verification puzzle to proceed."
             )
+    return recent_failures
 
-    # 5. Check if user exists in database
+
+def _lookup_user_for_login(db: Session, email_clean: str, client_ip: str) -> User:
     user = db.query(User).filter(User.email == email_clean).first()
     if not user:
-        # Record failed attempt against IP
-        db.add(AuthFailedAttempt(email=email_clean, ip_address=client_ip, attempt_time=now_utc))
+        db.add(AuthFailedAttempt(email=email_clean, ip_address=client_ip, attempt_time=datetime.now(timezone.utc)))
         db.commit()
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No account found with this email address. Please sign up first."
         )
-
-    # 6. Check restricted / blocked status
     if user.is_blocked:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Your account has been restricted or suspended by an administrator. Please contact support."
         )
+    return user
 
-    # 7. Verify password
-    if not verify_password(payload.password, user.password_hash, user.salt):
-        db.add(AuthFailedAttempt(email=email_clean, ip_address=client_ip, attempt_time=now_utc))
-        db.commit()
-        new_fail_count = recent_failures + 1
-        rem = max(0, 5 - new_fail_count)
-        if new_fail_count >= 5:
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="Too many failed login attempts. Account temporarily locked for 15 minutes."
-            )
-        err_msg = f"Incorrect password. {rem} attempt{'s' if rem != 1 else ''} remaining before temporary account lock."
-        if new_fail_count >= 2:
-            err_msg += " (Security verification will be required on your next attempt)."
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=err_msg
-        )
 
-    # Optional: update name if user submitted a non-empty name during login
-    if payload.name and payload.name.strip() and payload.name.strip() != user.name:
-        user.name = payload.name.strip()
-
-    # 7.5 Check 30-Minute Workstation Takeover Lockout
-    # If the active workstation previously declined remote takeover (e.g. during export or editing),
-    # block new remote login attempts for 30 minutes to prevent interruptions and protect Brevo email quota.
-    active_session = db.query(AuthSession).filter(
-        AuthSession.user_id == user.id,
-        AuthSession.is_active == True,
-        AuthSession.expires_at > now_utc
-    ).order_by(AuthSession.created_at.desc()).first()
-
+def _raise_if_takeover_locked(active_session: Optional[AuthSession], now_utc: datetime) -> None:
+    """If the active workstation declined a takeover, block new logins for the lockout period."""
     if active_session and active_session.takeover_lockout_until:
         lockout_end = active_session.takeover_lockout_until.replace(tzinfo=timezone.utc) if active_session.takeover_lockout_until.tzinfo is None else active_session.takeover_lockout_until
         if lockout_end > now_utc:
@@ -614,162 +565,39 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_aut
                 detail=f"Active workstation declined remote login to protect uninterrupted work (e.g. exporting/editing). Remote login for this account is locked for {rem_min} more minute{'s' if rem_min != 1 else ''}."
             )
 
-    # 8. ATOMIC CHALLENGE INVALIDATION (Multi-Device Prevention):
-    # Whenever a new login attempt occurs for this account, immediately invalidate and purge
-    # all prior pending MFA challenges for this user. Only the newest challenge remains valid!
-    db.query(LoginOTP).filter(LoginOTP.user_id == user.id).delete()
-    db.commit()
 
-    # 9. Password is correct: open a challenge, but do not generate or send a code yet.
-    challenge_id = uuid.uuid4().hex
-    new_challenge = LoginOTP(
-        user_id=user.id,
-        challenge_id=challenge_id,
-        otp_hash=OTP_NOT_REQUESTED,
-        expires_at=now_utc + timedelta(minutes=PASSWORD_STEP_VALID_MINUTES),
-        attempts=0,
-        created_at=now_utc,
-        # far enough in the past that the first request is not held back by the resend cooldown
-        last_resend_at=now_utc - timedelta(seconds=120),
-        operating_location=op_loc_normalized
-    )
-    db.add(new_challenge)
-    db.commit()
-
-    parts = user.email.split("@")
-    masked_name = parts[0][0] + "***" + (parts[0][-1] if len(parts[0]) > 1 else "")
-    masked_email = f"{masked_name}@{parts[1]}"
-
-    # Return MFA challenge response (NO JWT/session issued yet, NO email sent yet)
-    return {
-        "success": True,
-        "mfa_required": True,
-        "otp_sent": False,
-        "challenge_id": challenge_id,
-        "email_masked": masked_email,
-        "expires_in_seconds": PASSWORD_STEP_VALID_MINUTES * 60,
-        "message": "Password verified. Choose \"Login with OTP\" to receive a one-time code by email."
-    }
-
-
-@auth_router.post("/verify-otp")
-def verify_login_otp(
-    payload: VerifyOtpRequest,
-    request: Request,
-    db: Session = Depends(get_auth_db)
-):
-    """
-    Step 2 MFA: Verifies 6-digit email OTP:
-    - Finds challenge by challenge_id
-    - Checks 5-minute expiration
-    - Checks maximum attempts (max 5)
-    - Compares HMAC-SHA256 hash using constant-time comparison
-    - DELETES challenge record immediately upon match (prevents multi-device reuse / replay)
-    - Enforces Single Active Session with 1-minute takeover grace period
-    """
-    challenge_id = payload.challenge_id.strip()
-    otp_candidate = payload.otp.strip()
-
-    challenge = db.query(LoginOTP).filter(LoginOTP.challenge_id == challenge_id).first()
-    if not challenge:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Verification challenge not found or has already been used. Please log in again."
-        )
-
-    now_utc = datetime.now(timezone.utc)
-    exp = challenge.expires_at.replace(tzinfo=timezone.utc) if challenge.expires_at.tzinfo is None else challenge.expires_at
-
-    # 0. A code must have been requested first (the user explicitly chooses "Login with OTP")
-    if challenge.otp_hash == OTP_NOT_REQUESTED:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="No code has been sent yet. Choose \"Login with OTP\" to receive one first."
-        )
-
-    # 1. Expiration check (5 minutes)
-    if now_utc > exp:
-        db.delete(challenge)
-        db.commit()
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Verification code has expired. Please sign in again to receive a fresh code."
-        )
-
-    # 2. Attempts check (max 5 attempts)
-    if challenge.attempts >= 5:
-        db.delete(challenge)
-        db.commit()
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Too many incorrect attempts. For security, this challenge has been revoked. Please sign in again."
-        )
-
-    # 3. Verify HMAC hash
-    if not verify_otp_hash(otp_candidate, challenge.otp_hash):
-        challenge.attempts += 1
-        # Wrong codes also count towards the account/IP lockout, so guessing cannot be restarted by
-        # simply logging in again with the password (each login would otherwise grant 5 fresh guesses).
-        db.add(AuthFailedAttempt(
-            email=challenge.user.email,
-            ip_address=get_client_ip(request),
-            attempt_time=now_utc
-        ))
-        db.commit()
-        remaining_attempts = max(0, 5 - challenge.attempts)
-        if remaining_attempts == 0:
-            db.delete(challenge)
-            db.commit()
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="Too many incorrect attempts. This code has been revoked. Please sign in again."
-            )
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Invalid verification code. {remaining_attempts} attempt{'s' if remaining_attempts > 1 else ''} remaining."
-        )
-
-    # ── SUCCESS: IMMEDIATELY DELETE CHALLENGE TO PREVENT ANY REPLAY / MULTI-DEVICE REUSE ──
-    user = challenge.user
-    op_loc = challenge.operating_location or "In Office"
-    client_ip = get_client_ip(request)
-    user_agent = request.headers.get("user-agent", "")
-    device_summary = get_device_summary(request, op_loc)
-
-    db.delete(challenge)
-    db.commit()
-
-    # Record login audit history
-    log_entry = LoginHistory(
-        user_id=user.id,
-        operating_location=op_loc,
-        ip_address=client_ip,
-        user_agent=user_agent
-    )
-    db.add(log_entry)
-
-    # ── SINGLE ACTIVE SESSION ENFORCEMENT WITH 1-MINUTE TAKEOVER GRACE PERIOD ──
-    existing_session = db.query(AuthSession).filter(
+def _find_active_session(db: Session, user: User, now_utc: datetime) -> Optional[AuthSession]:
+    return db.query(AuthSession).filter(
         AuthSession.user_id == user.id,
         AuthSession.is_active == True,
         AuthSession.expires_at > now_utc
     ).order_by(AuthSession.created_at.desc()).first()
 
+
+def _complete_login(db: Session, user: User, request: Request) -> dict:
+    """
+    Called once the user has proven who they are (correct password, or correct emailed code).
+    Records the login, enforces the single-active-session rule (60-second takeover request when
+    another device is signed in) and otherwise issues a 4-hour session.
+    """
+    now_utc = datetime.now(timezone.utc)
+    client_ip = get_client_ip(request)
+    device_summary = get_device_summary(request)
+
+    existing_session = _find_active_session(db, user, now_utc)
+    _raise_if_takeover_locked(existing_session, now_utc)
+
+    db.add(LoginHistory(
+        user_id=user.id,
+        operating_location="N/A",  # column predates the removal of the location picker; kept NOT NULL
+        ip_address=client_ip,
+        user_agent=request.headers.get("user-agent", "")
+    ))
+
     new_session_token = generate_token()
 
     if existing_session:
-        # Check if active session is in 30-minute protected mode from a previous decline
-        if existing_session.takeover_lockout_until:
-            lockout_end = existing_session.takeover_lockout_until.replace(tzinfo=timezone.utc) if existing_session.takeover_lockout_until.tzinfo is None else existing_session.takeover_lockout_until
-            if lockout_end > now_utc:
-                rem_sec = int((lockout_end - now_utc).total_seconds())
-                rem_min = int((rem_sec + 59) // 60)
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail=f"Active workstation declined remote login to protect uninterrupted work (e.g. exporting/editing). Remote login for this account is locked for {rem_min} more minute{'s' if rem_min != 1 else ''}."
-                )
-
-        # Device A is active on another device! Create 60-second takeover request
+        # Another device is active: create a 60-second takeover request
         db.query(SessionTakeoverRequest).filter(
             SessionTakeoverRequest.user_id == user.id,
             SessionTakeoverRequest.status == "pending"
@@ -779,7 +607,6 @@ def verify_login_otp(
             user_id=user.id,
             existing_session_id=existing_session.id,
             new_session_token=new_session_token,
-            new_operating_location=op_loc,
             new_device_info=device_summary,
             created_at=now_utc,
             expires_at=now_utc + timedelta(seconds=60),
@@ -797,16 +624,13 @@ def verify_login_otp(
             "message": f"Another workstation ({existing_session.device_info or 'Active Device'}) is currently logged in. A 60-second authorization request has been sent to it."
         }
 
-    # No existing active session: Issue 4-hour active session immediately
-    session = AuthSession(
+    db.add(AuthSession(
         user_id=user.id,
         session_token=new_session_token,
-        operating_location=op_loc,
         device_info=device_summary,
         is_active=True,
         expires_at=now_utc + timedelta(hours=4)
-    )
-    db.add(session)
+    ))
 
     # Clear failed attempts on successful login
     db.query(AuthFailedAttempt).filter(
@@ -823,12 +647,203 @@ def verify_login_otp(
             "id": user.id,
             "name": user.name,
             "email": user.email,
-            "employee_id": user.employee_id,
             "role": user.role or "editor",
-            "is_admin": bool(user.is_admin or (user.role and user.role.lower() == "admin")),
-            "operating_location": op_loc
+            "is_admin": bool(user.is_admin or (user.role and user.role.lower() == "admin"))
         }
     }
+
+
+@auth_router.post("/login")
+def login(payload: LoginRequest, request: Request, db: Session = Depends(get_auth_db)):
+    """
+    Password sign-in. A correct password signs the user in directly: no OTP is required.
+    (The emailed-code option is a separate path: POST /login/otp/request then POST /verify-otp.)
+    - Checks IP & account brute-force lockout (5 attempts in 10 min -> 15 min lock)
+    - Enforces a human check after 2 failed attempts
+    - Verifies the password against its salt and PBKDF2 hash
+    """
+    email_clean = payload.email.strip().lower()
+    client_ip = get_client_ip(request)
+    now_utc = datetime.now(timezone.utc)
+
+    is_valid_domain, domain_err = validate_verbolabs_email(email_clean)
+    if not is_valid_domain:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=domain_err)
+
+    recent_failures = _check_login_throttle(db, email_clean, client_ip, payload.bot_challenge_token)
+    user = _lookup_user_for_login(db, email_clean, client_ip)
+
+    if not verify_password(payload.password, user.password_hash, user.salt):
+        db.add(AuthFailedAttempt(email=email_clean, ip_address=client_ip, attempt_time=now_utc))
+        db.commit()
+        new_fail_count = recent_failures + 1
+        rem = max(0, 5 - new_fail_count)
+        if new_fail_count >= 5:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Too many failed login attempts. Account temporarily locked for 15 minutes."
+            )
+        err_msg = f"Incorrect password. {rem} attempt{'s' if rem != 1 else ''} remaining before temporary account lock."
+        if new_fail_count >= 2:
+            err_msg += " (Security verification will be required on your next attempt)."
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=err_msg)
+
+    # Fail before any session work if the active workstation is in its takeover lockout
+    _raise_if_takeover_locked(_find_active_session(db, user, now_utc), now_utc)
+
+    return _complete_login(db, user, request)
+
+
+@auth_router.post("/login/otp/request")
+def request_login_otp(payload: RequestLoginOtpRequest, request: Request, db: Session = Depends(get_auth_db)):
+    """
+    OTP sign-in, step 1: emails a 6-digit code to the account's address. No password is needed.
+    The same brute-force guard as password sign-in applies, and a new code cannot be requested
+    for an account within the resend cooldown (so this cannot be used to flood an inbox).
+    """
+    email_clean = payload.email.strip().lower()
+    client_ip = get_client_ip(request)
+    now_utc = datetime.now(timezone.utc)
+
+    is_valid_domain, domain_err = validate_verbolabs_email(email_clean)
+    if not is_valid_domain:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=domain_err)
+
+    _check_login_throttle(db, email_clean, client_ip, payload.bot_challenge_token)
+    user = _lookup_user_for_login(db, email_clean, client_ip)
+
+    # The email address is only trusted once the verification link was used
+    if not user.is_verified:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Your email has not been verified yet. Check your inbox for the verification link, or request a new one."
+        )
+
+    _raise_if_takeover_locked(_find_active_session(db, user, now_utc), now_utc)
+
+    previous = db.query(LoginOTP).filter(LoginOTP.user_id == user.id).order_by(LoginOTP.last_resend_at.desc()).first()
+    if previous:
+        last = previous.last_resend_at.replace(tzinfo=timezone.utc) if previous.last_resend_at.tzinfo is None else previous.last_resend_at
+        elapsed = (now_utc - last).total_seconds()
+        if elapsed < OTP_RESEND_COOLDOWN_SECONDS:
+            wait_time = int(OTP_RESEND_COOLDOWN_SECONDS - elapsed) + 1
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"Please wait {wait_time} second{'s' if wait_time > 1 else ''} before requesting another code."
+            )
+
+    # Only the newest challenge for this account stays valid
+    db.query(LoginOTP).filter(LoginOTP.user_id == user.id).delete()
+    otp = generate_secure_otp()
+    challenge_id = uuid.uuid4().hex
+    db.add(LoginOTP(
+        user_id=user.id,
+        challenge_id=challenge_id,
+        otp_hash=hash_otp(otp),
+        expires_at=now_utc + timedelta(minutes=OTP_VALID_MINUTES),
+        attempts=0,
+        created_at=now_utc,
+        last_resend_at=now_utc,
+    ))
+    db.commit()
+
+    brevo_res = send_mfa_login_otp_email(user_name=user.name, user_email=user.email, otp=otp)
+    if not brevo_res.get("success"):
+        db.query(LoginOTP).filter(LoginOTP.challenge_id == challenge_id).delete()
+        db.commit()
+        err_msg = brevo_res.get("error", "Email dispatch failed.")
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Failed to send code: {err_msg}")
+
+    masked = _masked_email(user.email)
+    return {
+        "success": True,
+        "challenge_id": challenge_id,
+        "email_masked": masked,
+        "message": f"A 6-digit verification code has been sent to {masked}.",
+        "expires_in_seconds": OTP_VALID_MINUTES * 60,
+        "resend_cooldown_seconds": OTP_RESEND_COOLDOWN_SECONDS
+    }
+
+
+@auth_router.post("/verify-otp")
+def verify_login_otp(
+    payload: VerifyOtpRequest,
+    request: Request,
+    db: Session = Depends(get_auth_db)
+):
+    """
+    OTP sign-in, step 2: verifies the 6-digit emailed code:
+    - Finds challenge by challenge_id
+    - Checks 5-minute expiration
+    - Checks maximum attempts (max 5)
+    - Compares HMAC-SHA256 hash using constant-time comparison
+    - DELETES challenge record immediately upon match (prevents multi-device reuse / replay)
+    - Then signs in through the same single-active-session rules as password sign-in
+    """
+    challenge_id = payload.challenge_id.strip()
+    otp_candidate = payload.otp.strip()
+
+    challenge = db.query(LoginOTP).filter(LoginOTP.challenge_id == challenge_id).first()
+    if not challenge:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Verification challenge not found or has already been used. Please request a new code."
+        )
+
+    now_utc = datetime.now(timezone.utc)
+    exp = challenge.expires_at.replace(tzinfo=timezone.utc) if challenge.expires_at.tzinfo is None else challenge.expires_at
+
+    if now_utc > exp:
+        db.delete(challenge)
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Verification code has expired. Please request a fresh code."
+        )
+
+    if challenge.attempts >= 5:
+        db.delete(challenge)
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many incorrect attempts. For security, this code has been revoked. Please request a new one."
+        )
+
+    if not verify_otp_hash(otp_candidate, challenge.otp_hash):
+        challenge.attempts += 1
+        # Wrong codes also count towards the account/IP lockout, so guessing cannot be restarted by
+        # simply requesting a new code (each one would otherwise grant 5 fresh guesses).
+        db.add(AuthFailedAttempt(
+            email=challenge.user.email,
+            ip_address=get_client_ip(request),
+            attempt_time=now_utc
+        ))
+        db.commit()
+        remaining_attempts = max(0, 5 - challenge.attempts)
+        if remaining_attempts == 0:
+            db.delete(challenge)
+            db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Too many incorrect attempts. This code has been revoked. Please request a new one."
+            )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Invalid verification code. {remaining_attempts} attempt{'s' if remaining_attempts > 1 else ''} remaining."
+        )
+
+    # Success: delete the challenge first so the code can never be replayed
+    user = challenge.user
+    db.delete(challenge)
+    db.commit()
+
+    if user.is_blocked:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Your account has been restricted or suspended by an administrator. Please contact support."
+        )
+
+    return _complete_login(db, user, request)
 
 
 @auth_router.post("/request-otp")
@@ -838,16 +853,15 @@ def resend_login_otp(
     db: Session = Depends(get_auth_db)
 ):
     """
-    Generates and emails a fresh OTP for an existing login challenge. This is both the first send
-    ("Login with OTP") and the resend. 60-second cooldown, and the challenge itself dies after
-    CHALLENGE_MAX_LIFETIME_MINUTES so codes cannot be requested forever from one password entry.
+    Emails a fresh code for an existing OTP challenge (the "Resend code" button).
+    60-second cooldown, and the challenge itself dies after CHALLENGE_MAX_LIFETIME_MINUTES.
     """
     challenge_id = payload.challenge_id.strip()
     challenge = db.query(LoginOTP).filter(LoginOTP.challenge_id == challenge_id).first()
     if not challenge:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Verification challenge not found. Please log in again."
+            detail="Verification challenge not found. Please request a new code."
         )
 
     now_utc = datetime.now(timezone.utc)
@@ -857,14 +871,13 @@ def resend_login_otp(
         db.commit()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="This sign-in attempt has timed out. Please enter your password again."
+            detail="This sign-in attempt has timed out. Please start again."
         )
     last_resend = challenge.last_resend_at.replace(tzinfo=timezone.utc) if challenge.last_resend_at.tzinfo is None else challenge.last_resend_at
 
-    # 60s cooldown
     elapsed = (now_utc - last_resend).total_seconds()
-    if elapsed < 60:
-        wait_time = int(60 - elapsed)
+    if elapsed < OTP_RESEND_COOLDOWN_SECONDS:
+        wait_time = int(OTP_RESEND_COOLDOWN_SECONDS - elapsed)
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=f"Please wait {wait_time} second{'s' if wait_time > 1 else ''} before requesting another code."
@@ -873,7 +886,7 @@ def resend_login_otp(
     user = challenge.user
     new_otp = generate_secure_otp()
     challenge.otp_hash = hash_otp(new_otp)
-    challenge.expires_at = now_utc + timedelta(minutes=5)
+    challenge.expires_at = now_utc + timedelta(minutes=OTP_VALID_MINUTES)
     challenge.attempts = 0
     challenge.last_resend_at = now_utc
     db.commit()
@@ -888,14 +901,13 @@ def resend_login_otp(
         err_msg = brevo_res.get("error", "Email dispatch failed.")
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Failed to resend code: {err_msg}")
 
-    parts = user.email.split("@")
-    masked_name = parts[0][0] + "***" + (parts[0][-1] if len(parts[0]) > 1 else "")
+    masked = _masked_email(user.email)
     return {
         "success": True,
-        "message": f"A 6-digit verification code has been sent to {masked_name}@{parts[1]}.",
-        "email_masked": f"{masked_name}@{parts[1]}",
-        "expires_in_seconds": 300,
-        "resend_cooldown_seconds": 60
+        "message": f"A 6-digit verification code has been sent to {masked}.",
+        "email_masked": masked,
+        "expires_in_seconds": OTP_VALID_MINUTES * 60,
+        "resend_cooldown_seconds": OTP_RESEND_COOLDOWN_SECONDS
     }
 
 
@@ -1167,7 +1179,6 @@ def get_current_user_profile(
             "id": user.id,
             "name": user.name,
             "email": user.email,
-            "employee_id": user.employee_id,
             "role": user.role or "editor",
             "is_admin": is_super_admin(user.email),
             "total_spend_usd": getattr(user, "total_spend_usd", 0.0) or 0.0,
@@ -1294,7 +1305,6 @@ def delete_notification(
 
 class UpdateProfileRequest(BaseModel):
     name: Optional[str] = None
-    operating_location: Optional[str] = None
 
 @auth_router.patch("/profile")
 def update_profile(
@@ -1302,11 +1312,9 @@ def update_profile(
     current_user: User = Depends(get_current_user_from_token),
     db: Session = Depends(get_auth_db)
 ):
-    """Allows authenticated user to update their profile name and operating location."""
+    """Allows authenticated user to update their profile name."""
     if payload.name is not None and payload.name.strip():
         current_user.name = payload.name.strip()
-    if payload.operating_location is not None:
-        current_user.operating_location = payload.operating_location.strip()
     db.commit()
     return {
         "success": True,

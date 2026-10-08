@@ -10,7 +10,6 @@ export default function SignupPage({ onSwitchToLogin, embedded = false }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [employeeId, setEmployeeId] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
@@ -25,7 +24,7 @@ export default function SignupPage({ onSwitchToLogin, embedded = false }) {
   const validateEmailFormat = (val) => {
     const clean = val.trim().toLowerCase();
     if (!clean) return false;
-    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(clean);
+    return /^[^\s@]+@verbolabs\.com$/.test(clean);
   };
 
   const handleSubmit = async (e) => {
@@ -53,6 +52,11 @@ export default function SignupPage({ onSwitchToLogin, embedded = false }) {
       return;
     }
 
+    if (!cleanEmail.endsWith('@verbolabs.com')) {
+      setError('Sign-up is restricted to @verbolabs.com email addresses.');
+      return;
+    }
+
     // 3. Password match
     if (password !== confirmPassword) {
       setError('Passwords do not match. Please re-enter identical passwords.');
@@ -75,8 +79,7 @@ export default function SignupPage({ onSwitchToLogin, embedded = false }) {
         name: name.trim(),
         email: cleanEmail,
         password,
-        confirm_password: confirmPassword,
-        employee_id: employeeId.trim() || undefined
+        confirm_password: confirmPassword
       });
 
       if (data.success === false && data.account_created) {
@@ -187,8 +190,8 @@ export default function SignupPage({ onSwitchToLogin, embedded = false }) {
 
       {/* Signup Form */}
       <form onSubmit={handleSubmit} className="space-y-2.5">
-        {/* Name & Employee ID */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+        {/* Name */}
+        <div>
           <div>
             <label className={labelClasses}>
               Full Name <span className={isDark ? "text-[var(--kt-accent)]" : "text-blue-600"}>*</span>
@@ -207,21 +210,6 @@ export default function SignupPage({ onSwitchToLogin, embedded = false }) {
             </div>
           </div>
 
-          <div>
-            <label className={labelClasses}>
-              Employee ID
-            </label>
-            <div className="relative flex items-center">
-              <BadgeCheck size={14} className={`absolute left-3 pointer-events-none ${isDark ? 'text-slate-500' : 'text-slate-400'}`} />
-              <input
-                type="text"
-                placeholder="e.g. VL-1042"
-                value={employeeId}
-                onChange={(e) => setEmployeeId(e.target.value)}
-                className={inputClasses}
-              />
-            </div>
-          </div>
         </div>
 
         {/* Work Email */}
@@ -233,7 +221,7 @@ export default function SignupPage({ onSwitchToLogin, embedded = false }) {
             <Mail size={14} className={`absolute left-3 pointer-events-none ${isDark ? 'text-slate-500' : 'text-slate-400'}`} />
             <input
               type="email"
-              placeholder="name@email.com"
+              placeholder="name@verbolabs.com"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               required

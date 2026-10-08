@@ -79,11 +79,6 @@ export default function AccountMenuDropdown({ user, onOpenLogoutModal }) {
               <div className="min-w-0 flex-1">
                 <div className="text-xs font-bold text-white truncate">{user.name || 'Studio Specialist'}</div>
                 <div className="text-[11px] font-mono text-slate-400 truncate">{user.email}</div>
-                {user.operating_location && (
-                  <div className="mt-1 inline-flex items-center px-1.5 py-0.2 rounded text-[9.5px] font-medium bg-[var(--kt-s3)] text-[var(--kt-accent)] border border-[var(--kt-s4)]">
-                    {user.operating_location === 'In Office' ? '🏢 In Office' : '🏠 Remote'}
-                  </div>
-                )}
               </div>
             </div>
 

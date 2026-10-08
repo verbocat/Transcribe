@@ -87,11 +87,6 @@ export default function LogoutConfirmModal({ isOpen, onClose, onConfirm, user })
                 <div className="text-[11px] font-mono text-slate-400 truncate">{user.email}</div>
               </div>
             </div>
-            {user.operating_location && (
-              <span className="shrink-0 px-2 py-0.5 rounded text-[10px] font-medium bg-[var(--kt-s3)] text-[var(--kt-accent)] border border-[var(--kt-s4)]">
-                {user.operating_location === 'In Office' ? '🏢 Office' : '🏠 Remote'}
-              </span>
-            )}
           </div>
         )}
 

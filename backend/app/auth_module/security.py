@@ -21,6 +21,21 @@ def validate_verbolabs_email(email: str) -> Tuple[bool, str]:
 
 validate_user_email = validate_verbolabs_email
 
+SIGNUP_EMAIL_DOMAIN = "verbolabs.com"
+
+
+def validate_signup_email(email: str) -> Tuple[bool, str]:
+    """
+    Sign-up is limited to @verbolabs.com addresses. Sign-in and password reset use the looser
+    validate_verbolabs_email so accounts created earlier with other domains keep working.
+    """
+    ok, err = validate_verbolabs_email(email)
+    if not ok:
+        return ok, err
+    if email.strip().lower().rsplit("@", 1)[-1] != SIGNUP_EMAIL_DOMAIN:
+        return False, f"Sign-up is restricted to @{SIGNUP_EMAIL_DOMAIN} email addresses."
+    return True, ""
+
 
 def check_password_policy(password: str) -> Dict[str, Any]:
     """

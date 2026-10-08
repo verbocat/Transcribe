@@ -4,32 +4,29 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 from app.main import app
 from app.auth_module.database import get_auth_db, SessionLocal, AuthBase, engine
-from app.auth_module.security import validate_verbolabs_email, validate_password, check_password_policy
-from app.auth_module.models import User, VerificationToken, LoginHistory, AuthFailedAttempt
+from app.auth_module.security import validate_verbolabs_email, validate_signup_email, validate_password, check_password_policy
+from app.auth_module.models import User, VerificationToken, LoginHistory, AuthFailedAttempt, LoginOTP
 
 client = TestClient(app)
 
 
-def login_with_otp(email, password, operating_location, name=None):
-    """Runs the full sign-in: password step, "Login with OTP", then the emailed code."""
-    body = {"email": email, "password": password, "operating_location": operating_location}
-    if name:
-        body["name"] = name
-    login_res = client.post("/api/auth/login", json=body)
-    if login_res.status_code != 200:
-        return login_res
-    challenge_id = login_res.json()["challenge_id"]
+def login_with_password(email, password):
+    """Password sign-in: a correct password signs in directly, with no OTP step."""
+    return client.post("/api/auth/login", json={"email": email, "password": password})
 
+
+def login_with_otp(email):
+    """OTP sign-in: request a code for the email (no password), then verify it."""
     sent = {}
     def capture_otp(user_name, user_email, otp):
         sent["otp"] = otp
         return {"success": True, "mode": "mock", "message": "OK"}
 
     with patch("app.auth_module.routes.send_mfa_login_otp_email", side_effect=capture_otp):
-        otp_res = client.post("/api/auth/request-otp", json={"challenge_id": challenge_id})
-    assert otp_res.status_code == 200, otp_res.text
-
-    return client.post("/api/auth/verify-otp", json={"challenge_id": challenge_id, "otp": sent["otp"]})
+        req = client.post("/api/auth/login/otp/request", json={"email": email})
+    if req.status_code != 200:
+        return req
+    return client.post("/api/auth/verify-otp", json={"challenge_id": req.json()["challenge_id"], "otp": sent["otp"]})
 
 class TestAuthService(unittest.TestCase):
     @classmethod
@@ -57,7 +54,7 @@ class TestAuthService(unittest.TestCase):
         valid_sub, msg = validate_verbolabs_email("tech@dev.verbolabs.com")
         self.assertTrue(valid_sub)
 
-        # Any domain is accepted
+        # Sign-in accepts any well-formed domain so older accounts keep working
         other1, _ = validate_verbolabs_email("user@gmail.com")
         self.assertTrue(other1)
 
@@ -71,6 +68,60 @@ class TestAuthService(unittest.TestCase):
 
         invalid2, _ = validate_verbolabs_email("")
         self.assertFalse(invalid2)
+
+    def test_signup_email_domain_restricted(self):
+        self.assertTrue(validate_signup_email("john.doe@verbolabs.com")[0])
+        self.assertTrue(validate_signup_email("John.Doe@VerboLabs.com ")[0])
+        for bad in ["user@gmail.com", "user@verbolabs.co", "user@dev.verbolabs.com",
+                    "user@verbolabs.com.evil.io", "user@notverbolabs.com"]:
+            ok, msg = validate_signup_email(bad)
+            self.assertFalse(ok, bad)
+            self.assertIn("@verbolabs.com", msg)
+        self.assertFalse(validate_signup_email("notanemail")[0])
+
+    @patch("app.auth_module.routes.send_verification_email", return_value={"success": True, "mode": "mock", "message": "OK"})
+    def test_signup_rejects_other_domains_at_api(self, mock_email):
+        res = client.post("/api/auth/signup", json={
+            "name": "Mallory Tester",
+            "email": "test_mallory@gmail.com",
+            "password": "Secure Pass#2026",
+            "confirm_password": "Secure Pass#2026"
+        })
+        self.assertEqual(res.status_code, 400)
+        self.assertIn("@verbolabs.com", res.json()["detail"])
+        mock_email.assert_not_called()
+
+    @patch("app.auth_module.routes.send_verification_email", return_value={"success": True, "mode": "mock", "message": "OK"})
+    def test_otp_login_and_legacy_account(self, mock_email):
+        """OTP sign-in needs no password; accounts with stored employee ID / other domains still work."""
+        email = "test_otp_user@verbolabs.com"
+        pwd = "Secure Pass#2026"
+        client.post("/api/auth/signup", json={"name": "Otto Tester", "email": email, "password": pwd, "confirm_password": pwd})
+        db = SessionLocal()
+        try:
+            user = db.query(User).filter(User.email == email).first()
+            user.is_verified = True
+            user.employee_id = "EMP-LEGACY"  # data from before the field was removed
+            db.commit()
+        finally:
+            db.close()
+
+        res = login_with_otp(email)
+        self.assertEqual(res.status_code, 200, res.text)
+        data = res.json()
+        self.assertTrue(data["success"])
+        self.assertEqual(data["user"]["email"], email)
+        self.assertNotIn("employee_id", data["user"])
+
+        # A second code cannot be requested straight away (cooldown), and a wrong code fails
+        with patch("app.auth_module.routes.send_mfa_login_otp_email", return_value={"success": True}):
+            client.post("/api/auth/logout", headers={"Authorization": f"Bearer {data['token']}"})
+            first = client.post("/api/auth/login/otp/request", json={"email": email})
+            self.assertEqual(first.status_code, 200)
+            again = client.post("/api/auth/login/otp/request", json={"email": email})
+            self.assertEqual(again.status_code, 429)
+        bad = client.post("/api/auth/verify-otp", json={"challenge_id": first.json()["challenge_id"], "otp": "000000"})
+        self.assertIn(bad.status_code, (401,))
 
     def test_password_policy(self):
         # Valid password: 8+ chars, lower, UPPER, number, symbol, SPACE
@@ -117,8 +168,7 @@ class TestAuthService(unittest.TestCase):
             "name": "Alice Tester",
             "email": "alice-at-nowhere",
             "password": test_password,
-            "confirm_password": test_password,
-            "employee_id": "EMP-001"
+            "confirm_password": test_password
         })
         self.assertEqual(bad_signup.status_code, 400)
         self.assertIn("valid email", bad_signup.json()["detail"].lower())
@@ -128,8 +178,7 @@ class TestAuthService(unittest.TestCase):
             "name": "Alice Tester",
             "email": test_email,
             "password": test_password,
-            "confirm_password": test_password,
-            "employee_id": "EMP-001"
+            "confirm_password": test_password
         })
         self.assertEqual(signup_res.status_code, 201)
         self.assertTrue(signup_res.json()["success"])
@@ -139,8 +188,7 @@ class TestAuthService(unittest.TestCase):
             "name": "Alice Tester",
             "email": test_email,
             "password": test_password,
-            "confirm_password": test_password,
-            "employee_id": "EMP-001"
+            "confirm_password": test_password
         })
         self.assertEqual(dup_res.status_code, 409)
         self.assertIn("already exists", dup_res.json()["detail"].lower())
@@ -148,8 +196,7 @@ class TestAuthService(unittest.TestCase):
         # 5. Attempt login with non-existent email -> should return 404
         login_not_found = client.post("/api/auth/login", json={
             "email": "test_ghost@verbolabs.com",
-            "password": test_password,
-            "operating_location": "Remote"
+            "password": test_password
         })
         self.assertEqual(login_not_found.status_code, 404)
         self.assertIn("no account found", login_not_found.json()["detail"].lower())
@@ -172,25 +219,15 @@ class TestAuthService(unittest.TestCase):
         # 7. Login with wrong password -> should return 401
         login_wrong_pwd = client.post("/api/auth/login", json={
             "email": test_email,
-            "password": "Wrong Pass!999",
-            "operating_location": "Remote"
+            "password": "Wrong Pass!999"
         })
         self.assertEqual(login_wrong_pwd.status_code, 401)
         self.assertIn("incorrect password", login_wrong_pwd.json()["detail"].lower())
 
-        # 8. Login without operating location -> should return 400
-        login_no_loc = client.post("/api/auth/login", json={
-            "email": test_email,
-            "password": test_password,
-            "operating_location": "Mars"
-        })
-        self.assertEqual(login_no_loc.status_code, 400)
-
-        # 8b. Two failures so far (unknown email, wrong password): login now needs the bot check
+        # 8. Two failures so far (unknown email, wrong password): login now needs the bot check
         login_needs_check = client.post("/api/auth/login", json={
             "email": test_email,
-            "password": test_password,
-            "operating_location": "In Office"
+            "password": test_password
         })
         self.assertEqual(login_needs_check.status_code, 403)
         self.assertIn("security verification", login_needs_check.json()["detail"].lower())
@@ -202,13 +239,14 @@ class TestAuthService(unittest.TestCase):
         finally:
             db.close()
 
-        # 9. Successful Login (password, then emailed OTP)
-        login_success = login_with_otp(test_email, test_password, "In Office", name="Alice Tester")
+        # 9. Successful password login: signs in directly, no OTP asked for
+        login_success = login_with_password(test_email, test_password)
         self.assertEqual(login_success.status_code, 200)
         login_data = login_success.json()
         self.assertTrue(login_data["success"])
         session_token = login_data["token"]
-        self.assertEqual(login_data["user"]["operating_location"], "In Office")
+        self.assertNotIn("operating_location", login_data["user"])
+        self.assertNotIn("employee_id", login_data["user"])
 
         # 10. Check /api/auth/me with session token
         me_res = client.get("/api/auth/me", headers={"Authorization": f"Bearer {session_token}"})
@@ -220,7 +258,6 @@ class TestAuthService(unittest.TestCase):
         try:
             history = db.query(LoginHistory).filter(LoginHistory.user_id == user.id).all()
             self.assertEqual(len(history), 1)
-            self.assertEqual(history[0].operating_location, "In Office")
         finally:
             db.close()
 
@@ -238,8 +275,7 @@ class TestAuthService(unittest.TestCase):
             "name": "Bob Reset",
             "email": test_email,
             "password": old_password,
-            "confirm_password": old_password,
-            "employee_id": "EMP-002"
+            "confirm_password": old_password
         })
         self.assertEqual(signup_res.status_code, 201)
 
@@ -309,16 +345,14 @@ class TestAuthService(unittest.TestCase):
         # 8. Attempt login with OLD password -> should fail (401)
         old_login = client.post("/api/auth/login", json={
             "email": test_email,
-            "password": old_password,
-            "operating_location": "In Office"
+            "password": old_password
         })
         self.assertEqual(old_login.status_code, 401)
 
         # 9. Attempt login with NEW password -> should SUCCEED (200)
-        new_login = login_with_otp(test_email, new_password, "Remote")
+        new_login = login_with_password(test_email, new_password)
         self.assertEqual(new_login.status_code, 200)
         self.assertTrue(new_login.json()["success"])
-        self.assertEqual(new_login.json()["user"]["operating_location"], "Remote")
 
 
 if __name__ == "__main__":

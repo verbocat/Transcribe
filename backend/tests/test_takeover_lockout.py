@@ -38,7 +38,6 @@ def run_tests():
     session_a = AuthSession(
         user_id=user.id,
         session_token=token_a,
-        operating_location="In Office",
         device_info="Workstation-A (Chrome / Windows)",
         is_active=True,
         expires_at=now_utc + timedelta(hours=4)
@@ -55,7 +54,6 @@ def run_tests():
         user_id=user.id,
         existing_session_id=session_a.id,
         new_session_token=token_b,
-        new_operating_location="Remote",
         new_device_info="Workstation-B (Firefox / MacOS)",
         created_at=now_utc,
         expires_at=now_utc + timedelta(seconds=60),
@@ -100,8 +98,7 @@ def run_tests():
 
     login_payload = LoginRequest(
         email=test_email,
-        password=pwd,
-        operating_location="Remote"
+        password=pwd
     )
 
     from fastapi import HTTPException
@@ -121,10 +118,10 @@ def run_tests():
     logout_res = logout(authorization=f"Bearer {token_a}", db=db)
     print(f"[PASS] Step 7: Device A logged out: {logout_res}")
 
-    # 8. Device B attempts to log in now -> Should now proceed to OTP because Device A is no longer active!
+    # 8. Device B attempts to log in now -> Device A is gone, so a password login signs in directly (no OTP)
     login_after_logout = login(payload=login_payload, request=mock_request, db=db)
-    print(f"[PASS] Step 8: Device B login succeeded after Device A logged out: {login_after_logout.get('mfa_required')}")
-    assert login_after_logout.get("mfa_required") is True
+    print(f"[PASS] Step 8: Device B login succeeded after Device A logged out: {bool(login_after_logout.get('token'))}")
+    assert login_after_logout.get("token")
 
     # Clean up test data
     db.query(AuthSession).filter(AuthSession.user_id == user.id).delete()
