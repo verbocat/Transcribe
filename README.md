@@ -1,11 +1,13 @@
-# Karya Transcription & Subtitle Studio
+# Lower Third: Transcription & Subtitle Studio
+
+Lower Third is the product name; internal identifiers, API routes, storage keys and the repository name still use the earlier "Karya"/"Transcribe" naming.
 
 A web studio for transcribing speech and building broadcast-grade subtitles, with a focus on Hindi, Hinglish and other Indic languages. Word timings, speaker diarization and audio-event tags come from **ElevenLabs Scribe v2**. A local **Netflix engine** turns those words into subtitle cards that follow the **Netflix Timed Text Style Guide**, and **Google Gemini** is used for optional proofreading, QC fixes and context helpers.
 
 The app has two tools behind one sign-in:
 
 * **Subtitle Studio** (`/subtitle`): generate, edit, QC, translate and export subtitles for a video or audio file.
-* **Transcription Studio** (`/transcribe`): Karya-style segment transcription with speaker and gender labels, linting, and CSV/DOCX/XLSX deliverables.
+* **Transcription Studio** (`/transcribe`): segment-style transcription with speaker and gender labels, linting, and CSV/DOCX/XLSX deliverables.
 
 An **Admin dashboard** (`/admin`) lets admins manage users, quotas and audit logs.
 

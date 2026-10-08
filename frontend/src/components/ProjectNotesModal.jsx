@@ -38,7 +38,7 @@ export default function ProjectNotesModal({ isOpen, onClose, filename }) {
   useEffect(() => {
     if (isOpen) {
       const savedNotes = localStorage.getItem(storageKey) || '';
-      const savedTags = JSON.parse(localStorage.getItem(tagsKey) || '["Karya Standard", "Verbatim"]');
+      const savedTags = JSON.parse(localStorage.getItem(tagsKey) || '["Lower Third Standard", "Verbatim"]');
       setNotes(savedNotes);
       setTags(savedTags);
     }

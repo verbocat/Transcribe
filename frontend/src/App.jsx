@@ -15,7 +15,8 @@ import SpeakerCustomizerModal from './components/SpeakerCustomizerModal';
 import TranscribeStudio from './components/transcribe/TranscribeStudio';
 import DiffModal from './components/DiffModal';
 import ProjectNotesModal from './components/ProjectNotesModal';
-import LandingPage from './components/LandingPage';
+import HomePage from './components/HomePage';
+import { takeLaunchIntent } from './utils/launchIntent';
 import SubtitleApp from './components/subtitle/SubtitleApp';
 import AdminDashboard from './components/admin/AdminDashboard';
 import NotFoundPage from './components/NotFoundPage';
@@ -506,10 +507,10 @@ function AppContent() {
     );
   }
 
-  // ── Public Home Landing Page (default route for all visitors & authenticated users at root) ──
+  // ── Home: app-style launcher shown at the root ──
   return (
     <>
-      <LandingPage
+      <HomePage
         onSelect={handleSelectTool}
         user={user}
         onLogout={() => setShowLogoutModal(true)}
@@ -796,7 +797,7 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
     const expected = Math.max(8, (audioSeconds || 60) * ratio);
     setProgressStepIndex(2);
     setProgressStage('Transcribing');
-    setProgressDetail('Speech recognition, speakers, gender and Karya checks on the server');
+    setProgressDetail('Speech recognition, speakers, gender and rule checks on the server');
     setProgressEstimated(true);
     setProgressPercent(0);
     if (progressTimerRef.current) clearInterval(progressTimerRef.current);
@@ -1269,6 +1270,14 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
       console.error("Failed to load project:", err);
     }
   };
+
+  // Hand-off from Home: a dropped file or a saved project to open on arrival
+  useEffect(() => {
+    const intent = takeLaunchIntent('transcribe');
+    if (intent?.file) handleFileSelect({ target: { files: [intent.file] } });
+    else if (intent?.projectId) handleLoadProject(intent.projectId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleDeleteProject = async (projectId) => {
     if (!window.confirm("Are you sure you want to delete this project from Neon DB?")) return;

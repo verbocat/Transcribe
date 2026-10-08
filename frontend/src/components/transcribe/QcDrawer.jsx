@@ -3,7 +3,7 @@ import { X, ShieldCheck, BadgeCheck, AlertCircle, AlertTriangle, Crosshair } fro
 import { Segmented, IconButton } from '../subtitle/ui/controls';
 import { formatStamp } from './speakerUtils';
 
-/** Karya rule findings for the transcript, one row per problem. */
+/** Rule findings for the transcript, one row per problem. */
 function KaryaChecks({ segments, score, errors, warnings, onJump }) {
   const rows = useMemo(() => segments.flatMap((s) => (s.qc_errors || []).map((e, i) => ({ seg: s, err: e, key: `${s.segment_id}-${i}` }))), [segments]);
   return (
@@ -37,7 +37,7 @@ function KaryaChecks({ segments, score, errors, warnings, onJump }) {
   );
 }
 
-/** One QC view with two tabs, like Subtitle Studio's: Karya rules, and Centroid's check of a translation. */
+/** One QC view with two tabs, like Subtitle Studio's: rule checks, and Centroid's check of a translation. */
 export default function QcDrawer({ view, onView, centroidIssues, onClose, setHost, segments, score, errors, warnings, onJump }) {
   return (
     <aside
@@ -49,7 +49,7 @@ export default function QcDrawer({ view, onView, centroidIssues, onClose, setHos
           <Segmented
             label="QC panel" value={view} onChange={onView}
             options={[
-              { value: 'karya', label: 'Karya checks', icon: ShieldCheck },
+              { value: 'karya', label: 'Rule checks', icon: ShieldCheck },
               { value: 'centroid', label: centroidIssues != null ? `Centroid QC · ${centroidIssues}` : 'Centroid QC', icon: BadgeCheck },
             ]}
           />

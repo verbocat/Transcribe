@@ -3,6 +3,7 @@ import {
   BookOpen, Sparkles, ShieldCheck, Database, BarChart2,
   Users, Undo2, Redo2, UploadCloud, GitCompare, StickyNote
 } from 'lucide-react';
+import BrandLogo from './BrandLogo';
 import AccountMenuDropdown from './AccountMenuDropdown';
 import NotificationBellDropdown from './NotificationBellDropdown';
 import ThemeToggle from './ThemeToggle';
@@ -44,12 +45,10 @@ export default function Navbar({
       <div className="w-full flex flex-wrap items-center justify-between gap-2">
         {/* Left: Brand & Undo/Redo */}
         <div className="flex items-center gap-2.5">
-          <div className="h-7 w-7 rounded-lg bg-gradient-to-tr from-[var(--kt-accent)] to-blue-600 flex items-center justify-center shadow-xs text-black font-black shrink-0">
-            <Sparkles className="w-3.5 h-3.5 fill-current" />
-          </div>
+          <BrandLogo size={28} />
           <div>
             <div className="flex items-center gap-1.5">
-              <span className="font-extrabold text-xs text-white uppercase tracking-wider font-mono">Karya Transcribe</span>
+              <span className="font-extrabold text-xs text-white uppercase tracking-wider font-mono">Lower Third</span>
               <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-[var(--kt-accent)]/15 text-[var(--kt-accent)] border border-[var(--kt-accent)]/30 uppercase">
                 Verbatim AI
               </span>

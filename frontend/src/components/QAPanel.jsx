@@ -40,7 +40,7 @@ export default function QAPanel({
         <div className="flex items-center justify-between mb-2">
           <div className="flex items-center gap-2">
             <ShieldCheck className="w-4 h-4 text-[var(--kt-accent)]" />
-            <h3 className="font-bold text-xs text-slate-200 uppercase tracking-wider">Karya Compliance Score</h3>
+            <h3 className="font-bold text-xs text-slate-200 uppercase tracking-wider">Compliance Score</h3>
           </div>
           <span className="text-[11px] font-semibold text-slate-500">Target: ≥ 98%</span>
         </div>
