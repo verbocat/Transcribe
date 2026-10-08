@@ -1,5 +1,5 @@
 /**
- * Karya appearance engine.
+ * Lower Third appearance engine.
  *
  * A theme is a small JSON object. `applyTheme` turns it into CSS variables on <html>:
  *   --kt-*            colours, fonts and shape used by index.css, studio.css and transcribe.css
@@ -79,11 +79,11 @@ export const COLOR_KEYS = [
 ];
 
 export const DEFAULT_THEME = {
-  name: 'Azure',
+  name: 'Lower Third',
   colors: {
-    accent: '#4d8dff', accent2: '#7a70ff',
-    bg: '#0b0d12', panel: '#10131a', raised: '#171b25', hover: '#1e2330', border: '#252b3a', borderStrong: '#323a4f',
-    text: '#e8ebf2', muted: '#a3abbc', faint: '#7d8699',
+    accent: '#5b6cff', accent2: '#8a3ffc',
+    bg: '#060919', panel: '#0a0e24', raised: '#10162f', hover: '#171e3d', border: '#1d2547', borderStrong: '#2b3563',
+    text: '#eceffb', muted: '#a5adc9', faint: '#7a84a6',
     success: '#10b981', warn: '#f5b84a', danger: '#ff6b81',
   },
   inkMode: 'auto',
@@ -94,13 +94,15 @@ export const DEFAULT_THEME = {
   radius: 100,
   density: 100,
   motion: true,
-  speakers: ['#4d8dff', '#34d3a0', '#ff9f5a', '#c58bff', '#ff6b9d', '#f5d547', '#38c6f4', '#9be15d', '#ff7a7a', '#b6a2ff'],
+  speakers: ['#5b6cff', '#34d3a0', '#ff9f5a', '#c58bff', '#ff6b9d', '#f5d547', '#38c6f4', '#9be15d', '#ff7a7a', '#b6a2ff'],
 };
 
 const surfaces = (bg, panel, raised, hover, border, borderStrong) => ({ bg, panel, raised, hover, border, borderStrong });
 
 export const PRESETS = [
-  { id: 'azure', name: 'Azure', note: 'Default. Clean and professional.', theme: {} },
+  { id: 'lowerthird', name: 'Lower Third', note: 'Default. Brand blue-violet on deep navy.', theme: {} },
+  { id: 'azure', name: 'Azure', note: 'Previous default. Clean blue.',
+    theme: { colors: { accent: '#4d8dff', accent2: '#7a70ff', ...surfaces('#0b0d12', '#10131a', '#171b25', '#1e2330', '#252b3a', '#323a4f') } } },
   { id: 'midnight', name: 'Midnight', note: 'Deeper navy, brighter blue.',
     theme: { colors: { accent: '#5aa2ff', accent2: '#8b7bff', ...surfaces('#060913', '#0a0f1d', '#101728', '#172036', '#1b2640', '#28365a') } } },
   { id: 'indigo', name: 'Indigo', note: 'Soft violet-blue.',
@@ -109,7 +111,7 @@ export const PRESETS = [
     theme: { colors: { accent: '#a78bfa', accent2: '#f472b6', ...surfaces('#0e0b14', '#14101c', '#1c1726', '#261f33', '#2d2640', '#3d3458') } } },
   { id: 'emerald', name: 'Emerald', note: 'Deep green-grey with a mint accent.',
     theme: { colors: { accent: '#2fbf8f', accent2: '#3b82f6', ...surfaces('#0a0f0e', '#0f1514', '#151d1c', '#1d2827', '#243230', '#31443f') } } },
-  { id: 'classic', name: 'Classic teal', note: 'The original Karya look.',
+  { id: 'classic', name: 'Classic teal', note: 'The original teal look.',
     theme: { colors: { accent: '#00e5be', accent2: '#00b4d8', ...surfaces('#0b0d12', '#10131a', '#171b25', '#1e2330', '#252b3a', '#323a4f') } } },
   { id: 'rose', name: 'Rose', note: 'Warm dark with a coral accent.',
     theme: { colors: { accent: '#fb7185', accent2: '#f59e0b', ...surfaces('#0f0b0c', '#161012', '#1e1618', '#292024', '#30262a', '#44363b') } } },
@@ -273,7 +275,7 @@ export function exportThemeJson() {
 export function importThemeJson(text) {
   let data;
   try { data = JSON.parse(text); } catch { throw new Error('That file is not valid JSON.'); }
-  if (!data || typeof data !== 'object' || !data.colors) throw new Error('This does not look like a Karya theme file.');
+  if (!data || typeof data !== 'object' || !data.colors) throw new Error('This does not look like a Lower Third theme file.');
   return normalizeTheme(data);
 }
 

@@ -75,7 +75,7 @@ export default function NotFoundPage({ onNavigateHome, onNavigateStudio, onOpenA
 
         {/* Footer info */}
         <div className="mt-6 pt-4 border-t border-[var(--kt-s3)] text-[10px] font-mono text-slate-500">
-          Karya Studio Sovereign Engine • VerboLabs Enterprise
+          Lower Third • VerboLabs
         </div>
       </div>
     </div>

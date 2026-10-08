@@ -283,7 +283,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Karya Conversational Audio Transcription & Segmentation Studio",
+    title="Lower Third Transcription & Subtitle Studio",
     description="Automated verbatim transcription, speaker diarization, QA linter & batch pipeline",
     version="1.0.0",
     lifespan=lifespan
@@ -394,7 +394,7 @@ def root_endpoint():
     """Root health check for UptimeRobot, Render health checks & load balancers."""
     return {
         "status": "healthy",
-        "service": "Karya Conversational Audio Transcription Studio",
+        "service": "Lower Third Transcription Studio",
         "version": "1.0.0",
         "docs": "/docs",
         "health": "/api/health"
@@ -814,7 +814,7 @@ TRANSCRIBE_STAGES = [
     ("script", "Fixing script and loanwords"),
     ("segmenting", "Building segments"),
     ("gender", "Detecting speaker gender"),
-    ("linting", "Checking Karya rules"),
+    ("linting", "Checking transcription rules"),
 ]
 
 

@@ -52,7 +52,7 @@ export default function GuidelinesModal({ isOpen, onClose }) {
         <div className="mb-6">
           <h2 className="text-lg font-bold text-white tracking-tight flex items-center gap-2">
             <BookOpen className="w-5 h-5 text-[var(--kt-accent)]" />
-            Karya Transcription Guidelines Cheatsheet
+            Transcription Guidelines Cheatsheet
           </h2>
           <p className="text-xs text-slate-400 mt-1">
             Strict project compliance rules. Target overall batch acceptance quality: <strong className="text-[var(--kt-accent)]">≥ 98%</strong>.
