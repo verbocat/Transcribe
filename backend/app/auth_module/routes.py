@@ -14,7 +14,6 @@ from .models import (
     PasswordResetToken,
     LoginOTP,
     AuthFailedAttempt,
-    SessionTakeoverRequest,
     AdminNotification,
     UserPreference
 )
@@ -153,11 +152,6 @@ class VerifyTokenRequest(BaseModel):
 class VerifyOtpRequest(BaseModel):
     challenge_id: str = Field(...)
     otp: str = Field(..., min_length=6, max_length=6)
-
-
-class TakeoverDecisionRequest(BaseModel):
-    takeover_id: str = Field(...)
-    decision: str = Field(...)  # "keep" or "release"
 
 
 class ResendOtpRequest(BaseModel):
@@ -369,130 +363,6 @@ def get_bot_challenge():
     }
 
 
-@auth_router.get("/takeover/status")
-def get_takeover_status(takeover_id: str, db: Session = Depends(get_auth_db)):
-    """
-    Polled by Device B during the 60-second waiting period.
-    Evaluates whether Device A rejected the takeover, or 60s expired (auto-approved).
-    """
-    takeover = db.query(SessionTakeoverRequest).filter(SessionTakeoverRequest.id == takeover_id).first()
-    if not takeover:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Takeover request not found.")
-
-    now_utc = datetime.now(timezone.utc)
-    exp = takeover.expires_at.replace(tzinfo=timezone.utc) if takeover.expires_at.tzinfo is None else takeover.expires_at
-
-    if takeover.status == "rejected":
-        # Check lockout on active session to inform Device B of the exact cooldown
-        active_sess = db.query(AuthSession).filter(AuthSession.id == takeover.existing_session_id).first()
-        remaining_secs = 1800
-        if active_sess and active_sess.takeover_lockout_until:
-            exp_lockout = active_sess.takeover_lockout_until.replace(tzinfo=timezone.utc) if active_sess.takeover_lockout_until.tzinfo is None else active_sess.takeover_lockout_until
-            remaining_secs = max(0, int((exp_lockout - now_utc).total_seconds()))
-        remaining_mins = max(1, int((remaining_secs + 59) // 60))
-        return {
-            "success": False,
-            "status": "rejected",
-            "lockout_seconds": remaining_secs,
-            "lockout_minutes": remaining_mins,
-            "message": f"Login request was declined by the active workstation. To prevent interruptions during active work/exporting, remote logins for this account are locked for {remaining_mins} minutes."
-        }
-
-    if takeover.status == "approved" or (takeover.status == "pending" and now_utc >= exp):
-        # 60-second window expired without rejection -> Yield session to Device B!
-        old_session = db.query(AuthSession).filter(AuthSession.id == takeover.existing_session_id).first()
-        if old_session:
-            old_session.is_active = False
-
-        # Activate Device B session
-        existing_new = db.query(AuthSession).filter(AuthSession.session_token == takeover.new_session_token).first()
-        if not existing_new:
-            new_session = AuthSession(
-                user_id=takeover.user_id,
-                session_token=takeover.new_session_token,
-                device_info=takeover.new_device_info,
-                is_active=True,
-                expires_at=now_utc + timedelta(hours=4)
-            )
-            db.add(new_session)
-
-        takeover.status = "approved"
-        db.commit()
-
-        user = db.query(User).filter(User.id == takeover.user_id).first()
-        return {
-            "success": True,
-            "status": "approved",
-            "token": takeover.new_session_token,
-            "expires_in": 4 * 3600,
-            "user": {
-                "id": user.id if user else takeover.user_id,
-                "name": user.name if user else "Editor",
-                "email": user.email if user else "",
-                "role": user.role if user else "editor",
-                "is_admin": bool(user and (user.is_admin or (user.role and user.role.lower() == "admin")))
-            }
-        }
-
-    # Still pending
-    remaining = max(0, int((exp - now_utc).total_seconds()))
-    return {
-        "success": True,
-        "status": "pending",
-        "remaining_seconds": remaining
-    }
-
-
-@auth_router.post("/takeover/decision")
-def submit_takeover_decision(
-    payload: TakeoverDecisionRequest,
-    authorization: Optional[str] = Header(None),
-    db: Session = Depends(get_auth_db)
-):
-    """
-    Called by Device A when user clicks 'Keep Working' (reject) or 'Log Out' (release).
-    If 'keep', activates a 30-minute lockout so Device B cannot repeatedly interrupt work/exporting.
-    """
-    from .routes import get_current_user_from_token
-    user = get_current_user_from_token(authorization=authorization, db=db)
-    token = authorization.split(" ")[1].strip()
-
-    takeover = db.query(SessionTakeoverRequest).filter(
-        SessionTakeoverRequest.id == payload.takeover_id,
-        SessionTakeoverRequest.user_id == user.id
-    ).first()
-
-    if not takeover:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Takeover request not found.")
-
-    now_utc = datetime.now(timezone.utc)
-    if payload.decision.lower() == "keep":
-        takeover.status = "rejected"
-        # Protect active session from any further takeover interruptions for 30 minutes
-        active_sess = db.query(AuthSession).filter(AuthSession.id == takeover.existing_session_id).first()
-        if active_sess:
-            active_sess.takeover_lockout_until = now_utc + timedelta(minutes=30)
-        db.commit()
-        return {
-            "success": True,
-            "decision": "keep",
-            "lockout_minutes": 30,
-            "message": "You chose to keep working on this workstation. Remote login attempts are paused for 30 minutes so your work is not interrupted."
-        }
-    else:
-        # User explicitly chooses to log out and allow Device B
-        takeover.status = "approved"
-        curr_session = db.query(AuthSession).filter(AuthSession.session_token == token).first()
-        if curr_session:
-            curr_session.is_active = False
-        db.commit()
-        return {
-            "success": True,
-            "decision": "release",
-            "message": "Session released. You are now logged out."
-        }
-
-
 def _masked_email(email: str) -> str:
     parts = email.split("@")
     masked_name = parts[0][0] + "***" + (parts[0][-1] if len(parts[0]) > 1 else "")
@@ -554,39 +424,15 @@ def _lookup_user_for_login(db: Session, email_clean: str, client_ip: str) -> Use
     return user
 
 
-def _raise_if_takeover_locked(active_session: Optional[AuthSession], now_utc: datetime) -> None:
-    """If the active workstation declined a takeover, block new logins for the lockout period."""
-    if active_session and active_session.takeover_lockout_until:
-        lockout_end = active_session.takeover_lockout_until.replace(tzinfo=timezone.utc) if active_session.takeover_lockout_until.tzinfo is None else active_session.takeover_lockout_until
-        if lockout_end > now_utc:
-            rem_sec = int((lockout_end - now_utc).total_seconds())
-            rem_min = int((rem_sec + 59) // 60)
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Active workstation declined remote login to protect uninterrupted work (e.g. exporting/editing). Remote login for this account is locked for {rem_min} more minute{'s' if rem_min != 1 else ''}."
-            )
-
-
-def _find_active_session(db: Session, user: User, now_utc: datetime) -> Optional[AuthSession]:
-    return db.query(AuthSession).filter(
-        AuthSession.user_id == user.id,
-        AuthSession.is_active == True,
-        AuthSession.expires_at > now_utc
-    ).order_by(AuthSession.created_at.desc()).first()
-
-
 def _complete_login(db: Session, user: User, request: Request) -> dict:
     """
     Called once the user has proven who they are (correct password, or correct emailed code).
-    Records the login, enforces the single-active-session rule (60-second takeover request when
-    another device is signed in) and otherwise issues a 4-hour session.
+    Records the login and issues a 4-hour session. A user may be signed in on any number of
+    devices at once; each login gets its own independent session.
     """
     now_utc = datetime.now(timezone.utc)
     client_ip = get_client_ip(request)
     device_summary = get_device_summary(request)
-
-    existing_session = _find_active_session(db, user, now_utc)
-    _raise_if_takeover_locked(existing_session, now_utc)
 
     db.add(LoginHistory(
         user_id=user.id,
@@ -596,34 +442,6 @@ def _complete_login(db: Session, user: User, request: Request) -> dict:
     ))
 
     new_session_token = generate_token()
-
-    if existing_session:
-        # Another device is active: create a 60-second takeover request
-        db.query(SessionTakeoverRequest).filter(
-            SessionTakeoverRequest.user_id == user.id,
-            SessionTakeoverRequest.status == "pending"
-        ).delete()
-
-        takeover = SessionTakeoverRequest(
-            user_id=user.id,
-            existing_session_id=existing_session.id,
-            new_session_token=new_session_token,
-            new_device_info=device_summary,
-            created_at=now_utc,
-            expires_at=now_utc + timedelta(seconds=60),
-            status="pending"
-        )
-        db.add(takeover)
-        db.commit()
-
-        return {
-            "success": True,
-            "takeover_pending": True,
-            "takeover_id": takeover.id,
-            "wait_seconds": 60,
-            "existing_device": existing_session.device_info or "Active Workstation",
-            "message": f"Another workstation ({existing_session.device_info or 'Active Device'}) is currently logged in. A 60-second authorization request has been sent to it."
-        }
 
     db.add(AuthSession(
         user_id=user.id,
@@ -689,9 +507,6 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_aut
             err_msg += " (Security verification will be required on your next attempt)."
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=err_msg)
 
-    # Fail before any session work if the active workstation is in its takeover lockout
-    _raise_if_takeover_locked(_find_active_session(db, user, now_utc), now_utc)
-
     return _complete_login(db, user, request)
 
 
@@ -719,8 +534,6 @@ def request_login_otp(payload: RequestLoginOtpRequest, request: Request, db: Ses
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Your email has not been verified yet. Check your inbox for the verification link, or request a new one."
         )
-
-    _raise_if_takeover_locked(_find_active_session(db, user, now_utc), now_utc)
 
     previous = db.query(LoginOTP).filter(LoginOTP.user_id == user.id).order_by(LoginOTP.last_resend_at.desc()).first()
     if previous:
@@ -779,7 +592,7 @@ def verify_login_otp(
     - Checks maximum attempts (max 5)
     - Compares HMAC-SHA256 hash using constant-time comparison
     - DELETES challenge record immediately upon match (prevents multi-device reuse / replay)
-    - Then signs in through the same single-active-session rules as password sign-in
+    - Then signs in exactly like password sign-in (a new session; other devices stay signed in)
     """
     challenge_id = payload.challenge_id.strip()
     otp_candidate = payload.otp.strip()
@@ -1142,8 +955,7 @@ def get_current_user_profile(
     db: Session = Depends(get_auth_db)
 ):
     """
-    Returns profile information of the currently authenticated user, slides 4-hour session,
-    and checks if another device is requesting session takeover.
+    Returns profile information of the currently authenticated user, slides 4-hour session.
     """
     user = get_current_user_from_token(authorization=authorization, db=db)
     token = authorization.split(" ")[1].strip()
@@ -1151,31 +963,13 @@ def get_current_user_profile(
     remaining = 4 * 3600
     now_utc = datetime.now(timezone.utc)
 
-    takeover_info = None
     if session:
         exp = session.expires_at.replace(tzinfo=timezone.utc) if session.expires_at.tzinfo is None else session.expires_at
         remaining = max(0, int((exp - now_utc).total_seconds()))
 
-        # Check for active takeover request targeting this session
-        pending = db.query(SessionTakeoverRequest).filter(
-            SessionTakeoverRequest.existing_session_id == session.id,
-            SessionTakeoverRequest.status == "pending",
-            SessionTakeoverRequest.expires_at > now_utc
-        ).first()
-
-        if pending:
-            p_exp = pending.expires_at.replace(tzinfo=timezone.utc) if pending.expires_at.tzinfo is None else pending.expires_at
-            takeover_info = {
-                "takeover_id": pending.id,
-                "requesting_device": pending.new_device_info,
-                "remaining_seconds": max(0, int((p_exp - now_utc).total_seconds()))
-            }
-
     return {
         "success": True,
         "expires_in": remaining,
-        "takeover_requested": bool(takeover_info),
-        "takeover": takeover_info,
         "user": {
             "id": user.id,
             "name": user.name,
@@ -1200,17 +994,13 @@ def logout(
     db: Session = Depends(get_auth_db)
 ):
     """
-    Terminates the active session token and any user sessions.
+    Ends only the session that made the request; the user's other devices stay signed in.
     """
     if authorization and authorization.startswith("Bearer "):
         token = authorization.split(" ")[1].strip()
         session = db.query(AuthSession).filter(AuthSession.session_token == token).first()
         if session:
-            user_id = session.user_id
-            db.query(AuthSession).filter(
-                AuthSession.user_id == user_id,
-                AuthSession.is_active == True
-            ).update({"is_active": False})
+            session.is_active = False
             db.commit()
     return {"success": True, "message": "Successfully logged out."}
 

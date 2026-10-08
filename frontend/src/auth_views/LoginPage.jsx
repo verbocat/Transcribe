@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import BrandLogo from '../components/BrandLogo';
-import { Mail, Lock, User as UserIcon, Building2, Eye, EyeOff, AlertCircle, CheckCircle2, ArrowRight, ArrowLeft, Loader2, Sparkles, ShieldCheck, RotateCw, Clock, Monitor, ShieldAlert } from 'lucide-react';
+import { Mail, Lock, User as UserIcon, Building2, Eye, EyeOff, AlertCircle, CheckCircle2, ArrowRight, ArrowLeft, Loader2, Sparkles, ShieldCheck, RotateCw, Clock, ShieldAlert } from 'lucide-react';
 import { useAuth } from './AuthContext';
 import { useTheme } from '../context/ThemeContext';
-import { loginUser, resendVerification, verifyLoginOtp, resendLoginOtp, requestLoginOtp, getBotChallenge, getTakeoverStatus } from './authService';
+import { loginUser, resendVerification, verifyLoginOtp, resendLoginOtp, requestLoginOtp, getBotChallenge } from './authService';
 import AuthProcessModal from './AuthProcessModal';
 
 import { Server } from 'lucide-react';
@@ -19,7 +19,7 @@ export default function LoginPage({ onSwitchToSignup, onSwitchToForgotPassword, 
   const [method, setMethod] = useState('password');
   const [showPassword, setShowPassword] = useState(false);
 
-  // Step state: 'credentials' | 'mfa' (code emailed, waiting for it) | 'takeover_waiting'
+  // Step state: 'credentials' | 'mfa' (code emailed, waiting for it)
   const [step, setStep] = useState('credentials');
   const [challengeId, setChallengeId] = useState('');
   const [maskedEmail, setMaskedEmail] = useState('');
@@ -34,12 +34,6 @@ export default function LoginPage({ onSwitchToSignup, onSwitchToForgotPassword, 
   const [botChallenge, setBotChallenge] = useState(null);
   const [botAnswer, setBotAnswer] = useState('');
   const [isLoadingChallenge, setIsLoadingChallenge] = useState(false);
-
-  // Takeover Waiting state (Device B)
-  const [takeoverId, setTakeoverId] = useState('');
-  const [existingDevice, setExistingDevice] = useState('');
-  const [takeoverRemainingSeconds, setTakeoverRemainingSeconds] = useState(60);
-  const [takeoverLockoutSeconds, setTakeoverLockoutSeconds] = useState(0);
 
   const [error, setError] = useState('');
   const [infoMessage, setInfoMessage] = useState(initialSuccessMsg);
@@ -61,15 +55,6 @@ export default function LoginPage({ onSwitchToSignup, onSwitchToForgotPassword, 
     return () => clearInterval(timer);
   }, [lockoutSeconds]);
 
-  // Takeover Lockout Countdown tick (30-minute protection when Device A denies)
-  useEffect(() => {
-    if (takeoverLockoutSeconds <= 0) return;
-    const timer = setInterval(() => {
-      setTakeoverLockoutSeconds((prev) => (prev > 0 ? prev - 1 : 0));
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [takeoverLockoutSeconds]);
-
   // MFA Countdown & Cooldown tick
   useEffect(() => {
     if (step !== 'mfa') return;
@@ -79,42 +64,6 @@ export default function LoginPage({ onSwitchToSignup, onSwitchToForgotPassword, 
     }, 1000);
     return () => clearInterval(timer);
   }, [step]);
-
-  // Takeover Waiting Polling (Device B)
-  useEffect(() => {
-    if (step !== 'takeover_waiting' || !takeoverId) return;
-
-    const countdown = setInterval(() => {
-      setTakeoverRemainingSeconds((prev) => (prev > 0 ? prev - 1 : 0));
-    }, 1000);
-
-    const poller = setInterval(async () => {
-      try {
-        const res = await getTakeoverStatus(takeoverId);
-        if (res.status === 'approved') {
-          clearInterval(poller);
-          clearInterval(countdown);
-          login(res.token, res.user);
-        } else if (res.status === 'rejected') {
-          clearInterval(poller);
-          clearInterval(countdown);
-          const remSecs = res.lockout_seconds !== undefined ? res.lockout_seconds : 1800;
-          setTakeoverLockoutSeconds(remSecs);
-          setError(res.message || 'Login request was declined by the active workstation. Remote logins are paused for 30 minutes.');
-          setStep('credentials');
-        } else if (res.remaining_seconds !== undefined) {
-          setTakeoverRemainingSeconds(res.remaining_seconds);
-        }
-      } catch (err) {
-        console.warn('Takeover polling note:', err);
-      }
-    }, 2000);
-
-    return () => {
-      clearInterval(countdown);
-      clearInterval(poller);
-    };
-  }, [step, takeoverId, login]);
 
   const formatTimer = (seconds) => {
     const mins = Math.floor(seconds / 60);
@@ -208,18 +157,6 @@ export default function LoginPage({ onSwitchToSignup, onSwitchToForgotPassword, 
         bot_challenge_token: challengeToken
       });
 
-      // Another workstation is signed in: wait for its owner to allow or decline
-      if (data.takeover_pending) {
-        setTakeoverId(data.takeover_id);
-        setExistingDevice(data.existing_device || 'Active Workstation');
-        setTakeoverRemainingSeconds(data.wait_seconds || 60);
-        setStep('takeover_waiting');
-        setPassword('');
-        setBotChallenge(null);
-        setBotAnswer('');
-        return;
-      }
-
       setProcessStage('initializing');
       setProcessModalOpen(true);
       await new Promise(r => setTimeout(r, 450));
@@ -245,15 +182,8 @@ export default function LoginPage({ onSwitchToSignup, onSwitchToForgotPassword, 
         setLockoutSeconds(900); // 15 minutes
       }
 
-      // Check if workstation takeover locked out (403 active workstation protected mode)
-      if (err.status === 403 && (errMsg.toLowerCase().includes('declined') || errMsg.toLowerCase().includes('protect') || errMsg.toLowerCase().includes('exporting'))) {
-        const match = errMsg.match(/locked for (\d+) more minute/);
-        const mins = match ? parseInt(match[1], 10) : 30;
-        setTakeoverLockoutSeconds(mins * 60);
-      }
-
       // Check if bot challenge required (403 or message trigger)
-      if ((err.status === 403 && !errMsg.toLowerCase().includes('declined') && !errMsg.toLowerCase().includes('not been verified') && !errMsg.toLowerCase().includes('suspended')) || errMsg.toLowerCase().includes('verification required') || errMsg.toLowerCase().includes('puzzle') || errMsg.toLowerCase().includes('security verification')) {
+      if ((err.status === 403 && !errMsg.toLowerCase().includes('not been verified') && !errMsg.toLowerCase().includes('suspended')) || errMsg.toLowerCase().includes('verification required') || errMsg.toLowerCase().includes('puzzle') || errMsg.toLowerCase().includes('security verification')) {
         loadBotChallenge();
       }
 
@@ -294,16 +224,6 @@ export default function LoginPage({ onSwitchToSignup, onSwitchToForgotPassword, 
         otp: cleanOtp
       });
 
-      // Check if another device is currently active (Takeover Grace Period)
-      if (data.takeover_pending) {
-        setProcessModalOpen(false);
-        setTakeoverId(data.takeover_id);
-        setExistingDevice(data.existing_device || 'Active Workstation');
-        setTakeoverRemainingSeconds(data.wait_seconds || 60);
-        setStep('takeover_waiting');
-        return;
-      }
-
       // Stage 3: Initializing workspace
       setProcessStage('initializing');
       await new Promise(r => setTimeout(r, 450));
@@ -325,12 +245,6 @@ export default function LoginPage({ onSwitchToSignup, onSwitchToForgotPassword, 
       setProcessError(errMsg);
       setError(errMsg);
       setOtp('');
-      if (err.status === 403 && (errMsg.toLowerCase().includes('declined') || errMsg.toLowerCase().includes('protect') || errMsg.toLowerCase().includes('exporting'))) {
-        const match = errMsg.match(/locked for (\d+) more minute/);
-        const mins = match ? parseInt(match[1], 10) : 30;
-        setTakeoverLockoutSeconds(mins * 60);
-        setStep('credentials');
-      }
     } finally {
       setIsSubmitting(false);
     }
@@ -357,7 +271,6 @@ export default function LoginPage({ onSwitchToSignup, onSwitchToForgotPassword, 
   const handleBackToCredentials = () => {
     setStep('credentials');
     setChallengeId('');
-    setTakeoverId('');
     setOtp('');
     setPassword('');
     setError('');
@@ -387,27 +300,21 @@ export default function LoginPage({ onSwitchToSignup, onSwitchToForgotPassword, 
             ? 'bg-gradient-to-tr from-[var(--kt-accent)]/20 to-[var(--kt-accent-2)]/10 text-[var(--kt-accent)] border border-[var(--kt-accent)]/30 shadow-[0_0_15px_rgba(var(--kt-accent-rgb),0.2)]'
             : 'bg-blue-50 text-blue-700 border border-blue-200'
         }`}>
-          {step === 'takeover_waiting' ? (
-            <Monitor size={22} className="text-amber-500" />
-          ) : step === 'mfa' ? (
+          {step === 'mfa' ? (
             <ShieldCheck size={22} className={isDark ? 'text-[var(--kt-accent)]' : 'text-blue-600'} />
           ) : (
             <BrandLogo size={30} />
           )}
         </div>
         <h1 className={`text-lg sm:text-xl font-extrabold tracking-tight ${isDark ? 'text-white' : 'text-slate-900'}`}>
-          {step === 'takeover_waiting' ? (
-            <>Active <span className="text-amber-400 drop-shadow-[0_0_10px_rgba(245,158,11,0.35)]">Workstation</span></>
-          ) : step === 'mfa' ? (
+          {step === 'mfa' ? (
             <>Enter <span className={`${isDark ? 'text-[var(--kt-accent)]' : 'text-blue-600'} drop-shadow-[0_0_10px_rgba(var(--kt-accent-rgb),0.35)]`}>Code</span></>
           ) : (
             <>Lower <span className={`${isDark ? 'text-[var(--kt-accent)]' : 'text-blue-600'} drop-shadow-[0_0_10px_rgba(var(--kt-accent-rgb),0.35)]`}>Third</span></>
           )}
         </h1>
         <p className={`text-xs mt-0.5 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
-          {step === 'takeover_waiting' ? (
-            'Resolving single active session with currently logged in device'
-          ) : step === 'mfa' ? (
+          {step === 'mfa' ? (
             'Enter the temporary 6-digit code sent to your email'
           ) : (
             <>Sign in to your <strong className={isDark ? 'text-[var(--kt-accent)] font-semibold' : 'text-blue-700 font-semibold'}>workstation</strong> account</>
@@ -427,26 +334,6 @@ export default function LoginPage({ onSwitchToSignup, onSwitchToForgotPassword, 
             <div className={`font-bold ${isDark ? 'text-rose-200' : 'text-rose-950'}`}>Account Temporarily Locked</div>
             <div className={`mt-0.5 text-[11px] ${isDark ? 'text-rose-300/90' : 'text-rose-800'}`}>
               Too many failed attempts. Access is locked for: <strong className={`font-mono ${isDark ? 'text-white' : 'text-rose-950 font-bold'}`}>{formatTimer(lockoutSeconds)}</strong>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 30-Minute Workstation Takeover Lockout Banner */}
-      {takeoverLockoutSeconds > 0 && (
-        <div className={`mb-4 p-3 rounded-xl border text-xs flex items-start gap-2.5 leading-relaxed animate-in fade-in ${
-          isDark
-            ? 'bg-amber-500/15 border-amber-500/40 text-amber-200'
-            : 'bg-amber-50 border-amber-200 text-amber-900 shadow-xs'
-        }`}>
-          <ShieldAlert size={18} className={`shrink-0 mt-0.5 ${isDark ? 'text-amber-400' : 'text-amber-600'}`} />
-          <div className="flex-1">
-            <div className={`font-bold flex items-center justify-between ${isDark ? 'text-amber-100' : 'text-amber-950'}`}>
-              <span>Workstation Protected (Exporting/Active)</span>
-              <span className={`font-mono font-bold ${isDark ? 'text-amber-300' : 'text-amber-700'}`}>{formatTimer(takeoverLockoutSeconds)}</span>
-            </div>
-            <div className={`mt-1 text-[11px] leading-relaxed ${isDark ? 'text-amber-300/90' : 'text-amber-800 font-medium'}`}>
-              The active workstation declined remote login to prevent interruptions during export or editing. Remote logins are paused for 30 minutes. If the active workstation logs out, you can sign in immediately.
             </div>
           </div>
         </div>
@@ -773,41 +660,6 @@ export default function LoginPage({ onSwitchToSignup, onSwitchToForgotPassword, 
             </button>
           </div>
         </form>
-      )}
-
-      {/* STEP 3: DEVICE B TAKEOVER WAITING VIEW */}
-      {step === 'takeover_waiting' && (
-        <div className="space-y-4 animate-in fade-in">
-          <div className="p-3.5 bg-[var(--kt-s0)] border border-amber-500/30 rounded-xl text-center">
-            <span className="text-[11px] text-slate-400 block mb-1">Currently Logged In Device:</span>
-            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[var(--kt-s2)] border border-[var(--kt-s5)] text-xs font-mono text-amber-300">
-              <Monitor size={13} />
-              <span>{existingDevice}</span>
-            </div>
-          </div>
-
-          <div className="p-4 bg-[var(--kt-s0)] border border-[var(--kt-s4)] rounded-xl text-center space-y-2">
-            <div className="flex items-center justify-center gap-2 text-amber-400">
-              <Loader2 size={18} className="animate-spin" />
-              <span className="text-xs font-semibold">Waiting for Workstation Authorization</span>
-            </div>
-            <div className="text-2xl font-mono font-bold text-white">
-              00:{takeoverRemainingSeconds.toString().padStart(2, '0')}
-            </div>
-            <p className="text-[11px] text-slate-400 leading-relaxed">
-              An alert has been sent to the active device. If it does not decline within 60 seconds, your session on this device will activate automatically.
-            </p>
-          </div>
-
-          <button
-            type="button"
-            onClick={handleBackToCredentials}
-            className="w-full py-2 px-4 rounded-xl text-xs font-semibold bg-[var(--kt-s3)] hover:bg-[var(--kt-s4)] text-slate-300 hover:text-white border border-[var(--kt-s5)] transition-colors cursor-pointer flex items-center justify-center gap-1.5"
-          >
-            <ArrowLeft size={14} />
-            <span>Cancel Login Request</span>
-          </button>
-        </div>
       )}
 
       {/* Footer link (only in credentials step) */}
