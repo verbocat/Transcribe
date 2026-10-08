@@ -290,7 +290,10 @@ def detect_bad_line_breaks(text: str) -> List[Dict[str, str]]:
         
         # Rule: Don't split title/honorific + name (English & Hindi)
         all_titles = {'mr', 'mrs', 'ms', 'dr', 'prof', 'sir', 'mr.', 'mrs.', 'ms.', 'dr.', 'prof.', *HINDI_TITLES}
-        if last_word_upper in all_titles:
+        # "Yes, sir,\nI will" ends a clause on the title: nothing is split. "Dr.\nSmith" is (the dot is the abbreviation).
+        title_ends_clause = upper_words[-1].endswith((',', ';', ':', '!', '?', '…', '।', '॥')) or (
+            upper_words[-1].endswith('.') and last_word_upper not in {'mr', 'mrs', 'ms', 'dr', 'prof'})
+        if last_word_upper in all_titles and not title_ends_clause:
             violations.append({
                 "rule_id": "NF-LINE-BREAK-TITLE",
                 "message": f"Title/honorific '{upper_words[-1]}' separated from name '{lower_words[0]}' across lines.",
@@ -762,8 +765,8 @@ def lint_subtitle_event(
     
     # ── Dual Speaker Format Checks ──
     if len(lines) == 2:
-        line1_has_hyphen = lines[0].strip().startswith('-')
-        line2_has_hyphen = lines[1].strip().startswith('-')
+        line1_has_hyphen = lines[0].strip().startswith(('-', '–', '—'))
+        line2_has_hyphen = lines[1].strip().startswith(('-', '–', '—'))
         
         # If one line has hyphen but not the other, it's inconsistent
         if line1_has_hyphen != line2_has_hyphen:

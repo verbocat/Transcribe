@@ -8,6 +8,13 @@ from app.config import MAX_SEGMENT_DURATION, MIN_SEGMENT_DURATION
 
 # Allowed punctuations according to Karya Guideline 6.2
 ALLOWED_PUNCTUATION = {'.', ',', '?', '!', '-', '_', "'", '।', ' '}
+# Typographic apostrophes are the same character as ' to a reader (sanitize_karya_punctuation maps them to ')
+APOSTROPHE_VARIANTS = {'’', '‘'}
+# Any bracketed word; a wrong one is reported once, as INVALID_TAG, not again as stray brackets
+_BRACKET_TAG_RE = re.compile(r'\[[^\]]+\]')
+# Languages written in Latin script: English words are not code-mixing there
+_LATIN_LANGUAGES = {"english", "en"}
+_INDIC_LANGUAGES = {"hindi", "marathi", "sanskrit"}
 ALLOWED_TAGS = {'[unintelligible]', '[inaudible]'}
 
 # Number mapping for Hindi/Devanagari digits
@@ -63,24 +70,50 @@ def number_to_hindi_words(n: int) -> str:
     return res
 
 
+# A number as people write it: 1,000 / 12,50,000 / 3.5 / 12 / 3rd. Digit runs glued to letters (MI5, 5G, COVID-19) match too.
+_NUMBER_RE = re.compile(r'(\d{1,3}(?:,\d{2,3})*,\d{3}(?!\d)|\d+)(?:\.(\d+))?(st|nd|rd|th)?(?![A-Za-z])|(\d+)')
+_DIGIT_TOKEN_RE = re.compile(r'[^\W\d_]*[\d०-९][\d०-९,.]*[^\W\d_]*')
+
+
+def _int_to_words(val: int, language: str) -> str:
+    if language.lower() in _INDIC_LANGUAGES:
+        return number_to_hindi_words(val)
+    return num2words(val, lang="en")
+
+
 def convert_all_digits_to_words(text: str, language: str = "Hindi") -> str:
-    """Auto-fixer to convert all digits (Arabic & Indic) to written words."""
-    # Convert Devanagari digits to standard digits first
+    """Auto-fixer to convert all digits (Arabic & Indic) to written words.
+
+    Handles thousands separators (1,000), decimals (3.5), English ordinals (3rd) and digits glued to letters
+    (MI5 -> MI five), which a plain whole-word match left untouched or turned into 'one,zero'."""
     for dev_digit, std_digit in DEVANAGARI_DIGITS.items():
         text = text.replace(dev_digit, std_digit)
-    
-    def replacer(match):
-        val_str = match.group(0)
-        try:
-            val = int(val_str)
-            if language.lower() in ["hindi", "marathi", "sanskrit"]:
-                return number_to_hindi_words(val)
-            else:
-                return num2words(val, lang="en")
-        except Exception:
-            return val_str
+    indic = language.lower() in _INDIC_LANGUAGES
 
-    return re.sub(r'\b\d+\b', replacer, text)
+    def replacer(match):
+        whole = match.group(0)
+        try:
+            if match.group(4) is not None:
+                words = _int_to_words(int(match.group(4)), language)
+            else:
+                val = int(match.group(1).replace(",", ""))
+                if match.group(2) is not None:
+                    point = "दशमलव" if indic else "point"
+                    frac = " ".join(_int_to_words(int(d), language) for d in match.group(2))
+                    words = f"{_int_to_words(val, language)} {point} {frac}"
+                elif match.group(3) and not indic:
+                    words = num2words(val, lang="en", to="ordinal")
+                else:
+                    words = _int_to_words(val, language)
+        except Exception:
+            return whole
+        # Keep a space between the words and any letter they were glued to (MI5 -> MI five, 5G -> five G)
+        start, end = match.span()
+        before = match.string[start - 1] if start > 0 else ""
+        after = match.string[end] if end < len(match.string) else ""
+        return (" " if before.isalpha() else "") + words + (" " if after.isalpha() else "")
+
+    return _NUMBER_RE.sub(replacer, text)
 
 
 def sanitize_karya_punctuation(text: str, language: str = "Hindi") -> str:
@@ -100,6 +133,9 @@ def sanitize_karya_punctuation(text: str, language: str = "Hindi") -> str:
         text = text.replace("&", " and ")
         text = text.replace("+", " plus ")
         text = text.replace("=", " equals ")
+
+    # Typographic ellipsis and dashes become their plain-ASCII forms (both are allowed characters)
+    text = text.replace('…', '...').replace('—', '--').replace('–', '--')
 
     # Replace disallowed punctuation
     text = text.replace('"', '')
@@ -180,45 +216,53 @@ def lint_segment(
         ))
 
     # Check 3: Digits Detection (Rule 6.10)
-    # Search for any digits (0-9 or Devanagari ०-९)
-    digits_found = re.findall(r'[\d०-९]', text)
-    if digits_found:
+    # Any digit (0-9 or Devanagari ०-९). Report the words that contain them (MI5, 3rd), in reading order,
+    # so the reviewer can see what was flagged.
+    digit_tokens = list(dict.fromkeys(t.rstrip(".,") for t in _DIGIT_TOKEN_RE.findall(text)))
+    if digit_tokens:
         errors.append(QCError(
             segment_id=segment.segment_id,
             field="transcript",
             error_type="DIGITS_DETECTED",
-            message="Numbers must always be written in words. Digits are strictly prohibited (Rule 6.10).",
-            snippet="".join(set(digits_found)),
+            message=f"Numbers must always be written in words. Digits are strictly prohibited (Rule 6.10). Found: {', '.join(digit_tokens[:5])}.",
+            snippet=", ".join(digit_tokens),
             suggested_fix=convert_all_digits_to_words(text, language),
             severity="error"
         ))
 
     # Check 4: Disallowed Punctuation & Symbols (Rule 6.2 & 6.10)
-    # Temporarily remove allowed tags to check raw text
-    clean_text = text.replace("[unintelligible]", "").replace("[inaudible]", "")
+    # Allowed tags are fine; any other [bracketed word] is reported once, as INVALID_TAG (Check 6)
+    clean_text = _BRACKET_TAG_RE.sub("", text)
     invalid_puncts = set()
     for char in clean_text:
-        # Check if char is punctuation or symbol
+        if char in APOSTROPHE_VARIANTS:
+            continue
         cat = unicodedata.category(char)
         if cat.startswith('P') or cat.startswith('S'):
             if char not in ALLOWED_PUNCTUATION:
                 invalid_puncts.add(char)
-    
+
     if invalid_puncts:
+        shown = " ".join(sorted(invalid_puncts))
         errors.append(QCError(
             segment_id=segment.segment_id,
             field="transcript",
             error_type="DISALLOWED_PUNCTUATION",
-            message=f"Disallowed punctuation/symbols found: {' '.join(invalid_puncts)}. Only . , ? ! - _ ' । are allowed (Rule 6.2).",
-            snippet=" ".join(invalid_puncts),
+            message=f"Disallowed punctuation/symbols found: {shown}. Only . , ? ! - _ ' । are allowed (Rule 6.2).",
+            snippet=shown,
             suggested_fix=sanitize_karya_punctuation(text, language),
             severity="error"
         ))
 
     # Check 5: Code-Mixing / Foreign Script (Rule 6.4)
-    # If target is Devanagari (Hindi), check for Latin letters
-    if script.lower() == "devanagari" or language.lower() in ["hindi", "marathi", "sanskrit"]:
-        # Find Latin letters (a-z, A-Z) that are not part of allowed tags [unintelligible], [inaudible]
+    # Only when the transcript is meant to be in Devanagari. The script decides; the language is the fallback when
+    # the script is unknown. English (and any other Latin-script language) is never code-mixed.
+    script_l, language_l = (script or "").strip().lower(), (language or "").strip().lower()
+    if script_l in ("", "auto", "auto-detect"):
+        needs_target_script = language_l in _INDIC_LANGUAGES
+    else:
+        needs_target_script = script_l == "devanagari" and language_l not in _LATIN_LANGUAGES
+    if needs_target_script:
         no_tags = text.replace("[unintelligible]", "").replace("[inaudible]", "")
         latin_words = re.findall(r'\b[a-zA-Z]+\b', no_tags)
         if latin_words:
