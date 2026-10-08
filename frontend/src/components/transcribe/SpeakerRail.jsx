@@ -85,12 +85,12 @@ function SpeakerCard({ speaker, isFiltered, onFilter, onRename, onSetGender, cas
   );
 }
 
-export default function SpeakerRail({ roster, filterSpeaker, onFilter, onRename, onSetGender, onOpenBulk, onOpenPanel, video, cast, onOpenCast, onAssign }) {
+export default function SpeakerRail({ roster, filterSpeaker, onFilter, onRename, onSetGender, onOpenPanel, video, cast, onOpenCast, onAssign }) {
   return (
     <aside
       aria-label="Speakers"
-      className="flex flex-col shrink-0"
-      style={{ width: 296, background: 'var(--ts-panel)', borderRight: '1px solid var(--ts-line)' }}
+      className="flex flex-col flex-1 min-h-0 min-w-0"
+      style={{ background: 'var(--ts-panel)', borderRight: '1px solid var(--ts-line)' }}
     >
       {video && <div className="p-3 pb-0 shrink-0">{video}</div>}
       <div className="flex items-center justify-between px-4" style={{ height: 48, borderBottom: '1px solid var(--ts-line)' }}>
