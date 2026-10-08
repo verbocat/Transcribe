@@ -51,6 +51,28 @@ def _numbers(text: str) -> List[str]:
     return [n.replace(",", "") for n in _NUM.findall(_plain(text).translate(_DEVANAGARI_DIGITS))]
 
 
+def _norm_words(text: str) -> str:
+    """Lower-case, no spaces or hyphens, chandrabindu folded into anusvara: for finding a number written in words."""
+    return re.sub(r"[\s\-]+", "", (text or "").lower().replace("ँ", "ं"))
+
+
+def _number_written_in(number: str, target: str, lang: str) -> bool:
+    """True when the whole number `number` appears in `target` spelled out (Rule 6.10 wants words, not digits)."""
+    try:
+        val = int(number)
+    except ValueError:
+        return False
+    from app.linter_engine import number_to_hindi_words
+    haystack = _norm_words(target)
+    candidates = {number_to_hindi_words(val)} if lang[:2] in ("hi", "mr") else set()
+    try:
+        from num2words import num2words
+        candidates.add(num2words(val, lang=lang[:2]))
+    except Exception:
+        pass
+    return any(_norm_words(c) in haystack for c in candidates if c)
+
+
 def _issue(cue: Dict[str, Any], index: int, category: str, severity: str, title: str, description: str,
            suggestion: Optional[str] = None, suggestion_end: Optional[float] = None) -> Dict[str, Any]:
     target = cue.get("target") or ""
@@ -207,6 +229,9 @@ def run_local_qc(
 
         # ---- Punctuation -------------------------------------------------------------------------------
         cleaned = _clean_punctuation(target, lang)
+        if not card_rules:
+            # A transcript segment keeps three plain dots: the transcription rules (6.2) do not allow the … character
+            cleaned = cleaned.replace("…", "...")
         if cleaned != target.strip():
             issues.append(_issue(cue, n, "punctuation", "warning", "Punctuation spacing",
                                  "Extra spaces, repeated punctuation or a space before a mark.", cleaned))
@@ -221,16 +246,25 @@ def run_local_qc(
             issues.append(_issue(cue, n, "punctuation", "warning", "Exclamation mark missing",
                                  "The source is an exclamation but the translation does not end with one.",
                                  re.sub(r"[.।]+$", "", target.rstrip()) + "!"))
-        if flat.count('"') % 2 == 1 or flat.count("“") != flat.count("”"):
+        # A transcript segment is a sentence or a speaker turn, so a quotation often runs on into the next one
+        if card_rules and (flat.count('"') % 2 == 1 or flat.count("“") != flat.count("”")):
             issues.append(_issue(cue, n, "punctuation", "warning", "Unbalanced quotation marks",
                                  "A quotation mark is opened or closed without its pair in this subtitle.", None))
 
         # ---- Numbers ---------------------------------------------------------------------------------
         if source and not same_lang:
-            miss = [x for x in dict.fromkeys(_numbers(source)) if x not in _numbers(target)]
+            tgt_nums = _numbers(target)
+            miss = [x for x in dict.fromkeys(_numbers(source)) if x not in tgt_nums]
+            # Numbers written in words (the transcription rules require it) are not missing
+            written = [x for x in miss if "." not in x and _number_written_in(x, target, lang)]
+            miss = [x for x in miss if x not in written]
             if miss:
-                issues.append(_issue(cue, n, "number", "error", "Number differs from source",
-                                     f"The source contains {', '.join(miss)} but the translation does not.", None))
+                # No digits in the translation at all means the number may be spelled out in a form we cannot match
+                spelled = not tgt_nums
+                issues.append(_issue(cue, n, "number", "warning" if spelled else "error",
+                                     "Check the number" if spelled else "Number differs from source",
+                                     (f"The source contains {', '.join(miss)}; the translation has no digits, so make sure it is written out in words."
+                                      if spelled else f"The source contains {', '.join(miss)} but the translation does not."), None))
 
         # ---- Speaker labels / dual speaker -----------------------------------------------------------
         src_lines = [l for l in _plain(source).split("\n") if l.strip()]

@@ -30,9 +30,17 @@ function AutoText({ value, onChange }) {
   const ref = useRef(null);
   useEffect(() => {
     const el = ref.current;
-    if (!el) return;
-    el.style.height = 'auto';
-    el.style.height = `${el.scrollHeight}px`;
+    if (!el) return undefined;
+    const fit = () => { el.style.height = 'auto'; el.style.height = `${el.scrollHeight}px`; };
+    fit();
+    // The box also changes width (QC drawer opens, window resizes): re-wrap, or the last line is cut off
+    if (typeof ResizeObserver === 'undefined') return undefined;
+    let lastWidth = el.clientWidth;
+    const ro = new ResizeObserver(() => {
+      if (el.clientWidth !== lastWidth) { lastWidth = el.clientWidth; fit(); }
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
   }, [value]);
   return (
     <textarea
