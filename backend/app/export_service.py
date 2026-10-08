@@ -13,44 +13,44 @@ from app.models import TranscriptionResult, Segment, AudioAnalysis
 from app.config import EXPORTS_DIR
 
 
+_TABLE_HEADERS = [
+    "Segment ID",
+    "Speaker",
+    "Gender",
+    "Start Time",
+    "End Time",
+    "Duration",
+    "Transcript (Full Verbatim)",
+]
+
+
+def _segment_row(seg: Segment) -> list:
+    return [
+        seg.segment_id,
+        seg.speaker,
+        seg.gender,
+        _hms_ms(seg.start_time),
+        _hms_ms(seg.end_time),
+        _hms_ms(seg.end_time - seg.start_time),
+        seg.transcript,
+    ]
+
+
+def _hms_ms(seconds: float) -> str:
+    """Seconds -> HH:MM:SS.mmm (e.g. 00:00:12.420)."""
+    total_ms = max(0, int(round(float(seconds or 0.0) * 1000)))
+    secs, ms = divmod(total_ms, 1000)
+    return f"{secs // 3600:02d}:{(secs % 3600) // 60:02d}:{secs % 60:02d}.{ms:03d}"
+
+
 def export_to_csv(result: TranscriptionResult, delimiter: str = ",") -> str:
     """Generate CSV or TSV string representation."""
     output = io.StringIO()
     writer = csv.writer(output, delimiter=delimiter)
     
-    # Headers
-    headers = [
-        "Audio Filename",
-        "Segment ID",
-        "Speaker",
-        "Gender",
-        "Start Time (s)",
-        "End Time (s)",
-        "Start Time (Formatted)",
-        "End Time (Formatted)",
-        "Duration (s)",
-        "Transcript (Full Verbatim)",
-        "QC Valid",
-        "QC Errors"
-    ]
-    writer.writerow(headers)
-
+    writer.writerow(_TABLE_HEADERS)
     for seg in result.segments:
-        qc_err_msgs = "; ".join([e.message for e in seg.qc_errors]) if seg.qc_errors else "None"
-        writer.writerow([
-            result.filename,
-            seg.segment_id,
-            seg.speaker,
-            seg.gender,
-            f"{seg.start_time:.3f}",
-            f"{seg.end_time:.3f}",
-            seg.start_time_str,
-            seg.end_time_str,
-            f"{seg.duration:.3f}",
-            seg.transcript,
-            "PASS" if seg.is_valid else "FAIL",
-            qc_err_msgs
-        ])
+        writer.writerow(_segment_row(seg))
 
     return output.getvalue()
 
@@ -67,7 +67,7 @@ def export_to_txt(result: TranscriptionResult) -> str:
     lines.append(f"================================================================================")
     lines.append(f"KARYA TRANSCRIPTION DELIVERABLE: {result.filename}")
     lines.append(f"Language: {result.language} | Script: {result.script}")
-    lines.append(f"Duration: {dur}s | Compliance Score: {result.compliance_score}%")
+    lines.append(f"Duration: {_hms_ms(dur)} | Compliance Score: {result.compliance_score}%")
     lines.append(f"================================================================================\n")
 
     for seg in result.segments:
@@ -135,54 +135,95 @@ def export_to_json(result: TranscriptionResult) -> str:
 
 
 def export_to_docx(result: TranscriptionResult, output_path: str) -> str:
-    """Generate Word (.docx) audit deliverable."""
+    """Generate Word (.docx) transcript deliverable."""
+    from docx.enum.section import WD_ORIENT
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+
+    FONT = "Calibri"
+    INDIC_FONT = "Nirmala UI"  # complex-script font so Devanagari etc. render properly in Word
+
+    def style_run(run, size, bold=False):
+        run.font.name = FONT
+        run.font.size = Pt(size)
+        run.font.bold = bold
+        rpr = run._element.get_or_add_rPr()
+        fonts = rpr.find(qn("w:rFonts"))
+        if fonts is None:
+            fonts = OxmlElement("w:rFonts")
+            rpr.append(fonts)
+        for attr in ("w:ascii", "w:hAnsi"):
+            fonts.set(qn(attr), FONT)
+        fonts.set(qn("w:cs"), INDIC_FONT)
+
+    def set_cell(cell, text, size, bold=False, align=None):
+        cell.text = ""
+        p = cell.paragraphs[0]
+        p.paragraph_format.space_after = Pt(0)
+        if align is not None:
+            p.alignment = align
+        style_run(p.add_run(str(text)), size, bold)
+
+    def shade(cell, hex_fill):
+        tc_pr = cell._element.get_or_add_tcPr()
+        shd = OxmlElement("w:shd")
+        shd.set(qn("w:val"), "clear")
+        shd.set(qn("w:color"), "auto")
+        shd.set(qn("w:fill"), hex_fill)
+        tc_pr.append(shd)
+
     doc = Document()
-    
-    # Title
-    title = doc.add_heading(f"Karya Transcription Deliverable", level=0)
+    section = doc.sections[0]
+    section.orientation = WD_ORIENT.LANDSCAPE
+    section.page_width, section.page_height = section.page_height, section.page_width
+    for side in ("left_margin", "right_margin", "top_margin", "bottom_margin"):
+        setattr(section, side, Inches(0.7))
+
+    title = doc.add_paragraph()
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    style_run(title.add_run("Karya Transcription Deliverable"), 20, bold=True)
 
-    # Metadata Paragraph
     dur = result.audio_info.duration if result.audio_info else (result.segments[-1].end_time if result.segments else 0.0)
-    meta = doc.add_paragraph()
-    meta.add_run(f"Audio File: ").bold = True
-    meta.add_run(f"{result.filename}\n")
-    meta.add_run(f"Target Language & Script: ").bold = True
-    meta.add_run(f"{result.language} ({result.script})\n")
-    meta.add_run(f"Duration: ").bold = True
-    meta.add_run(f"{dur}s | ")
-    meta.add_run(f"Compliance Score: ").bold = True
-    meta.add_run(f"{result.compliance_score}%\n")
-    meta.add_run(f"Total Segments: ").bold = True
-    meta.add_run(f"{len(result.segments)} | Total Errors: {result.total_errors}\n")
+    meta_lines = [
+        ("Audio File: ", result.filename),
+        ("Language & Script: ", f"{result.language} ({result.script})"),
+        ("Duration: ", _hms_ms(dur)),
+        ("Total Segments: ", str(len(result.segments))),
+    ]
+    for label, value in meta_lines:
+        p = doc.add_paragraph()
+        p.paragraph_format.space_after = Pt(2)
+        style_run(p.add_run(label), 10.5, bold=True)
+        style_run(p.add_run(value), 10.5)
+    doc.add_paragraph().paragraph_format.space_after = Pt(2)
 
-    # Table
-    table = doc.add_table(rows=1, cols=6)
+    widths = [Inches(0.8), Inches(1.0), Inches(0.8), Inches(1.15), Inches(1.15), Inches(1.15), Inches(3.55)]
+    table = doc.add_table(rows=1, cols=len(_TABLE_HEADERS))
+    table.style = "Table Grid"
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
     table.autofit = False
 
-    hdr_cells = table.rows[0].cells
-    hdr_titles = ["#", "Start", "End", "Speaker", "Gender", "Verbatim Transcript"]
-    for i, t in enumerate(hdr_titles):
-        hdr_cells[i].text = t
-        for p in hdr_cells[i].paragraphs:
-            for run in p.runs:
-                run.font.bold = True
-                run.font.size = Pt(9.5)
+    for i, title_text in enumerate(_TABLE_HEADERS):
+        cell = table.rows[0].cells[i]
+        set_cell(cell, title_text.replace(" (Full Verbatim)", ""), 10, bold=True, align=WD_ALIGN_PARAGRAPH.CENTER)
+        shade(cell, "D9E2F3")
+    # repeat the header row on every page
+    tr_pr = table.rows[0]._tr.get_or_add_trPr()
+    tbl_header = OxmlElement("w:tblHeader")
+    tbl_header.set(qn("w:val"), "true")
+    tr_pr.append(tbl_header)
 
     for seg in result.segments:
-        row_cells = table.add_row().cells
-        row_cells[0].text = str(seg.segment_id)
-        row_cells[1].text = seg.start_time_str
-        row_cells[2].text = seg.end_time_str
-        row_cells[3].text = seg.speaker
-        row_cells[4].text = seg.gender
-        row_cells[5].text = seg.transcript
-        
-        for cell in row_cells:
-            for p in cell.paragraphs:
-                for run in p.runs:
-                    run.font.size = Pt(9.0)
+        cells = table.add_row().cells
+        for i, value in enumerate(_segment_row(seg)):
+            last = i == len(_TABLE_HEADERS) - 1
+            set_cell(cells[i], value, 10, align=None if last else WD_ALIGN_PARAGRAPH.CENTER)
+
+    for col, width in zip(table.columns, widths):
+        col.width = width
+    for row in table.rows:
+        for cell, width in zip(row.cells, widths):
+            cell.width = width
 
     doc.save(output_path)
     return output_path
@@ -190,25 +231,12 @@ def export_to_docx(result: TranscriptionResult, output_path: str) -> str:
 
 def export_to_xlsx(result: TranscriptionResult, output_path: str) -> str:
     """Generate formatted Excel (.xlsx) deliverable with summary and data sheets."""
+    from openpyxl.styles import Alignment, Font, PatternFill
+
+    dur = result.audio_info.duration if result.audio_info else (result.segments[-1].end_time if result.segments else 0.0)
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
         # Sheet 1: Data
-        rows = []
-        for seg in result.segments:
-            rows.append({
-                "Filename": result.filename,
-                "Segment ID": seg.segment_id,
-                "Speaker": seg.speaker,
-                "Gender": seg.gender,
-                "Start Time (s)": seg.start_time,
-                "End Time (s)": seg.end_time,
-                "Start Time (Formatted)": seg.start_time_str,
-                "End Time (Formatted)": seg.end_time_str,
-                "Duration (s)": seg.duration,
-                "Transcript (Full Verbatim)": seg.transcript,
-                "QC Status": "PASS" if seg.is_valid else "FAIL",
-                "QC Errors": "; ".join([e.message for e in seg.qc_errors]) if seg.qc_errors else ""
-            })
-        df_data = pd.DataFrame(rows)
+        df_data = pd.DataFrame([_segment_row(seg) for seg in result.segments], columns=_TABLE_HEADERS)
         df_data.to_excel(writer, sheet_name="Transcription", index=False)
 
         # Sheet 2: Summary
@@ -216,11 +244,7 @@ def export_to_xlsx(result: TranscriptionResult, output_path: str) -> str:
             {"Metric": "Audio Filename", "Value": result.filename},
             {"Metric": "Language", "Value": result.language},
             {"Metric": "Script", "Value": result.script},
-            {"Metric": "Duration (seconds)", "Value": result.audio_info.duration},
-            {"Metric": "Sample Rate (Hz)", "Value": result.audio_info.sample_rate},
-            {"Metric": "Channels", "Value": result.audio_info.channels},
-            {"Metric": "Average RMS (dBFS)", "Value": result.audio_info.rms_db},
-            {"Metric": "Estimated SNR (dB)", "Value": result.audio_info.snr_db},
+            {"Metric": "Duration", "Value": _hms_ms(dur)},
             {"Metric": "Total Segments", "Value": len(result.segments)},
             {"Metric": "Compliance Score (%)", "Value": result.compliance_score},
             {"Metric": "Total QC Errors", "Value": result.total_errors},
@@ -229,6 +253,25 @@ def export_to_xlsx(result: TranscriptionResult, output_path: str) -> str:
             {"Metric": "Rejection Reason", "Value": result.rejection_reason or "N/A"},
         ])
         df_summary.to_excel(writer, sheet_name="Audit Summary", index=False)
+
+        # Formatting: bold shaded header, column widths, wrapped transcript, frozen header row
+        header_fill = PatternFill("solid", fgColor="D9E2F3")
+        ws = writer.sheets["Transcription"]
+        for col, width in zip("ABCDEFG", [11, 14, 10, 14, 14, 14, 90]):
+            ws.column_dimensions[col].width = width
+        for cell in ws[1]:
+            cell.font, cell.fill = Font(bold=True), header_fill
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+        for row in ws.iter_rows(min_row=2):
+            for cell in row:
+                cell.alignment = Alignment(vertical="top", wrap_text=cell.column == 7,
+                                           horizontal=None if cell.column == 7 else "center")
+        ws.freeze_panes = "A2"
+        ws2 = writer.sheets["Audit Summary"]
+        ws2.column_dimensions["A"].width = 24
+        ws2.column_dimensions["B"].width = 40
+        for cell in ws2[1]:
+            cell.font, cell.fill = Font(bold=True), header_fill
 
     return output_path
 
@@ -448,8 +491,9 @@ def export_to_dubbing_script(
         c.fill, c.font, c.border, c.alignment = header_fill, header_font, border, center
 
     characters: Dict[str, Dict[str, int]] = {}
-    prev_char = None
-    row = 3
+    # Consecutive lines by the same speaker collapse into one row; a new row starts only
+    # when the speaker changes. Time In = first line's start, Time Out = last line's end.
+    groups: List[Dict[str, Any]] = []
     for seg in sorted(result.segments, key=lambda s: s.start_time):
         text = (seg.transcript or "").strip()
         if not text:
@@ -458,16 +502,19 @@ def export_to_dubbing_script(
         if name:
             characters.setdefault(name, {})
             characters[name][seg.gender or "Unknown"] = characters[name].get(seg.gender or "Unknown", 0) + 1
-        # Character is written only when the speaker changes from the previous line.
-        show_char = name if name and name != prev_char else None
-        prev_char = name or prev_char
+        if groups and groups[-1]["name"] == name:
+            groups[-1]["end"] = max(groups[-1]["end"], seg.end_time)
+            groups[-1]["lines"].append(text)
+        else:
+            groups.append({"name": name, "start": seg.start_time, "end": seg.end_time, "lines": [text]})
 
-        values = [row - 2, _dubbing_timecode(seg.start_time), _dubbing_timecode(seg.end_time), text, show_char]
+    for i, g in enumerate(groups, start=1):
+        row = i + 2
+        values = [i, _dubbing_timecode(g["start"]), _dubbing_timecode(g["end"]), "\n".join(g["lines"]), g["name"] or None]
         for col, val in enumerate(values, start=2):
             c = ws.cell(row=row, column=col, value=val)
             c.border = border
             c.alignment = wrap if col == 5 else center
-        row += 1
 
     for col, width in {"A": 3, "B": 7, "C": 13, "D": 13, "E": 76, "F": 18}.items():
         ws.column_dimensions[col].width = width
