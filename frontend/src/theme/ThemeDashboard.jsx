@@ -207,7 +207,7 @@ export default function ThemeDashboard({ onClose, embedded = false }) {
     const blob = new Blob([exportThemeJson()], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; a.download = `karya-theme-${(theme.name || 'custom').toLowerCase().replace(/\s+/g, '-')}.json`;
+    a.href = url; a.download = `lowerthird-theme-${(theme.name || 'custom').toLowerCase().replace(/\s+/g, '-')}.json`;
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 500);
   };

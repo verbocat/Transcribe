@@ -2,24 +2,24 @@
 
 @layer base {
   :root {
-    /* ===== Karya theme tokens: every colour, font and shape the Appearance dashboard can change ===== */
-    --kt-s0: #0b0d12;      /* app background */
-    --kt-s1: #10131a;      /* panels */
-    --kt-s2: #171b25;      /* cards, raised surfaces */
-    --kt-s3: #1e2330;      /* hover */
-    --kt-s4: #252b3a;      /* borders */
-    --kt-s5: #323a4f;      /* strong borders */
-    --kt-text: #e8ebf2;
-    --kt-muted: #a3abbc;
-    --kt-faint: #7d8699;
-    --kt-accent: #4d8dff;
-    --kt-accent-rgb: 77, 141, 255;
-    --kt-accent-strong: #3f7bf0;
-    --kt-accent-soft: #74a5ff;
-    --kt-accent-2: #7a70ff;
-    --kt-info: #8ab4ff;
+    /* ===== Lower Third theme tokens: every colour, font and shape the Appearance dashboard can change ===== */
+    --kt-s0: #060919;      /* app background */
+    --kt-s1: #0a0e24;      /* panels */
+    --kt-s2: #10162f;      /* cards, raised surfaces */
+    --kt-s3: #171e3d;      /* hover */
+    --kt-s4: #1d2547;      /* borders */
+    --kt-s5: #2b3563;      /* strong borders */
+    --kt-text: #eceffb;
+    --kt-muted: #a5adc9;
+    --kt-faint: #7a84a6;
+    --kt-accent: #5b6cff;
+    --kt-accent-rgb: 91, 108, 255;
+    --kt-accent-strong: #4a5bf0;
+    --kt-accent-soft: #8793ff;
+    --kt-accent-2: #8a3ffc;
+    --kt-info: #9aa5ff;
     --kt-accent-ink: #06122f;
-    --kt-selected: #132039;
+    --kt-selected: #121a3d;
     --kt-success: #10b981;
     --kt-warn: #f5b84a;
     --kt-danger: #ff6b81;

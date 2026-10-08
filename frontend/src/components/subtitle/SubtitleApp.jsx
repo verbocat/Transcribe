@@ -32,6 +32,7 @@ import LanguageTracks from './LanguageTracks';
 import { langName } from './languages';
 import { ShiftTimingsDialog, GoToDialog, FindReplaceDialog } from './ToolDialogs';
 import { Button, IconButton, Kbd, Segmented } from './ui/controls';
+import BrandLogo from '../BrandLogo';
 import { useStudioPrefs, formatTimecode, loadPrefs } from './prefs';
 import { SETTINGS_GROUPS } from './SubtitleSettingsModal';
 import * as tools from './subtitleTools';
@@ -44,6 +45,7 @@ import NotificationBellDropdown from '../NotificationBellDropdown';
 import { useTheme } from '../../context/ThemeContext';
 import { extractAudioFromMedia, computeWaveformPeaks } from '../../utils/audioExtractor';
 import { xhrPostForm, createRateMeter } from '../../utils/xhrUpload';
+import { takeLaunchIntent } from '../../utils/launchIntent';
 import MediaProgress, { GenerateProgress, TaskStrip } from './MediaProgress';
 import { startJob, jobHeaders, isCancelError, CancelledError, sleepCancellable, useTaskRunner } from '../../utils/cancellable';
 import ContextPanel, { loadContext, saveContext, contextForRequest } from './ContextPanel';
@@ -1562,6 +1564,13 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
     }
   };
 
+  // A file dropped on the Home screen opens here straight away
+  useEffect(() => {
+    const intent = takeLaunchIntent('subtitle');
+    if (intent?.file) handleFileChange({ target: { files: [intent.file] } });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Media File (Video or Audio) Upload Handler
   const handleFileChange = (e) => {
     resetTracks();
@@ -3007,10 +3016,8 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
         <div className="flex items-center gap-1.5 min-w-0">
           <IconButton icon={ArrowLeft} label="Back to hub" onClick={onBackToHome} />
           <div className="flex items-center gap-2 pl-1 pr-2">
-            <span className="w-6 h-6 rounded-lg bg-[var(--ss-accent)] flex items-center justify-center text-[var(--ss-accent-ink)] shrink-0">
-              <Play size={12} fill="currentColor" className="ml-0.5" />
-            </span>
-            <span className="text-[13px] font-semibold tracking-tight text-[var(--ss-text)] whitespace-nowrap hidden sm:inline">Subtitle Studio</span>
+            <BrandLogo size={24} />
+            <span className="text-[13px] font-semibold tracking-tight text-[var(--ss-text)] whitespace-nowrap hidden sm:inline">Lower Third <span className="font-medium text-[var(--ss-muted,var(--kt-muted))]">Subtitle</span></span>
             <span className="h-[18px] px-1.5 rounded-full hidden md:inline-flex items-center text-[10px] font-bold text-[var(--ss-accent)] border border-[var(--ss-accent)]/40 bg-[var(--ss-accent)]/10">PRO</span>
           </div>
           <span className="h-5 w-px bg-[var(--ss-line)] mx-0.5" aria-hidden="true" />

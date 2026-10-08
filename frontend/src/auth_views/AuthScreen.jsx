@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { ArrowLeft, X, Server, Settings, Check, RotateCw, AlertCircle, CheckCircle2, Wifi, WifiOff, Sparkles } from 'lucide-react';
+import { ArrowLeft, X, Server, Settings, Check, RotateCw, AlertCircle, CheckCircle2, Wifi, WifiOff } from 'lucide-react';
 import LoginPage from './LoginPage';
+import BrandLogo from '../components/BrandLogo';
 import SignupPage from './SignupPage';
 import VerifyEmailPage from './VerifyEmailPage';
 import ForgotPasswordPage from './ForgotPasswordPage';
@@ -173,13 +174,7 @@ export default function AuthScreen({ onBackToHome, initialView = 'login' }) {
       <header className="relative z-30 w-full max-w-5xl mx-auto px-4 sm:px-6 py-2.5 sm:py-3.5 flex items-center justify-between shrink-0">
         {/* Left: Brand */}
         <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-[var(--kt-accent)] to-blue-600 flex items-center justify-center text-black font-black shadow-[0_0_15px_rgba(var(--kt-accent-rgb),0.3)]">
-            <Sparkles size={16} />
-          </div>
-          <div>
-            <div className={`text-xs font-mono font-extrabold tracking-wider uppercase ${isDark ? 'text-white' : 'text-slate-900'}`}>Karya Studio</div>
-            <div className={`text-[10px] ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>Verbatim Speech & Subtitle Intelligence</div>
-          </div>
+          <BrandLogo variant="wordmark" size={34} />
         </div>
 
         {/* Right: Actions */}
@@ -323,7 +318,7 @@ export default function AuthScreen({ onBackToHome, initialView = 'login' }) {
 
       {/* Footer Branding */}
       <footer className="relative z-30 w-full text-center py-3 text-[11px] font-mono text-slate-500 shrink-0">
-        Karya Subtitle Studio &copy; {new Date().getFullYear()} &middot; Verbatim Audio Intelligence
+        Lower Third &copy; {new Date().getFullYear()} &middot; Verbatim Audio Intelligence
       </footer>
 
 

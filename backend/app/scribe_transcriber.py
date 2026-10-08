@@ -470,7 +470,7 @@ async def process_audio_file(
     log_terminal("ELEVENLABS-STT", f"[OK] Speakers: {', '.join(f'{n} ({g})' for n, g in roster)}")
     log_terminal("ELEVENLABS-STT", f"[OK] Built {len(segments)} Karya segments from {sum(1 for t in tokens if t['type'] == 'word')} words | Language: {resolved_language} | Script: {resolved_script}")
 
-    report("linting", 0.0, "Checking Karya rules")
+    report("linting", 0.0, "Checking transcription rules")
     linted_segments, score, errors_count, warnings_count = await asyncio.to_thread(
         lint_dataset, segments, language=resolved_language, script=resolved_script
     )

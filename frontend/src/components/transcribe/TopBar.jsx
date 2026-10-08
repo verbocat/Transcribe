@@ -3,13 +3,14 @@ import {
   ArrowLeft, Sparkles, Upload, Undo2, Redo2, Download, Save, MoreHorizontal, Loader2, Check,
   FolderOpen, BarChart2, GitCompare, StickyNote, BookOpen, FileUp, Clapperboard, Languages, Palette, ShieldCheck, Square
 } from 'lucide-react';
+import BrandLogo from '../BrandLogo';
 import NotificationBellDropdown from '../NotificationBellDropdown';
 import AccountMenuDropdown from '../AccountMenuDropdown';
 import { openAppearance } from '../../theme/themeEngine';
 
 const FORMATS = [
   { id: 'xlsx', label: 'Excel', ext: '.xlsx', note: 'Data and audit summary' },
-  { id: 'csv', label: 'CSV', ext: '.csv', note: 'Karya deliverable columns' },
+  { id: 'csv', label: 'CSV', ext: '.csv', note: 'Lower Third deliverable columns' },
   { id: 'docx', label: 'Word', ext: '.docx', note: 'Readable transcript table' },
   { id: 'srt', label: 'SubRip', ext: '.srt', note: 'Subtitle file with speaker tags' },
   { id: 'vtt', label: 'WebVTT', ext: '.vtt', note: 'Web subtitle file' },
@@ -133,11 +134,9 @@ export default function TopBar(p) {
       </button>
 
       <div className="flex items-center gap-2.5 min-w-0">
-        <div style={{ width: 28, height: 28, borderRadius: 8, background: 'var(--ts-accent)', color: 'var(--ts-accent-ink)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <Sparkles size={15} fill="currentColor" />
-        </div>
+        <BrandLogo size={28} />
         <div className="min-w-0">
-          <div style={{ fontWeight: 600, lineHeight: 1.1 }}>Transcribe</div>
+          <div style={{ fontWeight: 600, lineHeight: 1.1 }}>Lower Third <span style={{ color: 'var(--ts-faint)', fontWeight: 500 }}>Transcribe</span></div>
           <div className="truncate" style={{ color: 'var(--ts-faint)', fontSize: 12, maxWidth: 220 }}>
             {p.filename || 'No media loaded'}
           </div>

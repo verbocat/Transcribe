@@ -65,7 +65,7 @@ export default function DeviceTakeoverAlertModal({
             Session Takeover Request
           </h3>
           <p className="text-xs text-slate-400 mt-1 max-w-xs">
-            Another device is attempting to log into your Karya Studio account.
+            Another device is attempting to log into your Lower Third account.
           </p>
         </div>
 
