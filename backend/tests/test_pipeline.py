@@ -145,7 +145,9 @@ def test_export_all_formats():
 
     # 1. CSV
     csv_out = export_to_csv(res)
-    assert "sample_conversation.wav" in csv_out
+    assert "sample_conversation.wav" not in csv_out  # filename column dropped
+    assert "00:00:03.000" in csv_out  # duration as HH:MM:SS.mmm
+    assert "QC" not in csv_out
     assert "वह काम बहुत जल्द कर दिया।" in csv_out
 
     # 2. TSV
