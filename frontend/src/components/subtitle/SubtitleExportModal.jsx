@@ -3,6 +3,8 @@ import { X, Download, FileText, FileCode, File, Globe, Check, AlertTriangle } fr
 import { API_BASE } from '../../config';
 import { startJob, jobHeaders, isCancelError } from '../../utils/cancellable';
 
+import { langName } from './languages';
+import { exportLanguageOptions, isValidExportLanguage, eventsForExport, exportLanguageSuffix } from '../../utils/exportLanguage';
 import { exportSrtLocally, exportVttLocally, exportTtmlLocally, exportTxtLocally, downloadLocally } from '../../utils/localExporter';
 
 const EXPORT_FORMATS = [
@@ -44,12 +46,33 @@ const EXPORT_FORMATS = [
   },
 ];
 
-export default function SubtitleExportModal({ isOpen, onClose, events = [], filename = 'subtitles', complianceScore = 100 }) {
+export default function SubtitleExportModal({ isOpen, onClose, events: liveEvents = [], filename = 'subtitles', complianceScore = 100, tracks = {}, activeTrack = null, sourceTrack = null }) {
   const [selectedFormat, setSelectedFormat] = useState('srt');
   const [isExporting, setIsExporting] = useState(false);
   const exportJob = useRef(null); // the server-side export, if one is running
   const [customFilename, setCustomFilename] = useState('');
   const [isClosing, setIsClosing] = useState(false);
+  const [languageChoice, setLanguageChoice] = useState(null); // null = follow the track being edited
+
+  // Language tracks: the track on screen is `liveEvents`, the others come from `tracks`
+  const trackEventsFor = (code) => (code === activeTrack ? liveEvents : tracks[code] || null);
+  const sourceCode = sourceTrack || activeTrack;
+  const translatedCodes = useMemo(
+    () => Object.keys({ ...tracks, ...(activeTrack ? { [activeTrack]: 1 } : {}) }).filter((c) => c !== sourceCode),
+    [tracks, activeTrack, sourceCode],
+  );
+  const languageOptions = useMemo(
+    () => exportLanguageOptions(translatedCodes, sourceCode ? langName(sourceCode) : ''),
+    [translatedCodes, sourceCode],
+  );
+  const language = languageChoice && isValidExportLanguage(languageChoice, translatedCodes)
+    ? languageChoice : (activeTrack && activeTrack !== sourceCode ? `tr:${activeTrack}` : 'src');
+  const languageCode = language.includes(':') ? language.split(':')[1] : null;
+  const events = useMemo(() => {
+    const source = sourceCode ? trackEventsFor(sourceCode) || liveEvents : liveEvents;
+    return eventsForExport(language, source, languageCode ? trackEventsFor(languageCode) : null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [language, liveEvents, tracks, activeTrack, sourceCode]);
 
   React.useEffect(() => {
     if (!isOpen) {
@@ -76,7 +99,8 @@ export default function SubtitleExportModal({ isOpen, onClose, events = [], file
     }, 220);
   };
 
-  const exportFilename = customFilename.trim() || filename.replace(/\.[^/.]+$/, '') || 'subtitles';
+  const languageSuffix = exportLanguageSuffix(language);
+  const exportFilename = customFilename.trim() || `${filename.replace(/\.[^/.]+$/, '') || 'subtitles'}${languageSuffix}`;
   const selectedFormatInfo = EXPORT_FORMATS.find(f => f.key === selectedFormat);
   const isPassing = complianceScore >= 98;
 
@@ -104,7 +128,7 @@ export default function SubtitleExportModal({ isOpen, onClose, events = [], file
         content = exportVttLocally(events);
         mimeType = 'text/vtt;charset=utf-8';
       } else if (selectedFormat === 'ttml') {
-        content = exportTtmlLocally(events, 'en');
+        content = exportTtmlLocally(events, languageCode || sourceCode || 'en');
         mimeType = 'application/xml;charset=utf-8';
       } else if (selectedFormat === 'txt') {
         content = exportTxtLocally(events);
@@ -129,7 +153,7 @@ export default function SubtitleExportModal({ isOpen, onClose, events = [], file
             events: events,
             filename: exportFilename,
             format: selectedFormat,
-            language: 'en',
+            language: languageCode || sourceCode || 'en',
           }),
         });
 
@@ -206,6 +230,23 @@ export default function SubtitleExportModal({ isOpen, onClose, events = [], file
             placeholder={filename.replace(/\.[^/.]+$/, '')}
             className="w-full mt-1 px-3 py-2 rounded-none bg-[var(--ss-bg)] border border-[var(--ss-line)] text-xs text-white focus:outline-none focus:border-[var(--ss-accent)] font-mono"
           />
+        </div>
+
+        {/* Language */}
+        <div className="px-6 pt-4">
+          <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider" htmlFor="export-language">Language</label>
+          <select
+            id="export-language"
+            value={language}
+            onChange={e => setLanguageChoice(e.target.value)}
+            disabled={languageOptions.length < 2}
+            className="w-full mt-1 px-3 py-2 rounded-none bg-[var(--ss-bg)] border border-[var(--ss-line)] text-xs text-white focus:outline-none focus:border-[var(--ss-accent)] disabled:opacity-60"
+          >
+            {languageOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+          {languageOptions.length < 2 && (
+            <p className="text-[10px] text-slate-500 mt-1">Translate the subtitles to export other languages.</p>
+          )}
         </div>
 
         {/* Format Selector */}

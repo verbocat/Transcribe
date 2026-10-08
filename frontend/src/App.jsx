@@ -1047,8 +1047,10 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
     }
   };
 
-  const handleDubbingExport = async () => {
-    if (segments.length === 0) return;
+  // `opts` (from the export menu) carries the language to export: { segments, translationLanguage, suffix }
+  const handleDubbingExport = async (opts = {}) => {
+    const exportSegments = opts.segments || segments;
+    if (exportSegments.length === 0) return;
     setIsExporting(true);
     const job = startJob(API_BASE);
     exportJobRef.current = job;
@@ -1063,7 +1065,8 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
             filename,
             language: transcriptionResult?.language || targetLanguage,
             script: transcriptionResult?.script || targetScript,
-            segments
+            translation_language: opts.translationLanguage || undefined,
+            segments: exportSegments
           }
         })
       });
@@ -1075,7 +1078,7 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `${filename.replace(/\.[^/.]+$/, "")}_dubbing_script.xlsx`;
+      a.download = `${filename.replace(/\.[^/.]+$/, "")}${opts.suffix || ''}_dubbing_script.xlsx`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -1091,8 +1094,9 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
     }
   };
 
-  const handleMultiExport = async () => {
-    if (segments.length === 0) return;
+  const handleMultiExport = async (opts = {}) => {
+    const exportSegments = opts.segments || segments;
+    if (exportSegments.length === 0) return;
     setIsExporting(true);
     const job = startJob(API_BASE);
     exportJobRef.current = job;
@@ -1100,16 +1104,18 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
     try {
       const payloadResult = {
         audio_id: transcriptionResult?.audio_id || 'audio_001',
-        filename: selectedFile ? selectedFile.name : (transcriptionResult?.filename || 'audio_transcript.wav'),
+        // The language goes into the file name so exports of different languages do not overwrite each other
+        filename: (selectedFile ? selectedFile.name : (transcriptionResult?.filename || 'audio_transcript.wav')).replace(/(\.[^./\\]+)?$/, `${opts.suffix || ''}$1`),
         language: transcriptionResult?.language || targetLanguage || 'Hindi',
         script: transcriptionResult?.script || targetScript || 'Devanagari',
-        segments: segments,
+        segments: exportSegments,
+        translation_language: opts.translationLanguage || undefined,
         compliance_score: complianceScore,
         total_errors: totalErrors,
         total_warnings: totalWarnings,
         audio_info: transcriptionResult?.audio_info || {
           filename: selectedFile ? selectedFile.name : 'audio.wav',
-          duration: segments.length > 0 ? segments[segments.length - 1].end_time : 0,
+          duration: exportSegments.length > 0 ? exportSegments[exportSegments.length - 1].end_time : 0,
           sample_rate: 16000,
           channels: 1,
           rms_db: -20.0,

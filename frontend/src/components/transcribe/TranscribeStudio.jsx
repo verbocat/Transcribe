@@ -18,6 +18,7 @@ import QcDrawer from './QcDrawer';
 import CentroidModal from '../subtitle/CentroidModal';
 import { ALL_LANGS } from '../subtitle/languages';
 import { buildRoster } from './speakerUtils';
+import { exportLanguageOptions, isValidExportLanguage, segmentsForExport, parseExportLanguage } from '../../utils/exportLanguage';
 import { loadCast, saveCast, findCastMember } from './castUtils';
 
 /**
@@ -42,6 +43,7 @@ export default function TranscribeStudio(p) {
   const [centroidState, setCentroidState] = useState({ hasResults: false, qcIssues: null });
   const [tracks, setTracks] = useState({}); // language code -> translated cues
   const [activeTrack, setActiveTrack] = useState(null);
+  const [exportChoice, setExportChoice] = useState(null); // null = follow the active track
   const roster = useMemo(() => buildRoster(p.segments), [p.segments]);
   const hasSegments = p.segments.length > 0;
   const video = p.videoUrl ? <VideoPane src={p.videoUrl} bus={mediaBus} /> : null;
@@ -130,7 +132,26 @@ export default function TranscribeStudio(p) {
     ? { code: activeTrack, byId: new Map(tracks[activeTrack].map((e) => [e.id, e.text])) } : null), [activeTrack, tracks]);
 
   // A new transcript invalidates the translations of the old one
-  useEffect(() => { setTracks({}); setActiveTrack(null); }, [p.audioUrl, p.filename]);
+  useEffect(() => { setTracks({}); setActiveTrack(null); setExportChoice(null); }, [p.audioUrl, p.filename]);
+
+  // Export language: follows the track on screen until the user picks one
+  const trackCodes = Object.keys(tracks);
+  const exportLang = exportChoice && isValidExportLanguage(exportChoice, trackCodes)
+    ? exportChoice : (activeTrack && tracks[activeTrack] ? `tr:${activeTrack}` : 'src');
+  const exportLangOptions = useMemo(
+    () => exportLanguageOptions(Object.keys(tracks), p.detectedLanguage || p.language),
+    [tracks, p.detectedLanguage, p.language],
+  );
+  /** Segments and language label for an export in the chosen language */
+  const exportPayload = () => {
+    const { kind, code } = parseExportLanguage(exportLang);
+    const label = code ? (ALL_LANGS.find(([c]) => c === code) || [code, code])[1] : null;
+    return {
+      segments: segmentsForExport(exportLang, p.segments, code ? tracks[code] : null),
+      translationLanguage: kind === 'both' ? label : null,
+      suffix: kind === 'tr' ? `.${code}` : kind === 'both' ? `.${code}+orig` : '',
+    };
+  };
 
   const openTranslate = () => { setShowTranslate((v) => !v); };
   const openQc = (view) => { if (view) setQcView(view); setShowQc(true); };
@@ -197,7 +218,8 @@ export default function TranscribeStudio(p) {
         canUndo={p.canUndo} canRedo={p.canRedo} onUndo={p.onUndo} onRedo={p.onRedo}
         isSaving={p.isSaving} onSave={p.onSave}
         exportFormats={p.exportFormats} onToggleFormat={p.onToggleFormat}
-        onDownload={p.onDownload} onDubbing={p.onDubbing} isExporting={p.isExporting} onCancelExport={p.onCancelExport}
+        onDownload={() => p.onDownload(exportPayload())} onDubbing={() => p.onDubbing(exportPayload())}
+        exportLang={exportLang} exportLangOptions={exportLangOptions} onExportLang={setExportChoice} isExporting={p.isExporting} onCancelExport={p.onCancelExport}
         onOpenProjects={p.onOpenProjects} onOpenStats={p.onOpenStats} onOpenDiff={p.onOpenDiff}
         onOpenNotes={p.onOpenNotes} onOpenGuidelines={p.onOpenGuidelines}
         onImportSubtitles={p.onImportSubtitles}

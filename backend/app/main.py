@@ -1290,6 +1290,7 @@ def sanitize_transcription_result(data: dict) -> TranscriptionResult:
                 end_time_str=str(s.get("end_time_str") or f"{e_time:.3f}"),
                 duration=float(s.get("duration") or (e_time - s_time)),
                 transcript=str(s.get("transcript") or ""),
+                translation=(str(s.get("translation")) if s.get("translation") not in (None, "") else None),
                 confidence=float(s.get("confidence") or 1.0),
                 words=s.get("words") or [],
                 qc_errors=[],
@@ -1315,7 +1316,8 @@ def sanitize_transcription_result(data: dict) -> TranscriptionResult:
         segments=clean_segs,
         compliance_score=compliance_score,
         total_errors=total_errors,
-        total_warnings=total_warnings
+        total_warnings=total_warnings,
+        translation_language=(str(data.get("translation_language")) if data.get("translation_language") else None)
     )
 
 

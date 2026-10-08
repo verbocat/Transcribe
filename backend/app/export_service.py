@@ -24,8 +24,20 @@ _TABLE_HEADERS = [
 ]
 
 
-def _segment_row(seg: Segment) -> list:
-    return [
+def _has_translation(result: TranscriptionResult) -> bool:
+    return any(seg.translation for seg in result.segments)
+
+
+def _headers(result: TranscriptionResult) -> list:
+    """Table headers; a second-language column is appended when the export carries a translation."""
+    if not _has_translation(result):
+        return list(_TABLE_HEADERS)
+    label = f" ({result.translation_language})" if result.translation_language else ""
+    return _TABLE_HEADERS + [f"Translation{label}"]
+
+
+def _segment_row(seg: Segment, with_translation: bool = False) -> list:
+    row = [
         seg.segment_id,
         seg.speaker,
         seg.gender,
@@ -34,6 +46,9 @@ def _segment_row(seg: Segment) -> list:
         _hms_ms(seg.end_time - seg.start_time),
         seg.transcript,
     ]
+    if with_translation:
+        row.append(seg.translation or "")
+    return row
 
 
 def _hms_ms(seconds: float) -> str:
@@ -48,9 +63,10 @@ def export_to_csv(result: TranscriptionResult, delimiter: str = ",") -> str:
     output = io.StringIO()
     writer = csv.writer(output, delimiter=delimiter)
     
-    writer.writerow(_TABLE_HEADERS)
+    tr = _has_translation(result)
+    writer.writerow(_headers(result))
     for seg in result.segments:
-        writer.writerow(_segment_row(seg))
+        writer.writerow(_segment_row(seg, tr))
 
     return output.getvalue()
 
@@ -72,7 +88,10 @@ def export_to_txt(result: TranscriptionResult) -> str:
 
     for seg in result.segments:
         lines.append(f"[{seg.start_time_str} --> {seg.end_time_str}] {seg.speaker} ({seg.gender}):")
-        lines.append(f"   {seg.transcript}\n")
+        lines.append(f"   {seg.transcript}")
+        if seg.translation:
+            lines.append(f"   {seg.translation}")
+        lines.append("")
 
     return "\n".join(lines)
 
@@ -93,7 +112,8 @@ def export_to_srt(result: TranscriptionResult) -> str:
         # SRT standard: subtitle body should be just the transcript text.
         # Speaker label is placed as a clean prefix (compatible with most SRT players).
         speaker_prefix = f"[{seg.speaker}] " if seg.speaker else ""
-        entries.append(f"{i}\n{s_str} --> {e_str}\n{speaker_prefix}{seg.transcript}\n")
+        body = f"{speaker_prefix}{seg.transcript}" + (f"\n{seg.translation}" if seg.translation else "")
+        entries.append(f"{i}\n{s_str} --> {e_str}\n{body}\n")
 
     return "\n".join(entries)
 
@@ -115,6 +135,8 @@ def export_to_vtt(result: TranscriptionResult) -> str:
         lines.append(f"{i}")
         lines.append(f"{s_str} --> {e_str}")
         lines.append(f"{speaker_prefix}{seg.transcript}")
+        if seg.translation:
+            lines.append(seg.translation)
         lines.append("")
 
     return "\n".join(lines)
@@ -124,13 +146,16 @@ def export_to_json(result: TranscriptionResult) -> str:
     """Generate clean segment list JSON matching exact Karya user deliverable format."""
     items = []
     for seg in result.segments:
-        items.append({
+        item = {
             "start_sec": round(float(seg.start_time), 3),
             "end_sec": round(float(seg.end_time), 3),
             "transcription": seg.transcript or "",
             "speaker": seg.speaker,
             "gender_label": seg.gender
-        })
+        }
+        if seg.translation:
+            item["translation"] = seg.translation
+        items.append(item)
     return json.dumps(items, ensure_ascii=False, indent=2)
 
 
@@ -197,13 +222,17 @@ def export_to_docx(result: TranscriptionResult, output_path: str) -> str:
         style_run(p.add_run(value), 10.5)
     doc.add_paragraph().paragraph_format.space_after = Pt(2)
 
+    tr = _has_translation(result)
+    headers = _headers(result)
     widths = [Inches(0.8), Inches(1.0), Inches(0.8), Inches(1.15), Inches(1.15), Inches(1.15), Inches(3.55)]
-    table = doc.add_table(rows=1, cols=len(_TABLE_HEADERS))
+    if tr:  # split the text column between the transcript and its translation
+        widths = widths[:6] + [Inches(1.9), Inches(1.9)]
+    table = doc.add_table(rows=1, cols=len(headers))
     table.style = "Table Grid"
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
     table.autofit = False
 
-    for i, title_text in enumerate(_TABLE_HEADERS):
+    for i, title_text in enumerate(headers):
         cell = table.rows[0].cells[i]
         set_cell(cell, title_text.replace(" (Full Verbatim)", ""), 10, bold=True, align=WD_ALIGN_PARAGRAPH.CENTER)
         shade(cell, "D9E2F3")
@@ -215,8 +244,8 @@ def export_to_docx(result: TranscriptionResult, output_path: str) -> str:
 
     for seg in result.segments:
         cells = table.add_row().cells
-        for i, value in enumerate(_segment_row(seg)):
-            last = i == len(_TABLE_HEADERS) - 1
+        for i, value in enumerate(_segment_row(seg, tr)):
+            last = i >= 6
             set_cell(cells[i], value, 10, align=None if last else WD_ALIGN_PARAGRAPH.CENTER)
 
     for col, width in zip(table.columns, widths):
@@ -236,7 +265,8 @@ def export_to_xlsx(result: TranscriptionResult, output_path: str) -> str:
     dur = result.audio_info.duration if result.audio_info else (result.segments[-1].end_time if result.segments else 0.0)
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
         # Sheet 1: Data
-        df_data = pd.DataFrame([_segment_row(seg) for seg in result.segments], columns=_TABLE_HEADERS)
+        tr = _has_translation(result)
+        df_data = pd.DataFrame([_segment_row(seg, tr) for seg in result.segments], columns=_headers(result))
         df_data.to_excel(writer, sheet_name="Transcription", index=False)
 
         # Sheet 2: Summary
@@ -257,15 +287,15 @@ def export_to_xlsx(result: TranscriptionResult, output_path: str) -> str:
         # Formatting: bold shaded header, column widths, wrapped transcript, frozen header row
         header_fill = PatternFill("solid", fgColor="D9E2F3")
         ws = writer.sheets["Transcription"]
-        for col, width in zip("ABCDEFG", [11, 14, 10, 14, 14, 14, 90]):
+        for col, width in zip("ABCDEFGH", [11, 14, 10, 14, 14, 14, 90, 90] if tr else [11, 14, 10, 14, 14, 14, 90]):
             ws.column_dimensions[col].width = width
         for cell in ws[1]:
             cell.font, cell.fill = Font(bold=True), header_fill
             cell.alignment = Alignment(horizontal="center", vertical="center")
         for row in ws.iter_rows(min_row=2):
             for cell in row:
-                cell.alignment = Alignment(vertical="top", wrap_text=cell.column == 7,
-                                           horizontal=None if cell.column == 7 else "center")
+                cell.alignment = Alignment(vertical="top", wrap_text=cell.column >= 7,
+                                           horizontal=None if cell.column >= 7 else "center")
         ws.freeze_panes = "A2"
         ws2 = writer.sheets["Audit Summary"]
         ws2.column_dimensions["A"].width = 24
@@ -485,7 +515,11 @@ def export_to_dubbing_script(
     ws = wb.active
     ws.title = (Path(result.filename).stem or "Dubbing Script")[:31]
 
+    tr = _has_translation(result)
     headers = ["Sr. No.", "Time In", "Time Out", "Dialogue", "Character"]
+    if tr:
+        label = f" ({result.translation_language})" if result.translation_language else ""
+        headers.insert(4, f"Translation{label}")
     for col, title in enumerate(headers, start=2):
         c = ws.cell(row=2, column=col, value=title)
         c.fill, c.font, c.border, c.alignment = header_fill, header_font, border, center
@@ -505,18 +539,23 @@ def export_to_dubbing_script(
         if groups and groups[-1]["name"] == name:
             groups[-1]["end"] = max(groups[-1]["end"], seg.end_time)
             groups[-1]["lines"].append(text)
+            groups[-1]["tr"].append((seg.translation or "").strip())
         else:
-            groups.append({"name": name, "start": seg.start_time, "end": seg.end_time, "lines": [text]})
+            groups.append({"name": name, "start": seg.start_time, "end": seg.end_time, "lines": [text], "tr": [(seg.translation or "").strip()]})
 
     for i, g in enumerate(groups, start=1):
         row = i + 2
-        values = [i, _dubbing_timecode(g["start"]), _dubbing_timecode(g["end"]), "\n".join(g["lines"]), g["name"] or None]
+        values = [i, _dubbing_timecode(g["start"]), _dubbing_timecode(g["end"]), "\n".join(g["lines"])]
+        if tr:
+            values.append("\n".join(t for t in g["tr"] if t))
+        values.append(g["name"] or None)
         for col, val in enumerate(values, start=2):
             c = ws.cell(row=row, column=col, value=val)
             c.border = border
-            c.alignment = wrap if col == 5 else center
+            c.alignment = wrap if col in (5, 6) and (col == 5 or tr) else center
 
-    for col, width in {"A": 3, "B": 7, "C": 13, "D": 13, "E": 76, "F": 18}.items():
+    for col, width in ({"A": 3, "B": 7, "C": 13, "D": 13, "E": 60, "F": 60, "G": 18} if tr
+                       else {"A": 3, "B": 7, "C": 13, "D": 13, "E": 76, "F": 18}).items():
         ws.column_dimensions[col].width = width
     ws.freeze_panes = "B3"
 
