@@ -1770,6 +1770,22 @@ async def upload_video_chunk(
     return await _process_saved_media(final_file_path, safe_filename, clean_stem, raw_stem, ext, request=request)
 
 
+@app.delete("/api/subtitle/upload_chunk/{upload_id}")
+async def cancel_chunked_upload(upload_id: str):
+    """Cancelled upload: delete the slices received so far for this upload id."""
+    clean_upload_id = re.sub(r'[^\w\.-]', '_', upload_id).strip()
+    if not clean_upload_id:
+        return {"removed": 0}
+    removed = 0
+    for part in UPLOAD_DIR.glob(f"{clean_upload_id}_*.part"):
+        try:
+            part.unlink()
+            removed += 1
+        except OSError:
+            pass
+    return {"removed": removed}
+
+
 def resolve_active_session_video(video_id: str) -> Optional[str]:
     """Resolve media path (video or audio) from in-memory active_sessions or automatically restore from disk in UPLOAD_DIR."""
     if not video_id:

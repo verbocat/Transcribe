@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { listTranscribeDrafts, removeTranscribeDraft } from './transcribe/localDrafts';
 import {
   Database, Clock, FileAudio, CheckCircle2, AlertTriangle, Trash2, ArrowRight, X, Search, RefreshCw
 } from 'lucide-react';
@@ -10,8 +11,10 @@ export default function ProjectsModal({
   isLoading,
   onRefresh,
   onLoadProject,
-  onDeleteProject
+  onDeleteProject,
+  onRestoreDraft
 }) {
+  const [draftsTick, setDraftsTick] = useState(0);
   const [searchQuery, setSearchQuery] = useState('');
   const [isClosing, setIsClosing] = useState(false);
 
@@ -40,6 +43,10 @@ export default function ProjectsModal({
   };
 
   if (!isOpen) return null;
+
+  const q0 = searchQuery.toLowerCase();
+  const localDrafts = listTranscribeDrafts().filter((d) => !q0 || d.name.toLowerCase().includes(q0));
+  void draftsTick;
 
   const filtered = (projects || []).filter((p) => {
     if (!searchQuery) return true;
@@ -119,12 +126,33 @@ export default function ProjectsModal({
 
         {/* Projects List */}
         <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar">
+          {localDrafts.length > 0 && (
+            <div className="space-y-2">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Drafts on this device</p>
+              {localDrafts.map((d) => (
+                <div key={d.name} className="p-3 bg-[var(--kt-s2)] border border-[var(--kt-s4)] rounded-xl flex flex-wrap items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <h3 className="text-xs font-bold text-white truncate">{d.name}</h3>
+                    <p className="text-[11px] text-slate-400">{d.count} segments{d.timestamp ? ` · ${formatDate(d.timestamp)}` : ''}</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => { onRestoreDraft?.(d.name); onClose(); }} className="flex items-center gap-1.5 px-3 py-1.5 bg-[var(--kt-accent)] hover:bg-[var(--kt-accent-strong)] text-black rounded-xl text-xs font-bold cursor-pointer">
+                      <span>Restore</span><ArrowRight className="w-3.5 h-3.5" />
+                    </button>
+                    <button onClick={() => { removeTranscribeDraft(d.name); setDraftsTick((n) => n + 1); }} className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-rose-950/40 rounded-lg cursor-pointer" title="Delete this draft">
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
           {isLoading ? (
             <div className="text-center py-16 text-slate-400">
               <RefreshCw className="w-6 h-6 animate-spin mx-auto mb-2 text-[var(--kt-accent)]" />
               <p className="text-xs font-semibold text-slate-300">Loading projects from Neon DB...</p>
             </div>
-          ) : filtered.length === 0 ? (
+          ) : filtered.length === 0 && localDrafts.length > 0 ? null : filtered.length === 0 ? (
             <div className="text-center py-14 px-6 bg-[var(--kt-s2)] border border-dashed border-[var(--kt-s4)] rounded-2xl">
               <div className="w-12 h-12 rounded-2xl bg-[var(--kt-accent)]/15 text-[var(--kt-accent)] border border-[var(--kt-accent)]/30 flex items-center justify-center mx-auto mb-3">
                 <Database className="w-6 h-6" />

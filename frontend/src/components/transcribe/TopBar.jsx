@@ -1,9 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  ArrowLeft, Sparkles, Upload, Undo2, Redo2, Download, Save, MoreHorizontal, Loader2, Check,
-  FolderOpen, BarChart2, GitCompare, StickyNote, BookOpen, FileUp, Clapperboard, Languages, Palette, ShieldCheck, Square
+  ArrowLeft, Sparkles, Upload, Undo2, Redo2, Download, Save, Loader2, Check,
+  FolderOpen, BarChart2, GitCompare, StickyNote, BookOpen, FileUp, Clapperboard, Languages, Palette, ShieldCheck, Square,
+  Users, LayoutPanelLeft, RotateCcw, ChevronDown
 } from 'lucide-react';
 import BrandLogo from '../BrandLogo';
+import StudioMenuBar from '../subtitle/StudioMenuBar';
 import NotificationBellDropdown from '../NotificationBellDropdown';
 import AccountMenuDropdown from '../AccountMenuDropdown';
 import { openAppearance } from '../../theme/themeEngine';
@@ -42,6 +44,33 @@ function usePopover() {
   return { open, setOpen, ref };
 }
 
+function TranscribeSettings({ language, script, setLanguage, setScript }) {
+  const { open, setOpen, ref } = usePopover();
+  const langLabel = (LANGUAGES.find(([v]) => v === language) || [null, language])[1].replace(/ \(.*\)$/, '');
+  const scriptLabel = (SCRIPTS.find(([v]) => v === script) || [null, script])[1].replace(/ \/.*$/, '');
+  return (
+    <div className="relative" ref={ref}>
+      <button type="button" className="ts-btn" onClick={() => setOpen(!open)} aria-expanded={open} aria-haspopup="dialog" title="Language and script of the transcript">
+        <Languages size={14} className="shrink-0" />
+        <span className="truncate" style={{ maxWidth: 190 }}>{langLabel}<span style={{ color: 'var(--ts-faint)' }}> · {scriptLabel}</span></span>
+        <ChevronDown size={13} className="shrink-0" style={{ color: 'var(--ts-faint)' }} />
+      </button>
+      {open && (
+        <div className="ts-popover" role="dialog" aria-label="Transcription settings" style={{ left: '50%', right: 'auto', transform: 'translateX(-50%)', width: 280, padding: 12 }}>
+          <label style={{ display: 'block', fontSize: 12, color: 'var(--ts-muted)', marginBottom: 4 }}>Language</label>
+          <select className="ts-field" style={{ width: '100%' }} value={language} onChange={(e) => setLanguage(e.target.value)} aria-label="Language">
+            {LANGUAGES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+          </select>
+          <label style={{ display: 'block', fontSize: 12, color: 'var(--ts-muted)', margin: '12px 0 4px' }}>Script</label>
+          <select className="ts-field" style={{ width: '100%' }} value={script} onChange={(e) => setScript(e.target.value)} aria-label="Script">
+            {SCRIPTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+          </select>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ExportMenu({ formats, onToggle, onDownload, onDubbing, isExporting, hasSegments, onCancelExport, lang, langOptions, onLang }) {
   const { open, setOpen, ref } = usePopover();
   if (isExporting && onCancelExport) {
@@ -54,7 +83,7 @@ function ExportMenu({ formats, onToggle, onDownload, onDubbing, isExporting, has
   return (
     <div className="relative" ref={ref}>
       <button type="button" className="ts-btn" disabled={!hasSegments} onClick={() => setOpen(!open)} aria-expanded={open} aria-haspopup="menu">
-        <Download size={14} /> Export
+        <Download size={14} /> <span className="hidden xl:inline">Export</span>
       </button>
       {open && (
         <div className="ts-popover" role="menu" style={{ width: 320 }}>
@@ -114,118 +143,134 @@ function ExportMenu({ formats, onToggle, onDownload, onDubbing, isExporting, has
   );
 }
 
-function MoreMenu({ items }) {
-  const { open, setOpen, ref } = usePopover();
-  return (
-    <div className="relative" ref={ref}>
-      <button type="button" className="ts-btn ts-btn-ghost ts-btn-icon" title="More" aria-label="More" onClick={() => setOpen(!open)} aria-expanded={open} aria-haspopup="menu">
-        <MoreHorizontal size={16} />
-      </button>
-      {open && (
-        <div className="ts-popover" role="menu" style={{ minWidth: 220 }}>
-          {items.map((it) => (
-            <button key={it.label} type="button" role="menuitem" className="ts-menu-item" onClick={() => { setOpen(false); it.onClick(); }}>
-              <it.icon size={15} style={{ color: 'var(--ts-muted)' }} /> {it.label}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
 export default function TopBar(p) {
   const importRef = useRef(null);
   const hasSegments = p.segmentCount > 0;
   const passing = p.complianceScore != null && p.complianceScore >= 98;
+  const showTranscribeControls = hasSegments || p.isTranscribing;
+  const pickMedia = () => document.getElementById('ts-media-input')?.click();
+
+  const menus = [
+    { id: 'file', label: 'File', items: [
+      { label: p.filename ? 'Change media…' : 'Import media…', icon: Upload, onSelect: pickMedia, disabled: p.isExtractingAudio },
+      { label: 'Import subtitle file…', icon: FileUp, onSelect: () => importRef.current?.click() },
+      { label: 'Saved projects…', icon: FolderOpen, onSelect: p.onOpenProjects },
+      { type: 'separator' },
+      { label: 'Save to cloud', icon: Save, shortcut: 'Ctrl+S', onSelect: p.onSave, disabled: !hasSegments || p.isSaving },
+      { label: `Download ${p.exportFormats.length} ${p.exportFormats.length === 1 ? 'format' : 'formats'}`, icon: Download, onSelect: p.onDownload, disabled: !hasSegments || p.isExporting },
+      { label: 'Dubbing script (.xlsx)', icon: Clapperboard, onSelect: p.onDubbing, disabled: !hasSegments || p.isExporting },
+      { type: 'separator' },
+      { label: 'Back to home', icon: ArrowLeft, onSelect: p.onBackToHome },
+    ] },
+    { id: 'edit', label: 'Edit', items: [
+      { label: 'Undo', icon: Undo2, shortcut: 'Ctrl+Z', onSelect: p.onUndo, disabled: !p.canUndo },
+      { label: 'Redo', icon: Redo2, shortcut: 'Ctrl+Y', onSelect: p.onRedo, disabled: !p.canRedo },
+      { type: 'separator' },
+      { label: 'Speakers…', icon: Users, onSelect: p.onOpenSpeakers, disabled: !hasSegments },
+      { label: 'Project notes', icon: StickyNote, onSelect: p.onOpenNotes },
+    ] },
+    { id: 'view', label: 'View', items: [
+      { label: 'Layout…', icon: LayoutPanelLeft, onSelect: p.onOpenLayout },
+      { label: 'Reset layout', icon: RotateCcw, onSelect: p.onResetLayout },
+      { label: 'Appearance…', icon: Palette, onSelect: openAppearance },
+      { type: 'separator' },
+      { label: 'Statistics', icon: BarChart2, onSelect: p.onOpenStats, disabled: !hasSegments },
+      { label: 'Compare with original', icon: GitCompare, onSelect: p.onOpenDiff, disabled: !hasSegments },
+    ] },
+    { id: 'tools', label: 'Tools', items: [
+      { label: 'Transcribe', icon: Sparkles, onSelect: p.onTranscribe, disabled: !p.canTranscribe || p.isTranscribing },
+      { label: 'Translate…', icon: Languages, onSelect: p.onOpenTranslate, disabled: !hasSegments },
+      { label: 'Quality check', icon: ShieldCheck, onSelect: p.onOpenQc, disabled: !hasSegments },
+    ] },
+    { id: 'help', label: 'Help', items: [
+      { label: 'Guidelines', icon: BookOpen, onSelect: p.onOpenGuidelines },
+    ] },
+  ];
+
+  // Labels fold into icons on narrower windows so nothing is pushed off screen
+  const label = (text) => <span className="hidden min-[1500px]:inline">{text}</span>;
 
   return (
-    <header className="flex items-center gap-3 px-4 shrink-0" style={{ height: 56, background: 'var(--ts-panel)', borderBottom: '1px solid var(--ts-line)' }}>
+    <header className="flex items-center gap-2 px-3 shrink-0 select-none" style={{ height: 52, background: 'var(--ts-panel)', borderBottom: '1px solid var(--ts-line)' }}>
       <button type="button" className="ts-btn ts-btn-ghost ts-btn-icon" title="Back to home" aria-label="Back to home" onClick={p.onBackToHome}>
         <ArrowLeft size={16} />
       </button>
 
-      <div className="flex items-center gap-2.5 min-w-0">
-        <BrandLogo size={28} />
-        <div className="min-w-0">
-          <div style={{ fontWeight: 600, lineHeight: 1.1 }}>Lower Third <span style={{ color: 'var(--ts-faint)', fontWeight: 500 }}>Transcribe</span></div>
-          <div className="truncate" style={{ color: 'var(--ts-faint)', fontSize: 12, maxWidth: 220 }}>
-            {p.filename || 'No media loaded'}
-          </div>
-        </div>
+      <div className="flex items-center gap-3 shrink-0" style={{ paddingLeft: 4, paddingRight: 8 }}>
+        <BrandLogo variant="wordmark" size={28} />
+        <span className="hidden 2xl:flex"><span className="ts-chip ts-chip-accent" style={{ height: 22, fontWeight: 600, fontSize: 11 }}>Transcribe</span></span>
       </div>
 
-      <div style={{ width: 1, height: 24, background: 'var(--ts-line)' }} />
+      <span style={{ width: 1, height: 20, background: 'var(--ts-line)' }} aria-hidden="true" />
+
+      <div className="shrink-0">
+        <div className="hidden xl:block"><StudioMenuBar menus={menus} /></div>
+        <div className="xl:hidden"><StudioMenuBar menus={menus} compact /></div>
+      </div>
 
       <input id="ts-media-input" type="file" className="hidden" onChange={p.onFileSelect}
         accept="audio/*,video/*,.wav,.mp3,.m4a,.flac,.ogg,.aac,.mp4,.mkv,.mov,.webm,.avi,.flv,.wmv,.wma,audio/x-ms-wma,audio/wma" />
-      {(hasSegments || p.isTranscribing) && (<>
-      <label htmlFor="ts-media-input" className="ts-btn" style={{ cursor: 'pointer' }}>
-        {p.isExtractingAudio ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
-        {p.isExtractingAudio ? 'Preparing audio' : p.filename ? 'Change media' : 'Import media'}
-      </label>
-
-      <label className="flex items-center gap-2" style={{ color: 'var(--ts-muted)', fontSize: 12 }}>
-        <Languages size={14} />
-        <select className="ts-field" value={p.language} onChange={(e) => p.setLanguage(e.target.value)} aria-label="Language">
-          {LANGUAGES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-        </select>
-      </label>
-      <select className="ts-field" value={p.script} onChange={(e) => p.setScript(e.target.value)} aria-label="Script">
-        {SCRIPTS.map(([v, l]) => <option key={v} value={v}>Script: {l}</option>)}
-      </select>
-
-      <button type="button" className="ts-btn ts-btn-primary" disabled={!p.canTranscribe || p.isTranscribing} onClick={p.onTranscribe}>
-        {p.isTranscribing ? <><Loader2 size={14} className="animate-spin" /> Transcribing {Math.round(p.progressPercent)}%</> : <><Sparkles size={14} /> Transcribe</>}
-      </button>
-      </>)}
-
-      <span className="flex-1" />
-
-      {hasSegments && (
-        <span className={`ts-chip ${passing ? 'ts-chip-accent' : p.totalErrors ? 'ts-chip-danger' : 'ts-chip-warn'}`} title={`${p.totalErrors} errors, ${p.totalWarnings} warnings`}>
-          QC {p.complianceScore?.toFixed(1)}%
-        </span>
-      )}
-
-      <div className="flex items-center gap-0.5">
-        <button type="button" className="ts-btn ts-btn-ghost ts-btn-icon" title="Undo (Ctrl+Z)" aria-label="Undo" disabled={!p.canUndo} onClick={p.onUndo}><Undo2 size={15} /></button>
-        <button type="button" className="ts-btn ts-btn-ghost ts-btn-icon" title="Redo (Ctrl+Y)" aria-label="Redo" disabled={!p.canRedo} onClick={p.onRedo}><Redo2 size={15} /></button>
-      </div>
-
-      <button type="button" className={`ts-btn ${p.translateOpen ? 'ts-chip-accent' : ''}`} disabled={!hasSegments} onClick={p.onOpenTranslate} aria-pressed={p.translateOpen} title="Translate the transcript with Centroid">
-        <Languages size={14} /> Translate
-      </button>
-      <button type="button" className={`ts-btn ${p.qcOpen ? 'ts-chip-accent' : ''}`} disabled={!hasSegments} onClick={p.onOpenQc} aria-pressed={p.qcOpen} title="Karya checks and Centroid translation QC">
-        <ShieldCheck size={14} /> QC{p.centroidQcIssues != null ? ` · ${p.centroidQcIssues}` : ''}
-      </button>
-
-      <button type="button" className="ts-btn" disabled={!hasSegments || p.isSaving} onClick={p.onSave} title="Save to cloud (Ctrl+S)">
-        {p.isSaving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Save
-      </button>
-
-      <ExportMenu
-        formats={p.exportFormats} onToggle={p.onToggleFormat} onDownload={p.onDownload}
-        onDubbing={p.onDubbing} isExporting={p.isExporting} hasSegments={hasSegments} onCancelExport={p.onCancelExport}
-        lang={p.exportLang} langOptions={p.exportLangOptions} onLang={p.onExportLang}
-      />
-
       <input ref={importRef} type="file" accept=".srt,.vtt,.txt" className="hidden"
         onChange={(e) => { const f = e.target.files?.[0]; if (f) p.onImportSubtitles(f); e.target.value = ''; }} />
-      <MoreMenu items={[
-        { label: 'Saved projects', icon: FolderOpen, onClick: p.onOpenProjects },
-        { label: 'Import subtitle file', icon: FileUp, onClick: () => importRef.current?.click() },
-        { label: 'Statistics', icon: BarChart2, onClick: p.onOpenStats },
-        { label: 'Compare with original', icon: GitCompare, onClick: p.onOpenDiff },
-        { label: 'Project notes', icon: StickyNote, onClick: p.onOpenNotes },
-        { label: 'Guidelines', icon: BookOpen, onClick: p.onOpenGuidelines },
-        { label: 'Appearance', icon: Palette, onClick: openAppearance },
-      ]} />
 
-      <button type="button" className="ts-btn" title="Customise colours, fonts and layout" onClick={openAppearance}><Palette size={14} style={{ color: 'var(--ts-accent)' }} /> Appearance</button>
+      {/* Centre: the media file, then the transcription settings (hidden on the start screen, which has its own) */}
+      <div className="flex-1 min-w-0 flex items-center justify-center gap-2 px-2 overflow-hidden">
+        <div className="hidden min-[1500px]:flex min-w-0">
+        <button
+          type="button" onClick={pickMedia} disabled={p.isExtractingAudio}
+          className="ts-btn min-w-0" style={{ maxWidth: 240 }} title={p.filename ? `${p.filename} (click to change)` : 'Import a video or audio file'}
+        >
+          {p.isExtractingAudio ? <Loader2 size={14} className="animate-spin shrink-0" /> : <Upload size={14} className="shrink-0" />}
+          <span className="truncate">{p.isExtractingAudio ? 'Preparing audio' : p.filename || 'Import media'}</span>
+        </button>
+        </div>
+        {showTranscribeControls && (<>
+          <TranscribeSettings language={p.language} script={p.script} setLanguage={p.setLanguage} setScript={p.setScript} />
+          <button type="button" className="ts-btn ts-btn-primary" disabled={!p.canTranscribe || p.isTranscribing} onClick={p.onTranscribe}>
+            {p.isTranscribing ? <><Loader2 size={14} className="animate-spin" /> {Math.round(p.progressPercent)}%</> : <><Sparkles size={14} /> {label('Transcribe')}</>}
+          </button>
+        </>)}
+      </div>
 
-      {p.user && <NotificationBellDropdown />}
-      {p.user && <AccountMenuDropdown user={p.user} onOpenLogoutModal={p.onOpenLogoutModal} />}
+      <div className="flex items-center gap-1.5 shrink-0">
+        {hasSegments && (
+          <span className="hidden 2xl:flex">
+            <span className={`ts-chip ${passing ? 'ts-chip-accent' : p.totalErrors ? 'ts-chip-danger' : 'ts-chip-warn'}`} title={`${p.totalErrors} errors, ${p.totalWarnings} warnings`}>
+              {p.complianceScore?.toFixed(1)}%
+            </span>
+          </span>
+        )}
+
+        <div className="hidden min-[1500px]:flex items-center gap-1.5">
+          <button type="button" className="ts-btn ts-btn-ghost ts-btn-icon" title="Undo (Ctrl+Z)" aria-label="Undo" disabled={!p.canUndo} onClick={p.onUndo}><Undo2 size={15} /></button>
+          <button type="button" className="ts-btn ts-btn-ghost ts-btn-icon" title="Redo (Ctrl+Y)" aria-label="Redo" disabled={!p.canRedo} onClick={p.onRedo}><Redo2 size={15} /></button>
+          <span style={{ width: 1, height: 20, background: 'var(--ts-line)' }} aria-hidden="true" />
+        </div>
+
+        <button type="button" className={`ts-btn ${p.speakersOpen ? 'ts-chip-accent' : ''}`} disabled={!hasSegments} onClick={p.onOpenSpeakers} aria-pressed={p.speakersOpen} title="Speaker identification: name each speaker, merge or move lines">
+          <Users size={14} /> {label('Speakers')}
+        </button>
+        <button type="button" className={`ts-btn ${p.translateOpen ? 'ts-chip-accent' : ''}`} disabled={!hasSegments} onClick={p.onOpenTranslate} aria-pressed={p.translateOpen} title="Translate the transcript with Centroid">
+          <Languages size={14} /> {label('Translate')}
+        </button>
+        <button type="button" className={`ts-btn ${p.qcOpen ? 'ts-chip-accent' : ''}`} disabled={!hasSegments} onClick={p.onOpenQc} aria-pressed={p.qcOpen} title="Karya checks and Centroid translation QC">
+          <ShieldCheck size={14} /> {label('QC')}{p.centroidQcIssues != null ? ` · ${p.centroidQcIssues}` : ''}
+        </button>
+        <button type="button" className="ts-btn" disabled={!hasSegments || p.isSaving} onClick={p.onSave} title="Save to cloud (Ctrl+S)">
+          {p.isSaving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} {label('Save')}
+        </button>
+        <ExportMenu
+          formats={p.exportFormats} onToggle={p.onToggleFormat} onDownload={p.onDownload}
+          onDubbing={p.onDubbing} isExporting={p.isExporting} hasSegments={hasSegments} onCancelExport={p.onCancelExport}
+          lang={p.exportLang} langOptions={p.exportLangOptions} onLang={p.onExportLang}
+        />
+        <button type="button" className="ts-btn ts-btn-ghost ts-btn-icon" title="Layout: arrange the screen" aria-label="Layout" onClick={p.onOpenLayout}>
+          <LayoutPanelLeft size={15} />
+        </button>
+
+        {p.user && <NotificationBellDropdown />}
+        {p.user && <AccountMenuDropdown user={p.user} onOpenLogoutModal={p.onOpenLogoutModal} />}
+      </div>
     </header>
   );
 }

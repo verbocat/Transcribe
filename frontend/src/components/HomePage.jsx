@@ -59,7 +59,7 @@ function readLocalDrafts() {
       const count = Array.isArray(d?.segments) ? d.segments.length : Array.isArray(d?.events) ? d.events.length : 0;
       if (!d || !count) continue;
       out.push({
-        key, tool, filename: name.replace(/^draft_subtitle$/, 'Untitled subtitles'),
+        key, tool, draftName: tool === 'transcribe' ? name : undefined, filename: name.replace(/^draft_subtitle$/, 'Untitled subtitles'),
         meta: `${count} ${tool === 'subtitle' ? 'cards' : 'segments'} · draft on this device`, updatedAt: d.timestamp,
       });
     }
@@ -225,7 +225,7 @@ export default function HomePage({ onSelect, user, onLogout, onOpenAuth }) {
                   const Icon = r.tool === 'subtitle' ? Subtitles : Mic;
                   return (
                     <li key={r.key}>
-                      <button type="button" onClick={() => open(r.tool, r.projectId ? { projectId: r.projectId } : undefined)}
+                      <button type="button" onClick={() => open(r.tool, r.projectId ? { projectId: r.projectId } : r.draftName ? { draftName: r.draftName } : undefined)}
                         className="w-full flex items-center gap-3 px-3.5 py-2.5 text-left hover:bg-[var(--kt-s2)] transition-colors cursor-pointer">
                         <span className="h-8 w-8 rounded-md grid place-items-center bg-[var(--kt-s3)] text-[var(--kt-accent)] shrink-0"><Icon size={15} /></span>
                         <span className="min-w-0 flex-1">

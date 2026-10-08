@@ -178,6 +178,7 @@ export default function TranscribeTimeline({
           videoUrl={videoUrl || null}
           audioUrl={audioUrl}
           initialPeaks={peaks}
+          hideBlockText
           events={events}
           duration={duration}
           activeEventId={activeSegmentId}

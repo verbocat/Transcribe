@@ -255,3 +255,13 @@ class AdminNotification(AuthBase):
 
     user = relationship("User", back_populates="notifications")
 
+
+
+class UserPreference(AuthBase):
+    """Per-account UI preferences (e.g. studio layouts), stored as a JSON document per key."""
+    __tablename__ = "user_preferences"
+
+    user_id = Column(String(64), ForeignKey("auth_users.id", ondelete="CASCADE"), primary_key=True)
+    key = Column(String(64), primary_key=True)
+    value = Column(Text, nullable=False)  # JSON
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
