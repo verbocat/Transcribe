@@ -25,7 +25,7 @@ import LogoutConfirmModal from './components/LogoutConfirmModal';
 import ReloadConfirmModal from './components/ReloadConfirmModal';
 import { parseSubtitles } from './utils/subtitleParser';
 import { API_BASE } from './config';
-import { startJob, jobHeaders, isCancelError, sleepCancellable } from './utils/cancellable';
+import { startJob, jobHeaders, isCancelError, sleepCancellable, abortable } from './utils/cancellable';
 const BUILD_ID = typeof __APP_BUILD__ !== 'undefined' ? __APP_BUILD__ : 'dev';
 if (typeof window !== 'undefined') window.__TRANSCRIBE_BUILD__ = BUILD_ID;
 import { extractAudioFromMedia } from './utils/audioExtractor';
@@ -929,10 +929,12 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
     if (!selectedFile) return;
     setIsTranscribing(true);
     beginUploadProgress();
+    // The job must exist before the first await: the strip's Cancel button is already on screen and cancels through this ref
+    const job = startJob(API_BASE);
+    transcribeJobRef.current = job;
     let serverStartedAt = 0;
     let localWav = null;
     let audioSeconds = 0;
-    try { audioSeconds = await probeDuration(audioUrl || videoUrl); } catch {}
 
     const build = (fileToSend) => {
       const fd = new FormData();
@@ -946,9 +948,9 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
       return fd;
     };
 
-    const job = startJob(API_BASE);
-    transcribeJobRef.current = job;
     try {
+      try { audioSeconds = await abortable(probeDuration(audioUrl || videoUrl), job.signal); } catch (e) { if (isCancelError(e)) throw e; }
+      job.throwIfCancelled();
       let data = null;
       // Preferred: background job with real stages. Reuse the audio already extracted for the waveform when we have it.
       const sameFile = selectedFile.name === extractedForFile;
