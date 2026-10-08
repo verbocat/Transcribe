@@ -75,37 +75,6 @@ export async function getBotChallenge() {
   return data;
 }
 
-export async function getTakeoverStatus(takeover_id) {
-  const base = getApiBase();
-  const res = await fetchWithTimeout(`${base}/api/auth/takeover/status?takeover_id=${encodeURIComponent(takeover_id)}`, {}, 8000);
-  const data = await res.json();
-  if (!res.ok) {
-    throw new Error(data.detail || 'Failed to check takeover status.');
-  }
-  return data;
-}
-
-export async function submitTakeoverDecision({ takeover_id, decision, token }) {
-  const headers = { 'Content-Type': 'application/json' };
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
-  }
-  const base = getApiBase();
-  const res = await fetchWithTimeout(`${base}/api/auth/takeover/decision`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({
-      takeover_id,
-      decision
-    })
-  }, 10000);
-  const data = await res.json();
-  if (!res.ok) {
-    throw new Error(data.detail || 'Failed to submit decision.');
-  }
-  return data;
-}
-
 export async function verifyLoginOtp({ challenge_id, otp }) {
   const base = getApiBase();
   const res = await fetchWithTimeout(`${base}/api/auth/verify-otp`, {

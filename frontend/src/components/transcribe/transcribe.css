@@ -55,6 +55,72 @@
 .transcribe-studio button { cursor: pointer; }
 .transcribe-studio button:disabled { cursor: not-allowed; opacity: 0.45; }
 
+/* ---------- Top Bar layout ---------- */
+.ts-topbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 44px;
+  padding: 0 8px;
+  background: var(--ts-panel);
+  border-bottom: 1px solid var(--ts-line);
+  flex-shrink: 0;
+  user-select: none;
+  overflow: hidden;
+}
+.ts-topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.ts-topbar-center {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  overflow: hidden;
+}
+.ts-topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.ts-topbar-divider {
+  width: 1px;
+  height: 18px;
+  background: var(--ts-line);
+  margin: 0 4px;
+  flex-shrink: 0;
+}
+/* Active state for toggled icon buttons (speakers, translate, QC) */
+.ts-topbar-active {
+  background: rgba(var(--ts-accent-rgb), 0.15) !important;
+  color: var(--ts-accent) !important;
+}
+/* Badge for issue count */
+.ts-topbar-badge {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 99px;
+  background: var(--ts-danger);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+.ts-topbar-right .ts-btn-icon { position: relative; }
+
 .transcribe-studio :focus-visible { outline: 2px solid var(--ts-accent); outline-offset: 2px; }
 .transcribe-studio input:focus-visible,
 .transcribe-studio textarea:focus-visible,

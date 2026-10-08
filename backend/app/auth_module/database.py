@@ -49,13 +49,6 @@ def init_auth_db():
     with engine.connect() as conn:
         try:
             from sqlalchemy import text
-            res_sess = conn.execute(text("PRAGMA table_info(auth_sessions)")).fetchall()
-            existing_sess_cols = {row[1] for row in res_sess}
-            if "takeover_lockout_until" not in existing_sess_cols:
-                conn.execute(text("ALTER TABLE auth_sessions ADD COLUMN takeover_lockout_until DATETIME"))
-                conn.commit()
-                logger.info("Migrated auth_sessions table: added takeover_lockout_until column.")
-
             res_users = conn.execute(text("PRAGMA table_info(auth_users)")).fetchall()
             existing_user_cols = {row[1] for row in res_users}
             if "role" not in existing_user_cols:

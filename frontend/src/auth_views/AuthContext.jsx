@@ -1,7 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
-import { fetchCurrentUser, logoutUser, submitTakeoverDecision } from './authService';
+import { fetchCurrentUser, logoutUser } from './authService';
 import { API_BASE } from '../config';
-import DeviceTakeoverAlertModal from './DeviceTakeoverAlertModal';
 
 const AuthContext = createContext(null);
 
@@ -27,7 +26,6 @@ export function AuthProvider({ children }) {
   });
   const [isLoading, setIsLoading] = useState(true);
   const [sessionNotice, setSessionNotice] = useState('');
-  const [takeoverAlert, setTakeoverAlert] = useState(null);
   const lastRecordedActivityRef = useRef(Date.now());
 
   const clearSessionNotice = useCallback(() => {
@@ -143,24 +141,15 @@ export function AuthProvider({ children }) {
     // Check inactivity every 30 seconds
     const interval = setInterval(checkInactivityTimeout, 30000);
 
-    // Check for incoming takeover requests from other devices every 5 seconds
-    const takeoverInterval = setInterval(async () => {
+    // Notice when the session has expired or an admin ended it, every 5 seconds
+    const sessionCheckInterval = setInterval(async () => {
       try {
         const res = await fetch(`${API_BASE}/api/auth/me`, {
           headers: { Authorization: `Bearer ${token}` }
         });
         if (res.status === 401) {
           // Session revoked or timed out
-          logout('Your session was ended from another device or has expired. Please log in again.');
-          return;
-        }
-        if (res.ok) {
-          const data = await res.json();
-          if (data.takeover_requested && data.takeover) {
-            setTakeoverAlert(data.takeover);
-          } else {
-            setTakeoverAlert(null);
-          }
+          logout('Your session has ended or expired. Please log in again.');
         }
       } catch (err) {
         // Ignore network hiccups
@@ -182,28 +171,9 @@ export function AuthProvider({ children }) {
       });
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       clearInterval(interval);
-      clearInterval(takeoverInterval);
+      clearInterval(sessionCheckInterval);
     };
   }, [token, recordActivity, checkInactivityTimeout, logout]);
-
-  const handleKeepWorking = useCallback(async (takeoverId) => {
-    try {
-      await submitTakeoverDecision({ takeover_id: takeoverId, decision: 'keep', token });
-      setTakeoverAlert(null);
-    } catch (err) {
-      console.error('Failed to keep session:', err);
-    }
-  }, [token]);
-
-  const handleLogOutNow = useCallback(async (takeoverId) => {
-    try {
-      await submitTakeoverDecision({ takeover_id: takeoverId, decision: 'release', token });
-      setTakeoverAlert(null);
-      logout('You chose to log out to allow the incoming device.');
-    } catch (err) {
-      logout();
-    }
-  }, [token, logout]);
 
   // Synchronize authentication state across multiple browser tabs/windows
   useEffect(() => {
@@ -234,7 +204,6 @@ export function AuthProvider({ children }) {
     setToken(newToken);
     setUser(userData);
     setSessionNotice('');
-    setTakeoverAlert(null);
     const now = Date.now();
     lastRecordedActivityRef.current = now;
     localStorage.setItem(TOKEN_KEY, newToken);
@@ -255,12 +224,6 @@ export function AuthProvider({ children }) {
         logout
       }}
     >
-      <DeviceTakeoverAlertModal
-        isOpen={Boolean(takeoverAlert)}
-        takeover={takeoverAlert}
-        onKeepWorking={handleKeepWorking}
-        onLogOutNow={handleLogOutNow}
-      />
       {children}
     </AuthContext.Provider>
   );

@@ -315,7 +315,7 @@ export default function TranscribeStudio(p) {
       {!timelineHidden && p.audioUrl && (
         <Splitter
           axis="y" sign={-1} label="Resize timeline" thickness={cards ? layout.gap || 6 : 6}
-          value={layout.timelineH || Math.max(310, Math.round(window.innerHeight * 0.42))} min={TIMELINE_MIN} max={LIMITS.timelineH[1]}
+          value={layout.timelineH || 240} min={TIMELINE_MIN} max={LIMITS.timelineH[1]}
           onChange={(v) => studio.patch({ timelineH: v })} onReset={() => studio.patch({ timelineH: 0 })}
         />
       )}
