@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   ArrowLeft, Sparkles, Upload, Undo2, Redo2, Download, Save, Loader2, Check,
   FolderOpen, BarChart2, GitCompare, StickyNote, BookOpen, FileUp, Clapperboard, Languages, Palette, ShieldCheck, Square,
-  Users, LayoutPanelLeft, RotateCcw, ChevronDown, MoreHorizontal
+  Users, LayoutPanelLeft, RotateCcw, ChevronDown, AudioLines, MoreHorizontal
 } from 'lucide-react';
 import BrandLogo from '../BrandLogo';
 import StudioMenuBar from '../subtitle/StudioMenuBar';
@@ -51,8 +51,8 @@ function TranscribeSettings({ language, script, setLanguage, setScript }) {
     <div className="relative" ref={ref}>
       <button type="button" className="ts-btn ts-btn-sm" onClick={() => setOpen(!open)} aria-expanded={open} aria-haspopup="dialog" title="Language and script settings">
         <Languages size={14} className="shrink-0" />
-        <span className="truncate" style={{ maxWidth: 120 }}>{langLabel}</span>
-        <ChevronDown size={12} className="shrink-0" style={{ color: 'var(--ts-faint)' }} />
+        <span className="truncate" style={{ maxWidth: 'min(190px, 16vw)' }}>{langLabel}<span style={{ color: 'var(--ts-faint)' }}> · {scriptLabel}</span></span>
+        <ChevronDown size={13} className="shrink-0" style={{ color: 'var(--ts-faint)' }} />
       </button>
       {open && (
         <div className="ts-popover" role="dialog" aria-label="Transcription settings" style={{ left: '50%', right: 'auto', transform: 'translateX(-50%)', width: 260, padding: 12 }}>
@@ -145,7 +145,6 @@ function ExportMenu({ formats, onToggle, onDownload, onDubbing, isExporting, has
 /** More actions dropdown — consolidates less-used actions into a single icon button */
 function MoreActionsMenu({ p, hasSegments, importRef }) {
   const { open, setOpen, ref } = usePopover();
-  const pickMedia = () => document.getElementById('ts-media-input')?.click();
   return (
     <div className="relative" ref={ref}>
       <button type="button" className="ts-btn ts-btn-ghost ts-btn-icon" onClick={() => setOpen(!open)} title="More actions" aria-expanded={open} aria-haspopup="menu">
@@ -153,9 +152,6 @@ function MoreActionsMenu({ p, hasSegments, importRef }) {
       </button>
       {open && (
         <div className="ts-popover" role="menu" style={{ width: 260 }}>
-          <button type="button" className="ts-menu-item" onClick={() => { setOpen(false); pickMedia(); }} disabled={p.isExtractingAudio}>
-            <Upload size={14} /> <span className="flex-1">{p.filename ? 'Change media…' : 'Import media…'}</span>
-          </button>
           <button type="button" className="ts-menu-item" onClick={() => { setOpen(false); importRef.current?.click(); }}>
             <FileUp size={14} /> <span className="flex-1">Import subtitle file…</span>
           </button>
@@ -189,12 +185,10 @@ export default function TopBar(p) {
   const importRef = useRef(null);
   const hasSegments = p.segmentCount > 0;
   const passing = p.complianceScore != null && p.complianceScore >= 98;
-  const showTranscribeControls = hasSegments || p.isTranscribing;
   const pickMedia = () => document.getElementById('ts-media-input')?.click();
 
   const menus = [
     { id: 'file', label: 'File', items: [
-      { label: p.filename ? 'Change media…' : 'Import media…', icon: Upload, onSelect: pickMedia, disabled: p.isExtractingAudio },
       { label: 'Import subtitle file…', icon: FileUp, onSelect: () => importRef.current?.click() },
       { label: 'Saved projects…', icon: FolderOpen, onSelect: p.onOpenProjects },
       { type: 'separator' },
@@ -212,6 +206,7 @@ export default function TopBar(p) {
       { label: 'Project notes', icon: StickyNote, onSelect: p.onOpenNotes },
     ] },
     { id: 'view', label: 'View', items: [
+      { label: p.timelineHidden ? 'Show timeline' : 'Hide timeline', icon: AudioLines, onSelect: p.onToggleTimeline },
       { label: 'Layout…', icon: LayoutPanelLeft, onSelect: p.onOpenLayout },
       { label: 'Reset layout', icon: RotateCcw, onSelect: p.onResetLayout },
       { label: 'Appearance…', icon: Palette, onSelect: openAppearance },
@@ -220,7 +215,6 @@ export default function TopBar(p) {
       { label: 'Compare with original', icon: GitCompare, onSelect: p.onOpenDiff, disabled: !hasSegments },
     ] },
     { id: 'tools', label: 'Tools', items: [
-      { label: 'Transcribe', icon: Sparkles, onSelect: p.onTranscribe, disabled: !p.canTranscribe || p.isTranscribing },
       { label: 'Translate…', icon: Languages, onSelect: p.onOpenTranslate, disabled: !hasSegments },
       { label: 'Quality check', icon: ShieldCheck, onSelect: p.onOpenQc, disabled: !hasSegments },
     ] },
@@ -252,15 +246,19 @@ export default function TopBar(p) {
       <input ref={importRef} type="file" accept=".srt,.vtt,.txt" className="hidden"
         onChange={(e) => { const f = e.target.files?.[0]; if (f) p.onImportSubtitles(f); e.target.value = ''; }} />
 
-      {/* Centre: transcription controls (only when active) */}
+      {/* Centre: the one set of media controls, always visible: media file, language and script, Transcribe */}
       <div className="ts-topbar-center">
-        {showTranscribeControls && (<>
-          <TranscribeSettings language={p.language} script={p.script} setLanguage={p.setLanguage} setScript={p.setScript} />
-          <button type="button" className="ts-btn ts-btn-primary ts-btn-sm" disabled={!p.canTranscribe || p.isTranscribing} onClick={p.onTranscribe}>
-            {p.isTranscribing ? <><Loader2 size={14} className="animate-spin" /> {Math.round(p.progressPercent)}%</> : <><Sparkles size={14} /> <span className="hidden sm:inline">Transcribe</span></>}
-          </button>
-        </>)}
-
+        <button
+          type="button" onClick={pickMedia} disabled={p.isExtractingAudio}
+          className="ts-btn min-w-0" style={{ maxWidth: 'min(240px, 28vw)' }} title={p.filename ? `${p.filename} (click to change media)` : 'Import a video or audio file'}
+        >
+          {p.isExtractingAudio ? <Loader2 size={14} className="animate-spin shrink-0" /> : <Upload size={14} className="shrink-0" />}
+          <span className="truncate">{p.isExtractingAudio ? 'Preparing audio' : p.filename || 'Import media'}</span>
+        </button>
+        <TranscribeSettings language={p.language} script={p.script} setLanguage={p.setLanguage} setScript={p.setScript} />
+        <button type="button" className="ts-btn ts-btn-primary shrink-0" disabled={!p.canTranscribe || p.isTranscribing || p.isExtractingAudio} onClick={p.onTranscribe} title={p.canTranscribe ? 'Transcribe this media' : 'Import media first'}>
+          {p.isTranscribing ? <><Loader2 size={14} className="animate-spin" /> {Math.round(p.progressPercent)}%</> : <><Sparkles size={14} /> Transcribe</>}
+        </button>
         {hasSegments && (
           <span className={`ts-chip ${passing ? 'ts-chip-accent' : p.totalErrors ? 'ts-chip-danger' : 'ts-chip-warn'}`} title={`${p.totalErrors} errors, ${p.totalWarnings} warnings`} style={{ height: 22, fontSize: 11 }}>
             {p.complianceScore?.toFixed(1)}%
