@@ -227,3 +227,12 @@ select.ts-field { padding-right: 4px; }
 .transcribe-studio .ss-script { font-family: var(--ss-font-script); letter-spacing: 0; }
 .transcribe-studio .font-mono, .transcribe-studio .tabular-nums { font-family: var(--ss-font-mono); font-variant-numeric: tabular-nums; }
 .transcribe-studio .ss-indeterminate { background-image: linear-gradient(90deg, transparent 0%, var(--ss-accent) 50%, transparent 100%); background-size: 40% 100%; background-repeat: no-repeat; animation: ts-indeterminate 1.3s ease-in-out infinite; }
+
+/* Subtitle Studio's shared menu bar and controls read --ss-* tokens; map them onto this screen's tokens */
+.transcribe-studio {
+  --ss-bg: var(--ts-bg); --ss-panel: var(--ts-panel); --ss-raised: var(--ts-raised); --ss-hover: var(--ts-hover);
+  --ss-selected: var(--ts-selected); --ss-line: var(--ts-line); --ss-line-soft: var(--ts-line-soft);
+  --ss-text: var(--ts-text); --ss-muted: var(--ts-muted); --ss-faint: var(--ts-faint);
+  --ss-accent: var(--ts-accent); --ss-accent-hover: var(--ts-accent-hover); --ss-accent-ink: var(--ts-accent-ink);
+  --ss-danger: var(--ts-danger); --ss-warn: var(--ts-warn);
+}
