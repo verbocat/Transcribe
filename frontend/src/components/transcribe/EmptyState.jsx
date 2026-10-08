@@ -1,17 +1,14 @@
 import React, { useState } from 'react';
-import { UploadCloud, Sparkles, Loader2, Square } from 'lucide-react';
-import { LANGUAGES, SCRIPTS } from './TopBar';
+import { UploadCloud, Loader2, Square } from 'lucide-react';
 
 /**
  * Pre-transcription screen: one centered card. Empty, it is a drop zone; once media is loaded it becomes a
- * compact summary with the language choice and a single Start button.
+ * compact summary; language and Transcribe live in the top bar.
  */
 export default function EmptyState({
-  filename, isExtractingAudio, extractionNotice, onCancelExtract, onDropFile, onTranscribe, onOpenProjects, video,
-  language, setLanguage, script, setScript,
+  filename, isExtractingAudio, extractionNotice, onCancelExtract, onDropFile, onOpenProjects, video,
 }) {
   const [dragging, setDragging] = useState(false);
-  const ready = !!filename && !isExtractingAudio;
   const drop = {
     onDragOver: (e) => { e.preventDefault(); setDragging(true); },
     onDragLeave: () => setDragging(false),
@@ -44,24 +41,17 @@ export default function EmptyState({
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-2" style={{ marginTop: 20 }}>
-            <select className="ts-field" value={language} onChange={(e) => setLanguage(e.target.value)} aria-label="Language" disabled={!ready} style={{ width: '100%' }}>
-              {LANGUAGES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-            </select>
-            <select className="ts-field" value={script} onChange={(e) => setScript(e.target.value)} aria-label="Script" disabled={!ready} style={{ width: '100%' }}>
-              {SCRIPTS.map(([v, l]) => <option key={v} value={v}>Script: {l}</option>)}
-            </select>
-          </div>
-
           {isExtractingAudio && onCancelExtract && (
             <button type="button" className="ts-btn" onClick={onCancelExtract} style={{ width: '100%', height: 42, fontSize: 14, marginTop: 12 }}>
               <Square size={14} /> Cancel
             </button>
           )}
 
-          <button type="button" className="ts-btn ts-btn-primary" disabled={!ready} onClick={onTranscribe} style={{ width: '100%', height: 42, fontSize: 14, marginTop: 12 }}>
-            <Sparkles size={16} /> Start transcription
-          </button>
+          {!isExtractingAudio && (
+            <p style={{ color: 'var(--ts-muted)', marginTop: 16, lineHeight: 1.5 }}>
+              Pick the language in the top bar, then press <strong style={{ color: 'var(--ts-text)' }}>Transcribe</strong>.
+            </p>
+          )}
         </div>
       )}
 

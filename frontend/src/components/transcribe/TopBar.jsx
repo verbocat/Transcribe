@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   ArrowLeft, Sparkles, Upload, Undo2, Redo2, Download, Save, Loader2, Check,
   FolderOpen, BarChart2, GitCompare, StickyNote, BookOpen, FileUp, Clapperboard, Languages, Palette, ShieldCheck, Square,
-  Users, LayoutPanelLeft, RotateCcw, ChevronDown
+  Users, LayoutPanelLeft, RotateCcw, ChevronDown, AudioLines
 } from 'lucide-react';
 import BrandLogo from '../BrandLogo';
 import StudioMenuBar from '../subtitle/StudioMenuBar';
@@ -52,7 +52,7 @@ function TranscribeSettings({ language, script, setLanguage, setScript }) {
     <div className="relative" ref={ref}>
       <button type="button" className="ts-btn" onClick={() => setOpen(!open)} aria-expanded={open} aria-haspopup="dialog" title="Language and script of the transcript">
         <Languages size={14} className="shrink-0" />
-        <span className="truncate" style={{ maxWidth: 190 }}>{langLabel}<span style={{ color: 'var(--ts-faint)' }}> · {scriptLabel}</span></span>
+        <span className="truncate" style={{ maxWidth: 'min(190px, 16vw)' }}>{langLabel}<span style={{ color: 'var(--ts-faint)' }}> · {scriptLabel}</span></span>
         <ChevronDown size={13} className="shrink-0" style={{ color: 'var(--ts-faint)' }} />
       </button>
       {open && (
@@ -147,12 +147,10 @@ export default function TopBar(p) {
   const importRef = useRef(null);
   const hasSegments = p.segmentCount > 0;
   const passing = p.complianceScore != null && p.complianceScore >= 98;
-  const showTranscribeControls = hasSegments || p.isTranscribing;
   const pickMedia = () => document.getElementById('ts-media-input')?.click();
 
   const menus = [
     { id: 'file', label: 'File', items: [
-      { label: p.filename ? 'Change media…' : 'Import media…', icon: Upload, onSelect: pickMedia, disabled: p.isExtractingAudio },
       { label: 'Import subtitle file…', icon: FileUp, onSelect: () => importRef.current?.click() },
       { label: 'Saved projects…', icon: FolderOpen, onSelect: p.onOpenProjects },
       { type: 'separator' },
@@ -170,6 +168,7 @@ export default function TopBar(p) {
       { label: 'Project notes', icon: StickyNote, onSelect: p.onOpenNotes },
     ] },
     { id: 'view', label: 'View', items: [
+      { label: p.timelineHidden ? 'Show timeline' : 'Hide timeline', icon: AudioLines, onSelect: p.onToggleTimeline },
       { label: 'Layout…', icon: LayoutPanelLeft, onSelect: p.onOpenLayout },
       { label: 'Reset layout', icon: RotateCcw, onSelect: p.onResetLayout },
       { label: 'Appearance…', icon: Palette, onSelect: openAppearance },
@@ -178,7 +177,6 @@ export default function TopBar(p) {
       { label: 'Compare with original', icon: GitCompare, onSelect: p.onOpenDiff, disabled: !hasSegments },
     ] },
     { id: 'tools', label: 'Tools', items: [
-      { label: 'Transcribe', icon: Sparkles, onSelect: p.onTranscribe, disabled: !p.canTranscribe || p.isTranscribing },
       { label: 'Translate…', icon: Languages, onSelect: p.onOpenTranslate, disabled: !hasSegments },
       { label: 'Quality check', icon: ShieldCheck, onSelect: p.onOpenQc, disabled: !hasSegments },
     ] },
@@ -213,23 +211,19 @@ export default function TopBar(p) {
       <input ref={importRef} type="file" accept=".srt,.vtt,.txt" className="hidden"
         onChange={(e) => { const f = e.target.files?.[0]; if (f) p.onImportSubtitles(f); e.target.value = ''; }} />
 
-      {/* Centre: the media file, then the transcription settings (hidden on the start screen, which has its own) */}
-      <div className="flex-1 min-w-0 flex items-center justify-center gap-2 px-2 overflow-hidden">
-        <div className="hidden min-[1500px]:flex min-w-0">
+      {/* Centre: the one set of media controls, always visible: media file, language and script, Transcribe */}
+      <div className="flex-1 min-w-0 flex items-center justify-center gap-2 px-2">
         <button
           type="button" onClick={pickMedia} disabled={p.isExtractingAudio}
-          className="ts-btn min-w-0" style={{ maxWidth: 240 }} title={p.filename ? `${p.filename} (click to change)` : 'Import a video or audio file'}
+          className="ts-btn min-w-0" style={{ maxWidth: 'min(240px, 28vw)' }} title={p.filename ? `${p.filename} (click to change media)` : 'Import a video or audio file'}
         >
           {p.isExtractingAudio ? <Loader2 size={14} className="animate-spin shrink-0" /> : <Upload size={14} className="shrink-0" />}
           <span className="truncate">{p.isExtractingAudio ? 'Preparing audio' : p.filename || 'Import media'}</span>
         </button>
-        </div>
-        {showTranscribeControls && (<>
-          <TranscribeSettings language={p.language} script={p.script} setLanguage={p.setLanguage} setScript={p.setScript} />
-          <button type="button" className="ts-btn ts-btn-primary" disabled={!p.canTranscribe || p.isTranscribing} onClick={p.onTranscribe}>
-            {p.isTranscribing ? <><Loader2 size={14} className="animate-spin" /> {Math.round(p.progressPercent)}%</> : <><Sparkles size={14} /> {label('Transcribe')}</>}
-          </button>
-        </>)}
+        <TranscribeSettings language={p.language} script={p.script} setLanguage={p.setLanguage} setScript={p.setScript} />
+        <button type="button" className="ts-btn ts-btn-primary shrink-0" disabled={!p.canTranscribe || p.isTranscribing || p.isExtractingAudio} onClick={p.onTranscribe} title={p.canTranscribe ? 'Transcribe this media' : 'Import media first'}>
+          {p.isTranscribing ? <><Loader2 size={14} className="animate-spin" /> {Math.round(p.progressPercent)}%</> : <><Sparkles size={14} /> Transcribe</>}
+        </button>
       </div>
 
       <div className="flex items-center gap-1.5 shrink-0">

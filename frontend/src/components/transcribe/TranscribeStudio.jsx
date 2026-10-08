@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { Upload } from 'lucide-react';
 import './transcribe.css';
 import TopBar from './TopBar';
 import SpeakerRail from './SpeakerRail';
@@ -28,6 +29,7 @@ import { loadCast, saveCast, findCastMember } from './castUtils';
 export default function TranscribeStudio(p) {
   const studio = useTranscribeLayout(Boolean(p.user));
   const { layout } = studio;
+  const timelineHidden = layout.timelinePos === 'hidden';
   const [showLayout, setShowLayout] = useState(false);
   const [filterSpeaker, setFilterSpeaker] = useState(null);
   const [mediaBus] = useState(createMediaBus);
@@ -226,6 +228,7 @@ export default function TranscribeStudio(p) {
         user={p.user} onOpenLogoutModal={p.onOpenLogoutModal}
         onOpenSpeakers={() => setShowSpeakers(true)} speakersOpen={showSpeakers}
         onOpenLayout={() => setShowLayout(true)} onResetLayout={studio.reset}
+        timelineHidden={layout.timelinePos === 'hidden'} onToggleTimeline={() => studio.patch({ timelinePos: layout.timelinePos === 'hidden' ? 'bottom' : 'hidden' })}
         onOpenTranslate={openTranslate} translateOpen={showTranslate}
         onOpenQc={() => (showQc ? setShowQc(false) : openQc())} qcOpen={showQc} centroidQcIssues={centroidState.qcIssues}
       />
@@ -295,22 +298,44 @@ export default function TranscribeStudio(p) {
           <EmptyState
             filename={p.canTranscribe ? p.filename : null} isExtractingAudio={p.isExtractingAudio} extractionNotice={p.extractionNotice} onCancelExtract={p.onCancelExtract}
             onDropFile={(file) => p.onFileSelect({ target: { files: [file] } })}
-            onTranscribe={p.onTranscribe} onOpenProjects={p.onOpenProjects} video={video}
-            language={p.language} setLanguage={p.setLanguage} script={p.script} setScript={p.setScript}
+            onOpenProjects={p.onOpenProjects} video={video}
           />
         )
       )}
       {!hasSegments && p.isTranscribing && <div className="flex-1" />}
 
-      {p.audioUrl && layout.timelinePos !== 'hidden' && (<>
+      {/* Timeline dock. The audio element lives inside the timeline, so it stays mounted (collapsed) when hidden. */}
+      {timelineHidden && (hasSegments || p.audioUrl) && (
+        <div className="flex items-center gap-2 shrink-0 px-3" style={{ height: 34, background: 'var(--ts-panel)', borderTop: '1px solid var(--ts-line)' }}>
+          <span style={{ color: 'var(--ts-muted)' }}>Timeline is hidden</span>
+          <button type="button" className="ts-btn ts-btn-sm ts-btn-primary" onClick={() => studio.patch({ timelinePos: 'bottom' })}>Show timeline</button>
+          <button type="button" className="ts-btn ts-btn-sm ts-btn-ghost" onClick={studio.reset} title="Back to the default layout">Reset layout</button>
+        </div>
+      )}
+      {!timelineHidden && p.audioUrl && (
         <Splitter
           axis="y" sign={-1} label="Resize timeline" thickness={cards ? layout.gap || 6 : 6}
           value={layout.timelineH || Math.max(310, Math.round(window.innerHeight * 0.42))} min={TIMELINE_MIN} max={LIMITS.timelineH[1]}
           onChange={(v) => studio.patch({ timelineH: v })} onReset={() => studio.patch({ timelineH: 0 })}
         />
+      )}
+      {!timelineHidden && !p.audioUrl && hasSegments && (
+        <div
+          className="flex items-center justify-center gap-3 shrink-0 px-3"
+          style={{ height: 96, background: 'var(--ts-panel)', borderTop: '1px solid var(--ts-line)', color: 'var(--ts-muted)' }}
+        >
+          <span>No media loaded, so there is no waveform or timeline.</span>
+          <button type="button" className="ts-btn ts-btn-primary" onClick={() => document.getElementById('ts-media-input')?.click()}>
+            <Upload size={14} /> Import media
+          </button>
+        </div>
+      )}
+      {p.audioUrl && (
         <footer
           className="shrink-0 min-h-0"
-          style={{ background: 'var(--ts-panel)', borderTop: '1px solid var(--ts-line)', height: layout.timelineH || '42vh', minHeight: layout.timelineH ? undefined : 310, maxHeight: '75vh', ...(cards ? { margin: `0 ${layout.gap}px ${layout.gap}px`, borderRadius: layout.radius, border: '1px solid var(--ts-line)', overflow: 'hidden' } : {}) }}
+          style={timelineHidden
+            ? { height: 0, overflow: 'hidden', visibility: 'hidden' }
+            : { background: 'var(--ts-panel)', borderTop: '1px solid var(--ts-line)', height: layout.timelineH ? `min(${layout.timelineH}px, 60vh)` : '42vh', minHeight: layout.timelineH ? undefined : 310, maxHeight: '75vh', ...(cards ? { margin: `0 ${layout.gap}px ${layout.gap}px`, borderRadius: layout.radius, border: '1px solid var(--ts-line)', overflow: 'hidden' } : {}) }}
         >
           <TranscribeTimeline
             audioUrl={p.audioUrl}
@@ -329,7 +354,7 @@ export default function TranscribeStudio(p) {
             onPlayStateChange={(playing) => mediaBus.emit({ playing })}
           />
         </footer>
-      </>)}
+      )}
 
       {/* Kept mounted so translations and QC results survive closing the panels */}
       <CentroidModal
