@@ -9,6 +9,7 @@ import SegmentEditor from './components/SegmentEditor';
 import ExportModal from './components/subtitle/SubtitleExportModal';
 import GuidelinesModal from './components/GuidelinesModal';
 import ProjectsModal from './components/ProjectsModal';
+import { readTranscribeDraft, removeTranscribeDraft, transcribeDraftKey } from './components/transcribe/localDrafts';
 import SrtPreviewModal from './components/SrtPreviewModal';
 import StatsModal from './components/StatsModal';
 import SpeakerCustomizerModal from './components/SpeakerCustomizerModal';
@@ -543,6 +544,8 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
   const [historyIndex, setHistoryIndex] = useState(-1);
 
   const [showProjectsModal, setShowProjectsModal] = useState(false);
+  // Earlier work found for the media just opened: { name, local (browser draft), server (newest saved project) }
+  const [pendingDraft, setPendingDraft] = useState(null);
   const [showReloadConfirmModal, setShowReloadConfirmModal] = useState(false);
   const [savedProjects, setSavedProjects] = useState([]);
   const [isLoadingProjects, setIsLoadingProjects] = useState(false);
@@ -665,7 +668,7 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
     const fileId = selectedFile?.name || transcriptionResult?.filename || 'draft_audio';
     const timer = setTimeout(() => {
       try {
-        localStorage.setItem(`karya_autosave_${fileId}`, JSON.stringify({
+        localStorage.setItem(transcribeDraftKey(fileId), JSON.stringify({
           segments,
           complianceScore,
           totalErrors,
@@ -682,6 +685,67 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
     return () => clearTimeout(timer);
   }, [segments, complianceScore, totalErrors, totalWarnings, selectedFile, transcriptionResult]);
 
+  // A video/audio opened again: look for a draft from this browser and the newest saved project with the same file name
+  const findEarlierWork = async (name) => {
+    const local = readTranscribeDraft(name);
+    setPendingDraft(local ? { name, local, server: null } : null);
+    try {
+      const res = await fetch(`${API_BASE}/api/projects`);
+      if (!res.ok) return;
+      const data = await res.json();
+      const wanted = (name || '').toLowerCase();
+      const server = (data.projects || [])
+        .filter((p) => (p.filename || '').toLowerCase() === wanted && p.segment_count > 0)
+        .sort((a, b) => new Date(b.updated_at || b.created_at || 0) - new Date(a.updated_at || a.created_at || 0))[0] || null;
+      if (!server) return;
+      setPendingDraft((prev) => (prev && prev.name !== name ? prev : { name, local: prev?.local || local, server }));
+    } catch { /* offline: the browser draft is still offered */ }
+  };
+
+  const restoreSegments = (segs, score, errors, warnings, language, script) => {
+    setSegments(segs);
+    setOriginalSegments(JSON.parse(JSON.stringify(segs)));
+    setHistory([segs]);
+    setHistoryIndex(0);
+    if (language) setTargetLanguage(language);
+    if (script) setTargetScript(script);
+    setComplianceScore(score ?? 100.0);
+    setTotalErrors(errors || 0);
+    setTotalWarnings(warnings || 0);
+    if (segs.length > 0) setActiveSegmentId(segs[0].segment_id);
+  };
+
+  const handleRestoreLocalDraft = () => {
+    const d = pendingDraft?.local;
+    if (!d) return;
+    restoreSegments(d.segments, d.complianceScore, d.totalErrors, d.totalWarnings);
+    setPendingDraft(null);
+    setDbSaveToast('Draft restored ✓');
+    setTimeout(() => setDbSaveToast(''), 2500);
+  };
+
+  // Restores the saved project's text onto the media that is already loaded (unlike handleLoadProject, which swaps the media)
+  const handleRestoreServerProject = async () => {
+    const proj = pendingDraft?.server;
+    if (!proj) return;
+    try {
+      const res = await fetch(`${API_BASE}/api/projects/${proj.id}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      restoreSegments(data.segments || [], data.compliance_score, data.total_errors, data.total_warnings, data.language, data.script);
+      setPendingDraft(null);
+      setDbSaveToast(`Restored saved project: ${data.filename}`);
+      setTimeout(() => setDbSaveToast(''), 3000);
+    } catch (err) {
+      console.error('Failed to restore project:', err);
+    }
+  };
+
+  const handleStartFresh = () => {
+    if (pendingDraft) removeTranscribeDraft(pendingDraft.name);
+    setPendingDraft(null);
+  };
+
   const handleFileSelect = async (e) => {
     const file = e.target.files?.[0];
     if (file) {
@@ -693,6 +757,7 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
       setTotalWarnings(0);
       setProgressPercent(0);
       setExtractedAudioName('');
+      findEarlierWork(file.name);
 
       const isVideo = Boolean(
         file.type?.startsWith('video/') ||
@@ -1278,6 +1343,10 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
     const intent = takeLaunchIntent('transcribe');
     if (intent?.file) handleFileSelect({ target: { files: [intent.file] } });
     else if (intent?.projectId) handleLoadProject(intent.projectId);
+    else if (intent?.draftName) {
+      const d = readTranscribeDraft(intent.draftName);
+      if (d) restoreSegments(d.segments, d.complianceScore, d.totalErrors, d.totalWarnings);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1461,6 +1530,19 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
 
   return (
     <div>
+      {pendingDraft && (pendingDraft.local || pendingDraft.server) && (
+        <div role="alert" style={{ position: 'fixed', top: 12, left: '50%', transform: 'translateX(-50%)', zIndex: 60, maxWidth: 'min(92vw, 640px)', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10, padding: '10px 14px', borderRadius: 12, background: 'var(--kt-s2, #1c1c1f)', border: '1px solid var(--kt-accent, #7c9)', color: '#e5e7eb', boxShadow: '0 8px 30px rgba(0,0,0,.45)', fontSize: 13 }}>
+          <span style={{ flex: '1 1 220px' }}>
+            Found earlier work for <strong>{pendingDraft.name}</strong>
+            {pendingDraft.local ? ` · browser draft, ${pendingDraft.local.segments.length} segments${pendingDraft.local.timestamp ? ` (${new Date(pendingDraft.local.timestamp).toLocaleString()})` : ''}` : ''}
+            {pendingDraft.server ? ` · saved project, ${pendingDraft.server.segment_count} segments` : ''}
+          </span>
+          {pendingDraft.local && <button type="button" className="ts-btn ts-btn-primary" onClick={handleRestoreLocalDraft}>Restore draft</button>}
+          {pendingDraft.server && <button type="button" className="ts-btn" onClick={handleRestoreServerProject}>Restore saved project</button>}
+          <button type="button" className="ts-btn" onClick={handleStartFresh} title="Delete the browser draft and start with a blank transcript">Start fresh</button>
+          <button type="button" className="ts-btn" onClick={() => setPendingDraft(null)} title="Decide later; the draft stays under Saved projects">Later</button>
+        </div>
+      )}
       <TranscribeStudio
         user={user}
         onOpenLogoutModal={onOpenLogoutModal}
@@ -1595,6 +1677,7 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
         isOpen={showProjectsModal}
         onClose={() => setShowProjectsModal(false)}
         projects={savedProjects}
+        onRestoreDraft={(name) => { const d = readTranscribeDraft(name); if (d) restoreSegments(d.segments, d.complianceScore, d.totalErrors, d.totalWarnings); }}
         isLoading={isLoadingProjects}
         onRefresh={fetchProjects}
         onLoadProject={handleLoadProject}
