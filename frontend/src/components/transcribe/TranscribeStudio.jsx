@@ -253,7 +253,7 @@ export default function TranscribeStudio(p) {
       {!hasSegments && p.isTranscribing && <div className="flex-1" />}
 
       {p.audioUrl && (
-        <footer className="shrink-0" style={{ background: 'var(--ts-panel)', borderTop: '1px solid var(--ts-line)', height: '38vh', minHeight: 260 }}>
+        <footer className="shrink-0" style={{ background: 'var(--ts-panel)', borderTop: '1px solid var(--ts-line)', height: '42vh', minHeight: 310 }}>
           <TranscribeTimeline
             audioUrl={p.audioUrl}
             videoUrl={p.videoUrl}

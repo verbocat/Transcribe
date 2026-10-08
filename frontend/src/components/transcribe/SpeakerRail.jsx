@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Users, ArrowLeftRight } from 'lucide-react';
+import { Users } from 'lucide-react';
 import { formatClock } from './speakerUtils';
 
 const GENDERS = [
@@ -106,11 +106,6 @@ export default function SpeakerRail({ roster, filterSpeaker, onFilter, onRename,
           <button type="button" className="ts-btn ts-btn-sm" onClick={onOpenCast} title="Characters and genders for this show">
             Cast{cast.length ? ` (${cast.length})` : ''}
           </button>
-          {roster.length >= 2 && (
-            <button type="button" className="ts-btn ts-btn-sm ts-btn-ghost" onClick={onOpenBulk} title="Swap two speakers' labels">
-              <ArrowLeftRight size={13} /> Swap
-            </button>
-          )}
         </div>
       </div>
 

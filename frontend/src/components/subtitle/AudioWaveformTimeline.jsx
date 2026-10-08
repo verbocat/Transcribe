@@ -49,7 +49,7 @@ function getSpeakerPreset(spk, idx = 0) {
 const TimelineSubtitleBlock = React.memo(function TimelineSubtitleBlock({
   event, zoomLevel, isActive, effectiveDuration, cplLimit, cpsLimit,
   setActiveEventId, onSeek, handleMouseDown, onContextMenu,
-  isInternalSeekRef, scrollRef,
+  isInternalSeekRef, scrollRef, hideText,
 }) {
   const start  = event.start_time ?? event.start ?? 0;
   const end    = event.end_time   ?? event.end   ?? 0;
@@ -62,7 +62,7 @@ const TimelineSubtitleBlock = React.memo(function TimelineSubtitleBlock({
   const rawLen = stripFormatting(text).trim().length;
   const cps    = rawLen / dur;
   const maxCpl = Math.max(...stripFormatting(text).split('\n').map(l => l.trim().length), 0);
-  const hasErr = cps > cpsLimit || maxCpl > cplLimit || dur < 0.833 || dur > 7;
+  const hasErr = !hideText && cps > cpsLimit || maxCpl > cplLimit || dur < 0.833 || dur > 7;
 
   return (
     <div
@@ -107,7 +107,7 @@ const TimelineSubtitleBlock = React.memo(function TimelineSubtitleBlock({
         style={{ pointerEvents: 'auto' }}
       >
         <span className="ss-script text-[12px] font-medium leading-tight truncate select-none">
-          {text ? stripFormatting(text).replace(/\n/g, ' ') : `#${id}`}
+          {hideText ? '' : (text ? stripFormatting(text).replace(/\n/g, ' ') : `#${id}`)}
         </span>
       </div>
 
@@ -183,6 +183,7 @@ export default function AudioWaveformTimeline({
   cpsLimit = 20,
   cplLimit = 42,
   theme = 'dark',
+  hideBlockText = false,
 }) {
   const [zoomLevel, setZoomLevel] = useState(70);
   const [waveformPeaks, setWaveformPeaks] = useState(initialPeaks || []);
@@ -825,10 +826,11 @@ export default function AudioWaveformTimeline({
       </div>
 
       {/* ── Multi-Track Workspace ── */}
-      <div className="flex flex-1 min-h-0 relative overflow-hidden">
+      <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden custom-scrollbar">
+      <div className="flex relative" style={{ minHeight: '100%' }}>
 
         {/* LEFT TRACK LABELS COLUMN (Eye Button + Track Icon Side by Side) */}
-        <div className="shrink-0 border-r border-[var(--ss-line)] bg-[var(--ss-panel)] relative z-30 select-none" style={{ width: `${LABEL_W}px` }}>
+        <div className="shrink-0 border-r border-[var(--ss-line)] bg-[var(--ss-panel)] sticky left-0 z-30 select-none" style={{ width: `${LABEL_W}px`, height: `${totalH}px` }}>
           {/* Ruler Top Spacer */}
           <div style={{ height: `${RULER_H}px` }} className="border-b border-[var(--ss-line)] bg-[var(--ss-panel)] flex items-center justify-center">
             <span className="text-[9px] font-mono text-slate-600 tracking-widest">TC</span>
@@ -854,7 +856,7 @@ export default function AudioWaveformTimeline({
         {/* SCROLLABLE TRACKS BODY */}
         <div
           ref={scrollRef}
-          className="relative flex-1 overflow-x-auto overflow-y-hidden cursor-crosshair custom-scrollbar min-h-0 bg-[var(--ss-bg)]"
+          className="relative flex-1 overflow-x-auto overflow-y-hidden cursor-crosshair custom-scrollbar bg-[var(--ss-bg)]"
           onClick={onTrackClick}
           onMouseDown={onTrackMouseDown}
         >
@@ -945,6 +947,7 @@ export default function AudioWaveformTimeline({
                       onContextMenu={handleBlockContextMenu}
                       isInternalSeekRef={isInternalSeekRef}
                       scrollRef={scrollRef}
+                      hideText={hideBlockText}
                     />
                   );
                 })}
@@ -1034,6 +1037,7 @@ export default function AudioWaveformTimeline({
 
           </div>
         </div>
+      </div>
       </div>
 
       {/* ── Right-Click Context Menu (Fixed Viewport Clamped) ── */}
