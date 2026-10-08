@@ -86,7 +86,6 @@ class AuthSession(AuthBase):
     is_active = Column(Boolean, default=True, nullable=False)
     operating_location = Column(String(64), nullable=True)
     device_info = Column(String(255), nullable=True)
-    takeover_lockout_until = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     user = relationship("User", back_populates="sessions")
@@ -124,25 +123,6 @@ class AuthFailedAttempt(AuthBase):
     email = Column(String(255), index=True, nullable=True)
     ip_address = Column(String(64), index=True, nullable=False)
     attempt_time = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
-
-
-class SessionTakeoverRequest(AuthBase):
-    """
-    Represents an interactive session takeover challenge when a user
-    attempts to log in from Device B while Device A has an active session.
-    Gives Device A a 60-second window to 'Keep Working' or yields to Device B.
-    """
-    __tablename__ = "auth_session_takeovers"
-
-    id = Column(String(64), primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id = Column(String(64), ForeignKey("auth_users.id", ondelete="CASCADE"), nullable=False, index=True)
-    existing_session_id = Column(String(64), ForeignKey("auth_sessions.id", ondelete="CASCADE"), nullable=False)
-    new_session_token = Column(String(128), nullable=False)
-    new_operating_location = Column(String(64), nullable=True)
-    new_device_info = Column(String(255), nullable=False)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
-    expires_at = Column(DateTime, nullable=False)  # created_at + 60 seconds
-    status = Column(String(32), default="pending", nullable=False)  # pending, rejected, approved, expired
 
 
 class UserMediaAsset(AuthBase):
