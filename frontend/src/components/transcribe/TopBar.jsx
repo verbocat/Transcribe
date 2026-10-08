@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   ArrowLeft, Sparkles, Upload, Undo2, Redo2, Download, Save, Loader2, Check,
   FolderOpen, BarChart2, GitCompare, StickyNote, BookOpen, FileUp, Clapperboard, Languages, Palette, ShieldCheck, Square,
-  Users, LayoutPanelLeft, RotateCcw, ChevronDown
+  Users, LayoutPanelLeft, RotateCcw, ChevronDown, MoreHorizontal
 } from 'lucide-react';
 import BrandLogo from '../BrandLogo';
 import StudioMenuBar from '../subtitle/StudioMenuBar';
@@ -47,16 +47,15 @@ function usePopover() {
 function TranscribeSettings({ language, script, setLanguage, setScript }) {
   const { open, setOpen, ref } = usePopover();
   const langLabel = (LANGUAGES.find(([v]) => v === language) || [null, language])[1].replace(/ \(.*\)$/, '');
-  const scriptLabel = (SCRIPTS.find(([v]) => v === script) || [null, script])[1].replace(/ \/.*$/, '');
   return (
     <div className="relative" ref={ref}>
-      <button type="button" className="ts-btn" onClick={() => setOpen(!open)} aria-expanded={open} aria-haspopup="dialog" title="Language and script of the transcript">
+      <button type="button" className="ts-btn ts-btn-sm" onClick={() => setOpen(!open)} aria-expanded={open} aria-haspopup="dialog" title="Language and script settings">
         <Languages size={14} className="shrink-0" />
-        <span className="truncate" style={{ maxWidth: 190 }}>{langLabel}<span style={{ color: 'var(--ts-faint)' }}> · {scriptLabel}</span></span>
-        <ChevronDown size={13} className="shrink-0" style={{ color: 'var(--ts-faint)' }} />
+        <span className="truncate" style={{ maxWidth: 120 }}>{langLabel}</span>
+        <ChevronDown size={12} className="shrink-0" style={{ color: 'var(--ts-faint)' }} />
       </button>
       {open && (
-        <div className="ts-popover" role="dialog" aria-label="Transcription settings" style={{ left: '50%', right: 'auto', transform: 'translateX(-50%)', width: 280, padding: 12 }}>
+        <div className="ts-popover" role="dialog" aria-label="Transcription settings" style={{ left: '50%', right: 'auto', transform: 'translateX(-50%)', width: 260, padding: 12 }}>
           <label style={{ display: 'block', fontSize: 12, color: 'var(--ts-muted)', marginBottom: 4 }}>Language</label>
           <select className="ts-field" style={{ width: '100%' }} value={language} onChange={(e) => setLanguage(e.target.value)} aria-label="Language">
             {LANGUAGES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
@@ -75,15 +74,15 @@ function ExportMenu({ formats, onToggle, onDownload, onDubbing, isExporting, has
   const { open, setOpen, ref } = usePopover();
   if (isExporting && onCancelExport) {
     return (
-      <button type="button" className="ts-btn" onClick={onCancelExport} title="Stop the export">
-        <Square size={14} /> Cancel export
+      <button type="button" className="ts-btn ts-btn-sm" onClick={onCancelExport} title="Stop the export">
+        <Square size={14} /> Cancel
       </button>
     );
   }
   return (
     <div className="relative" ref={ref}>
-      <button type="button" className="ts-btn" disabled={!hasSegments} onClick={() => setOpen(!open)} aria-expanded={open} aria-haspopup="menu">
-        <Download size={14} /> <span className="hidden xl:inline">Export</span>
+      <button type="button" className="ts-btn ts-btn-ghost ts-btn-icon" disabled={!hasSegments} onClick={() => setOpen(!open)} aria-expanded={open} aria-haspopup="menu" title="Export">
+        <Download size={16} />
       </button>
       {open && (
         <div className="ts-popover" role="menu" style={{ width: 320 }}>
@@ -143,6 +142,49 @@ function ExportMenu({ formats, onToggle, onDownload, onDubbing, isExporting, has
   );
 }
 
+/** More actions dropdown — consolidates less-used actions into a single icon button */
+function MoreActionsMenu({ p, hasSegments, importRef }) {
+  const { open, setOpen, ref } = usePopover();
+  const pickMedia = () => document.getElementById('ts-media-input')?.click();
+  return (
+    <div className="relative" ref={ref}>
+      <button type="button" className="ts-btn ts-btn-ghost ts-btn-icon" onClick={() => setOpen(!open)} title="More actions" aria-expanded={open} aria-haspopup="menu">
+        <MoreHorizontal size={16} />
+      </button>
+      {open && (
+        <div className="ts-popover" role="menu" style={{ width: 260 }}>
+          <button type="button" className="ts-menu-item" onClick={() => { setOpen(false); pickMedia(); }} disabled={p.isExtractingAudio}>
+            <Upload size={14} /> <span className="flex-1">{p.filename ? 'Change media…' : 'Import media…'}</span>
+          </button>
+          <button type="button" className="ts-menu-item" onClick={() => { setOpen(false); importRef.current?.click(); }}>
+            <FileUp size={14} /> <span className="flex-1">Import subtitle file…</span>
+          </button>
+          <button type="button" className="ts-menu-item" onClick={() => { setOpen(false); p.onOpenProjects(); }}>
+            <FolderOpen size={14} /> <span className="flex-1">Saved projects…</span>
+          </button>
+          <div role="separator" className="h-px my-1.5 mx-2" style={{ background: 'var(--ts-line)' }} />
+          <button type="button" className="ts-menu-item" disabled={!hasSegments} onClick={() => { setOpen(false); p.onOpenStats(); }}>
+            <BarChart2 size={14} /> <span className="flex-1">Statistics</span>
+          </button>
+          <button type="button" className="ts-menu-item" disabled={!hasSegments} onClick={() => { setOpen(false); p.onOpenDiff(); }}>
+            <GitCompare size={14} /> <span className="flex-1">Compare with original</span>
+          </button>
+          <button type="button" className="ts-menu-item" onClick={() => { setOpen(false); p.onOpenNotes(); }}>
+            <StickyNote size={14} /> <span className="flex-1">Project notes</span>
+          </button>
+          <div role="separator" className="h-px my-1.5 mx-2" style={{ background: 'var(--ts-line)' }} />
+          <button type="button" className="ts-menu-item" onClick={() => { setOpen(false); p.onOpenGuidelines(); }}>
+            <BookOpen size={14} /> <span className="flex-1">Guidelines</span>
+          </button>
+          <button type="button" className="ts-menu-item" onClick={() => { setOpen(false); openAppearance(); }}>
+            <Palette size={14} /> <span className="flex-1">Appearance…</span>
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function TopBar(p) {
   const importRef = useRef(null);
   const hasSegments = p.segmentCount > 0;
@@ -187,25 +229,22 @@ export default function TopBar(p) {
     ] },
   ];
 
-  // Labels fold into icons on narrower windows so nothing is pushed off screen
-  const label = (text) => <span className="hidden min-[1500px]:inline">{text}</span>;
-
   return (
-    <header className="flex items-center gap-2 px-3 shrink-0 select-none" style={{ height: 52, background: 'var(--ts-panel)', borderBottom: '1px solid var(--ts-line)' }}>
-      <button type="button" className="ts-btn ts-btn-ghost ts-btn-icon" title="Back to home" aria-label="Back to home" onClick={p.onBackToHome}>
-        <ArrowLeft size={16} />
-      </button>
+    <header className="ts-topbar">
+      {/* Left group: logo + menu bar */}
+      <div className="ts-topbar-left">
+        <button type="button" className="ts-btn ts-btn-ghost ts-btn-icon" title="Back to home" aria-label="Back to home" onClick={p.onBackToHome} style={{ width: 28, height: 28 }}>
+          <ArrowLeft size={15} />
+        </button>
 
-      <div className="flex items-center gap-3 shrink-0" style={{ paddingLeft: 4, paddingRight: 8 }}>
-        <BrandLogo variant="wordmark" size={28} />
-        <span className="hidden 2xl:flex"><span className="ts-chip ts-chip-accent" style={{ height: 22, fontWeight: 600, fontSize: 11 }}>Transcribe</span></span>
-      </div>
+        <BrandLogo variant="wordmark" size={24} />
 
-      <span style={{ width: 1, height: 20, background: 'var(--ts-line)' }} aria-hidden="true" />
+        <span className="ts-topbar-divider" aria-hidden="true" />
 
-      <div className="shrink-0">
-        <div className="hidden xl:block"><StudioMenuBar menus={menus} /></div>
-        <div className="xl:hidden"><StudioMenuBar menus={menus} compact /></div>
+        <div className="shrink-0">
+          <div className="hidden xl:block"><StudioMenuBar menus={menus} /></div>
+          <div className="xl:hidden"><StudioMenuBar menus={menus} compact /></div>
+        </div>
       </div>
 
       <input id="ts-media-input" type="file" className="hidden" onChange={p.onFileSelect}
@@ -213,60 +252,59 @@ export default function TopBar(p) {
       <input ref={importRef} type="file" accept=".srt,.vtt,.txt" className="hidden"
         onChange={(e) => { const f = e.target.files?.[0]; if (f) p.onImportSubtitles(f); e.target.value = ''; }} />
 
-      {/* Centre: the media file, then the transcription settings (hidden on the start screen, which has its own) */}
-      <div className="flex-1 min-w-0 flex items-center justify-center gap-2 px-2 overflow-hidden">
-        <div className="hidden min-[1500px]:flex min-w-0">
-        <button
-          type="button" onClick={pickMedia} disabled={p.isExtractingAudio}
-          className="ts-btn min-w-0" style={{ maxWidth: 240 }} title={p.filename ? `${p.filename} (click to change)` : 'Import a video or audio file'}
-        >
-          {p.isExtractingAudio ? <Loader2 size={14} className="animate-spin shrink-0" /> : <Upload size={14} className="shrink-0" />}
-          <span className="truncate">{p.isExtractingAudio ? 'Preparing audio' : p.filename || 'Import media'}</span>
-        </button>
-        </div>
+      {/* Centre: transcription controls (only when active) */}
+      <div className="ts-topbar-center">
         {showTranscribeControls && (<>
           <TranscribeSettings language={p.language} script={p.script} setLanguage={p.setLanguage} setScript={p.setScript} />
-          <button type="button" className="ts-btn ts-btn-primary" disabled={!p.canTranscribe || p.isTranscribing} onClick={p.onTranscribe}>
-            {p.isTranscribing ? <><Loader2 size={14} className="animate-spin" /> {Math.round(p.progressPercent)}%</> : <><Sparkles size={14} /> {label('Transcribe')}</>}
+          <button type="button" className="ts-btn ts-btn-primary ts-btn-sm" disabled={!p.canTranscribe || p.isTranscribing} onClick={p.onTranscribe}>
+            {p.isTranscribing ? <><Loader2 size={14} className="animate-spin" /> {Math.round(p.progressPercent)}%</> : <><Sparkles size={14} /> <span className="hidden sm:inline">Transcribe</span></>}
           </button>
         </>)}
-      </div>
 
-      <div className="flex items-center gap-1.5 shrink-0">
         {hasSegments && (
-          <span className="hidden 2xl:flex">
-            <span className={`ts-chip ${passing ? 'ts-chip-accent' : p.totalErrors ? 'ts-chip-danger' : 'ts-chip-warn'}`} title={`${p.totalErrors} errors, ${p.totalWarnings} warnings`}>
-              {p.complianceScore?.toFixed(1)}%
-            </span>
+          <span className={`ts-chip ${passing ? 'ts-chip-accent' : p.totalErrors ? 'ts-chip-danger' : 'ts-chip-warn'}`} title={`${p.totalErrors} errors, ${p.totalWarnings} warnings`} style={{ height: 22, fontSize: 11 }}>
+            {p.complianceScore?.toFixed(1)}%
           </span>
         )}
+      </div>
 
-        <div className="hidden min-[1500px]:flex items-center gap-1.5">
-          <button type="button" className="ts-btn ts-btn-ghost ts-btn-icon" title="Undo (Ctrl+Z)" aria-label="Undo" disabled={!p.canUndo} onClick={p.onUndo}><Undo2 size={15} /></button>
-          <button type="button" className="ts-btn ts-btn-ghost ts-btn-icon" title="Redo (Ctrl+Y)" aria-label="Redo" disabled={!p.canRedo} onClick={p.onRedo}><Redo2 size={15} /></button>
-          <span style={{ width: 1, height: 20, background: 'var(--ts-line)' }} aria-hidden="true" />
-        </div>
+      {/* Right group: icon buttons for key actions + overflow */}
+      <div className="ts-topbar-right">
+        <button type="button" className={`ts-btn ts-btn-ghost ts-btn-icon ${p.speakersOpen ? 'ts-topbar-active' : ''}`} disabled={!hasSegments} onClick={p.onOpenSpeakers} aria-pressed={p.speakersOpen} title="Speakers">
+          <Users size={16} />
+        </button>
+        <button type="button" className={`ts-btn ts-btn-ghost ts-btn-icon ${p.translateOpen ? 'ts-topbar-active' : ''}`} disabled={!hasSegments} onClick={p.onOpenTranslate} aria-pressed={p.translateOpen} title="Translate">
+          <Languages size={16} />
+        </button>
+        <button type="button" className={`ts-btn ts-btn-ghost ts-btn-icon ${p.qcOpen ? 'ts-topbar-active' : ''}`} disabled={!hasSegments} onClick={p.onOpenQc} aria-pressed={p.qcOpen} title={`QC${p.centroidQcIssues != null ? ` · ${p.centroidQcIssues} issues` : ''}`}>
+          <ShieldCheck size={16} />
+          {p.centroidQcIssues != null && <span className="ts-topbar-badge">{p.centroidQcIssues}</span>}
+        </button>
 
-        <button type="button" className={`ts-btn ${p.speakersOpen ? 'ts-chip-accent' : ''}`} disabled={!hasSegments} onClick={p.onOpenSpeakers} aria-pressed={p.speakersOpen} title="Speaker identification: name each speaker, merge or move lines">
-          <Users size={14} /> {label('Speakers')}
+        <span className="ts-topbar-divider" aria-hidden="true" />
+
+        <button type="button" className="ts-btn ts-btn-ghost ts-btn-icon" disabled={!p.canUndo} onClick={p.onUndo} title="Undo (Ctrl+Z)" aria-label="Undo">
+          <Undo2 size={15} />
         </button>
-        <button type="button" className={`ts-btn ${p.translateOpen ? 'ts-chip-accent' : ''}`} disabled={!hasSegments} onClick={p.onOpenTranslate} aria-pressed={p.translateOpen} title="Translate the transcript with Centroid">
-          <Languages size={14} /> {label('Translate')}
+        <button type="button" className="ts-btn ts-btn-ghost ts-btn-icon" disabled={!p.canRedo} onClick={p.onRedo} title="Redo (Ctrl+Y)" aria-label="Redo">
+          <Redo2 size={15} />
         </button>
-        <button type="button" className={`ts-btn ${p.qcOpen ? 'ts-chip-accent' : ''}`} disabled={!hasSegments} onClick={p.onOpenQc} aria-pressed={p.qcOpen} title="Karya checks and Centroid translation QC">
-          <ShieldCheck size={14} /> {label('QC')}{p.centroidQcIssues != null ? ` · ${p.centroidQcIssues}` : ''}
-        </button>
-        <button type="button" className="ts-btn" disabled={!hasSegments || p.isSaving} onClick={p.onSave} title="Save to cloud (Ctrl+S)">
-          {p.isSaving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} {label('Save')}
+
+        <span className="ts-topbar-divider" aria-hidden="true" />
+
+        <button type="button" className="ts-btn ts-btn-ghost ts-btn-icon" disabled={!hasSegments || p.isSaving} onClick={p.onSave} title="Save to cloud (Ctrl+S)" aria-label="Save">
+          {p.isSaving ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}
         </button>
         <ExportMenu
           formats={p.exportFormats} onToggle={p.onToggleFormat} onDownload={p.onDownload}
           onDubbing={p.onDubbing} isExporting={p.isExporting} hasSegments={hasSegments} onCancelExport={p.onCancelExport}
           lang={p.exportLang} langOptions={p.exportLangOptions} onLang={p.onExportLang}
         />
-        <button type="button" className="ts-btn ts-btn-ghost ts-btn-icon" title="Layout: arrange the screen" aria-label="Layout" onClick={p.onOpenLayout}>
+        <button type="button" className="ts-btn ts-btn-ghost ts-btn-icon" title="Layout" aria-label="Layout" onClick={p.onOpenLayout}>
           <LayoutPanelLeft size={15} />
         </button>
+
+        <MoreActionsMenu p={p} hasSegments={hasSegments} importRef={importRef} />
 
         {p.user && <NotificationBellDropdown />}
         {p.user && <AccountMenuDropdown user={p.user} onOpenLogoutModal={p.onOpenLogoutModal} />}

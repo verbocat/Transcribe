@@ -305,12 +305,12 @@ export default function TranscribeStudio(p) {
       {p.audioUrl && layout.timelinePos !== 'hidden' && (<>
         <Splitter
           axis="y" sign={-1} label="Resize timeline" thickness={cards ? layout.gap || 6 : 6}
-          value={layout.timelineH || Math.max(310, Math.round(window.innerHeight * 0.42))} min={TIMELINE_MIN} max={LIMITS.timelineH[1]}
+          value={layout.timelineH || 240} min={TIMELINE_MIN} max={LIMITS.timelineH[1]}
           onChange={(v) => studio.patch({ timelineH: v })} onReset={() => studio.patch({ timelineH: 0 })}
         />
         <footer
           className="shrink-0 min-h-0"
-          style={{ background: 'var(--ts-panel)', borderTop: '1px solid var(--ts-line)', height: layout.timelineH || '42vh', minHeight: layout.timelineH ? undefined : 310, maxHeight: '75vh', ...(cards ? { margin: `0 ${layout.gap}px ${layout.gap}px`, borderRadius: layout.radius, border: '1px solid var(--ts-line)', overflow: 'hidden' } : {}) }}
+          style={{ background: 'var(--ts-panel)', borderTop: '1px solid var(--ts-line)', height: layout.timelineH || 240, minHeight: 180, maxHeight: '60vh', ...(cards ? { margin: `0 ${layout.gap}px ${layout.gap}px`, borderRadius: layout.radius, border: '1px solid var(--ts-line)', overflow: 'hidden' } : {}) }}
         >
           <TranscribeTimeline
             audioUrl={p.audioUrl}
