@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
+import '../qc/qc.css';
 import { createPortal } from 'react-dom';
 import {
   X, Languages, ShieldCheck, Download, Check, AlertTriangle, Wand2, Loader2, ChevronDown,
@@ -585,7 +586,7 @@ export default function CentroidModal({
 
   const notReady = status && (!status.configured || !status.reachable);
   const qcBody = (
- <div className="flex-1 min-h-0 overflow-y-auto space-y-4 pr-0.5" data-lenis-prevent>
+ <div className="flex-1 min-h-0 overflow-y-auto space-y-4 pr-1" data-lenis-prevent>
     {notReady && (
       <Notice tone="warn">
         {!status.configured ? 'Centroid is not connected. Add CENTROID_API_URL and CENTROID_API_KEY to backend/.env and restart the backend.' : `Centroid could not be reached${status.error ? ` (${status.error})` : ''}. Check CENTROID_API_URL and the API key.`}
@@ -609,9 +610,9 @@ export default function CentroidModal({
               ]}
             />
           </Field>
-          <Button variant="primary" size="lg" icon={qcBusy ? Loader2 : ShieldCheck} disabled={qcBusy || !qcTarget || notReady} onClick={() => runQcFor(qcTarget, results, snapshot)}>
-            {qcBusy ? 'Checking…' : qc ? 'Run again' : 'Run Centroid QC'}
-          </Button>
+          <button type="button" className="qc-btn qc-btn-primary" disabled={qcBusy || !qcTarget || notReady} onClick={() => runQcFor(qcTarget, results, snapshot)}>
+            {qcBusy ? <Loader2 size={16} className="animate-spin" /> : <ShieldCheck size={16} />} {qcBusy ? 'Checking…' : qc ? 'Run again' : 'Run Centroid QC'}
+          </button>
         </section>
 
         {qcBusy && <Notice tone="good"><span className="inline-flex items-center gap-2"><Loader2 size={13} className="animate-spin" /> Centroid is reviewing every cue against its source. This can take a minute.</span></Notice>}
@@ -619,76 +620,67 @@ export default function CentroidModal({
 
         {qc && (
           <>
-            <div className="grid grid-cols-4 gap-2">
-              <Stat label="MQM score" value={qc.summary.mqm_score} tone={qc.summary.mqm_score >= 95 ? 'good' : qc.summary.mqm_score >= 85 ? 'warn' : 'bad'} />
-              <Stat label="Errors" value={qc.summary.error_count} tone={qc.summary.error_count ? 'bad' : 'good'} />
-              <Stat label="Warnings" value={qc.summary.warning_count} tone={qc.summary.warning_count ? 'warn' : 'good'} />
-              <Stat label="Clean cues" value={`${qc.summary.clean_percentage}%`} tone="good" />
+            <div className="qc-score">
+              <span className={`qc-score-num ${qc.summary.mqm_score >= 95 ? 'qc-good' : qc.summary.mqm_score >= 85 ? 'qc-warn' : 'qc-bad'}`}>{qc.summary.mqm_score}</span>
+              <div className="min-w-0">
+                <div className="qc-score-label">Translation score</div>
+                <div className="qc-score-sub">{qc.summary.error_count} {qc.summary.error_count === 1 ? 'error' : 'errors'}, {qc.summary.warning_count} {qc.summary.warning_count === 1 ? 'warning' : 'warnings'}, {qc.summary.clean_percentage}% of cues clean</div>
+              </div>
             </div>
             {qc.centroid_error && <Notice tone="warn">Centroid’s AI review could not run this time, so only the built-in rule checks are shown. Run QC again to retry.</Notice>}
             {!qc.summary.ai_checked && !qc.centroid_error && <Notice tone="warn">The AI review didn’t complete for part of the file, so only rule-based checks are shown for it. Run QC again to retry.</Notice>}
 
             {qcNote && <Notice tone="good">{qcNote}</Notice>}
 
-            <div className="flex items-center gap-2">
-              <span className="text-[12px] text-[var(--ss-muted)]">{openIssues.length} to review{fixedIssues.length ? ` · ${fixedIssues.length} fixed` : ''}</span>
-              <span className="flex-1" />
-              {fixable > 0 && <Button variant="primary" icon={Wand2} onClick={applyAll}>Apply all {fixable} fixes</Button>}
-            </div>
+            {fixable > 0 && (
+              <button type="button" className="qc-btn qc-btn-primary qc-btn-block" onClick={applyAll}>
+                <Wand2 size={18} /> Apply all {fixable} fixes
+              </button>
+            )}
 
             {openIssues.length === 0 && <Notice tone="good">{fixedIssues.length ? 'All issues are fixed. Run QC again to confirm.' : 'No issues found. The translation passed Centroid QC.'}</Notice>}
+            {openIssues.length > 0 && <h4 className="qc-section-title">{openIssues.length} to review{fixedIssues.length ? ` · ${fixedIssues.length} fixed` : ''}</h4>}
 
-            {issueGroups.map((g) => (
-              <section key={g.key} className="space-y-2.5">
-                <h4 className="flex items-center gap-2 text-[12px] font-semibold text-[var(--ss-text)]">
-                  <Badge tone={g.tone}>{g.items.length}</Badge>{g.title}
-                </h4>
-                {g.items.map((i) => {
-                  const jumpId = jumpIdFor(i);
-                  return (
-                    <article key={i.key} className="rounded-xl border border-[var(--ss-line)] bg-[var(--ss-raised)]/50 p-3 text-[12.5px] space-y-2">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-mono text-[11.5px] text-[var(--ss-faint)]">#{i.index} · {fmtTime(i.start)}</span>
-                        <Badge tone={i.severity === 'error' ? 'danger' : 'warn'}>{i.mqm_severity}</Badge>
-                        <span className="font-medium">{i.title}</span>
-                        {i.category && <Badge tone="muted">{String(i.category).replace(/-/g, ' ')}</Badge>}
-                        <span className="text-[11px] text-[var(--ss-faint)]">{i.origin === 'ai' ? 'AI review' : 'Rule check'}</span>
-                        {jumpId != null && onJumpToEvent && (
-                          <IconButton size="sm" icon={Crosshair} label="Show this subtitle in the editor" className="ml-auto" onClick={() => onJumpToEvent(jumpId)} />
-                        )}
-                      </div>
-                      <p className="text-[var(--ss-muted)] leading-snug">{i.description}</p>
-                      <div className="grid grid-cols-2 gap-2">
-                        <div><div className="text-[11px] text-[var(--ss-faint)]">Source</div><div className="whitespace-pre-wrap">{i.source}</div></div>
-                        <div><div className="text-[11px] text-[var(--ss-faint)]">Current</div><div className="whitespace-pre-wrap text-[var(--ss-danger)]">{i.target || '(empty)'}</div></div>
-                      </div>
-                      {(i.suggestion || i.suggestion_end != null) && (
-                        <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 px-2.5 py-2">
-                          <div className="text-[11px] text-emerald-400">Suggested fix</div>
-                          {i.suggestion && <div className="whitespace-pre-wrap text-emerald-100">{i.suggestion}</div>}
-                          {i.suggestion_end != null && <div className="text-emerald-100">Show until {fmtTime(i.suggestion_end)} (now {fmtTime(i.end)})</div>}
-                        </div>
-                      )}
-                      <div className="flex gap-2">
-                        {(i.suggestion || i.suggestion_end != null) && <Button size="sm" variant="primary" icon={Check} onClick={() => applyFixes([i])}>Apply fix</Button>}
-                        <Button size="sm" variant="ghost" onClick={() => dropIssue(i.key)}>Dismiss</Button>
-                      </div>
-                    </article>
-                  );
-                })}
-              </section>
-            ))}
+            {issueGroups.flatMap((g) => g.items).map((i) => {
+              const jumpId = jumpIdFor(i);
+              const canFix = i.suggestion || i.suggestion_end != null;
+              return (
+                <article key={i.key} className="qc-finding" data-sev={i.severity === 'error' ? 'error' : 'warning'}>
+                  <div className="qc-finding-meta">
+                    <span>Cue #{i.index}</span><span>{fmtTime(i.start)}</span>
+                    {i.category && <span>{String(i.category).replace(/-/g, ' ')}</span>}
+                  </div>
+                  <p className="qc-finding-msg">{i.title}</p>
+                  <p className="qc-finding-hint">{i.description}</p>
+                  <div className="qc-pair">
+                    <div><div className="qc-pair-label">Source</div><div className="whitespace-pre-wrap">{i.source}</div></div>
+                    <div><div className="qc-pair-label">Current</div><div className="whitespace-pre-wrap qc-bad">{i.target || '(empty)'}</div></div>
+                  </div>
+                  {canFix && (
+                    <div className="qc-finding-fix">
+                      <div className="qc-pair-label">Suggested fix</div>
+                      {i.suggestion && <div>{i.suggestion}</div>}
+                      {i.suggestion_end != null && <div>Show until {fmtTime(i.suggestion_end)} (now {fmtTime(i.end)})</div>}
+                    </div>
+                  )}
+                  <div className="qc-finding-actions">
+                    {canFix && <button type="button" className="qc-btn qc-btn-primary" onClick={() => applyFixes([i])}><Check size={16} /> Apply fix</button>}
+                    {jumpId != null && onJumpToEvent && <button type="button" className="qc-btn" onClick={() => onJumpToEvent(jumpId)}><Crosshair size={16} /> Go to cue</button>}
+                    <button type="button" className="qc-btn qc-btn-quiet" onClick={() => dropIssue(i.key)}>Dismiss</button>
+                  </div>
+                </article>
+              );
+            })}
 
             {fixedIssues.length > 0 && (
-              <section className="rounded-xl border border-emerald-500/25 bg-emerald-500/5">
-                <button type="button" aria-expanded={showResolved} onClick={() => setShowResolved((v) => !v)} className="w-full h-9 px-3 flex items-center gap-2 text-[12px] text-emerald-300 cursor-pointer">
-                  {showResolved ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                  <Check size={13} /> Fixed ({fixedIssues.length})
+              <section>
+                <button type="button" aria-expanded={showResolved} onClick={() => setShowResolved((v) => !v)} className="qc-btn qc-btn-quiet">
+                  {showResolved ? <ChevronDown size={16} /> : <ChevronRight size={16} />} <Check size={16} className="qc-good" /> Fixed ({fixedIssues.length})
                 </button>
                 {showResolved && (
-                  <ul className="px-3 pb-2 space-y-1.5 text-[12px]">
+                  <ul className="pt-2 pl-2 space-y-2 qc-finding-hint">
                     {fixedIssues.map((i) => (
-                      <li key={i.key}><span className="font-mono text-[11px] text-[var(--ss-faint)]">#{i.index}</span> <span className="whitespace-pre-wrap text-emerald-100">{i.suggestion || i.title}</span></li>
+                      <li key={i.key}><b>#{i.index}</b> <span className="whitespace-pre-wrap">{i.suggestion || i.title}</span></li>
                     ))}
                   </ul>
                 )}

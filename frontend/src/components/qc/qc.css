@@ -1,0 +1,72 @@
+/*
+ * Shared look for both QC panels (Transcribe Studio, Subtitle Studio).
+ * Reads only --ss-* tokens, which both studios define, so it follows the theme.
+ */
+.qc-panel {
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--ss-text);
+}
+/* Every word is selectable and copyable, even inside studios that disable selection for the editor chrome. */
+.qc-panel,
+.qc-panel * {
+  -webkit-user-select: text;
+  user-select: text;
+}
+.qc-panel button,
+.qc-panel summary,
+.qc-panel [role="radio"],
+.qc-panel .qc-nosel {
+  -webkit-user-select: none;
+  user-select: none;
+}
+.qc-panel ::selection { background: rgba(var(--kt-accent-rgb), 0.35); }
+
+.qc-score {
+  display: flex; align-items: center; gap: 14px; padding: 16px;
+  border: 1px solid var(--ss-line); border-radius: 14px; background: var(--ss-raised);
+}
+.qc-score-num { font-size: 36px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
+.qc-score-label { font-size: 16px; font-weight: 600; }
+.qc-score-sub { font-size: 14px; color: var(--ss-muted); }
+.qc-good { color: var(--ss-accent); }
+.qc-warn { color: var(--ss-warn); }
+.qc-bad { color: var(--ss-danger); }
+
+.qc-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  min-height: 40px; padding: 0 16px; border-radius: 10px; font-size: 15px; font-weight: 600;
+  border: 1px solid var(--ss-line); background: var(--ss-raised); color: var(--ss-text); cursor: pointer;
+}
+.qc-btn:hover:not(:disabled) { background: var(--ss-hover); }
+.qc-btn:disabled { opacity: .45; cursor: not-allowed; }
+.qc-btn-primary { background: var(--ss-accent); border-color: var(--ss-accent); color: var(--ss-accent-ink); }
+.qc-btn-primary:hover:not(:disabled) { background: var(--ss-accent-hover); }
+.qc-btn-block { width: 100%; min-height: 46px; font-size: 16px; }
+.qc-btn-quiet { background: transparent; border-color: transparent; color: var(--ss-muted); font-weight: 500; }
+
+.qc-section-title { font-size: 14px; font-weight: 700; letter-spacing: .02em; color: var(--ss-muted); margin: 4px 0 8px; }
+
+.qc-finding {
+  border: 1px solid var(--ss-line); border-left-width: 4px; border-radius: 12px;
+  background: var(--ss-raised); padding: 14px; display: flex; flex-direction: column; gap: 8px;
+}
+.qc-finding[data-sev="error"] { border-left-color: var(--ss-danger); }
+.qc-finding[data-sev="warning"] { border-left-color: var(--ss-warn); }
+.qc-finding-meta { font-size: 13px; color: var(--ss-muted); display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.qc-finding-msg { font-size: 16px; font-weight: 500; overflow-wrap: anywhere; }
+.qc-finding-hint { font-size: 14px; color: var(--ss-muted); overflow-wrap: anywhere; }
+.qc-finding-fix { font-size: 15px; padding: 10px 12px; border-radius: 10px; background: rgba(var(--kt-accent-rgb), .12); border: 1px solid rgba(var(--kt-accent-rgb), .35); white-space: pre-wrap; overflow-wrap: anywhere; }
+.qc-finding-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.qc-pair { display: grid; gap: 8px; font-size: 15px; }
+.qc-pair-label { font-size: 12.5px; color: var(--ss-faint); }
+
+.qc-more > summary { cursor: pointer; list-style: none; font-size: 15px; font-weight: 600; color: var(--ss-muted); padding: 10px 2px; }
+.qc-more > summary::-webkit-details-marker { display: none; }
+.qc-more[open] > summary { color: var(--ss-text); }
+.qc-more-body { display: flex; flex-direction: column; gap: 8px; padding-bottom: 8px; }
+.qc-kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 14px; }
+.qc-kv dt { color: var(--ss-muted); } .qc-kv dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+
+/* Segmented control inside a QC panel: larger tabs */
+.qc-panel .qc-seg { height: 40px; font-size: 15px; }

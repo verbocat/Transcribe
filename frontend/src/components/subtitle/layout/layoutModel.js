@@ -24,7 +24,7 @@ export const DEFAULT_LAYOUT = {
   listMinW: 420,
   maximize: 'none',       // none | video | list | timeline
   qcDock: 'overlay',      // overlay | right | left | bottom
-  qcSize: 384,
+  qcSize: 460,
   showHeader: true,
   menuStyle: 'full',      // full | compact (one hamburger menu)
   showMediaPill: true,
@@ -54,7 +54,7 @@ export const LIMITS = {
   videoH: [140, 720, 4],
   timelineH: [80, 640, 2],
   listMinW: [260, 900, 10],
-  qcSize: [260, 640, 4],
+  qcSize: [320, 760, 4],
   gap: [0, 16, 1],
   radius: [0, 24, 1],
   splitter: [2, 14, 1],
@@ -92,7 +92,7 @@ export const BUILTIN_PRESETS = [
   { id: 'stacked', name: 'Stacked', hint: 'Video on top, list beneath', layout: make({ videoPos: 'top', videoH: 340, timelineH: 190 }) },
   { id: 'timeline-pro', name: 'Timeline pro', hint: 'Tall waveform for precise timing', layout: make({ videoW: 420, timelineH: 380 }) },
   { id: 'mirrored', name: 'Mirrored', hint: 'Video and tools on the right', layout: make({ videoPos: 'right', sidebar: 'right' }) },
-  { id: 'review', name: 'QC review', hint: 'QC report docked beside the list', layout: make({ videoW: 460, timelineH: 170, qcDock: 'right', qcSize: 360 }) },
+  { id: 'review', name: 'QC review', hint: 'QC report docked beside the list', layout: make({ videoW: 460, timelineH: 170, qcDock: 'right', qcSize: 460 }) },
   { id: 'under-list', name: 'Tall video', hint: 'Video full height, timeline under the list', layout: make({ videoW: 520, timelineSpan: 'list', timelineH: 240 }) },
   { id: 'top-timeline', name: 'Timeline on top', hint: 'Waveform above the workspace', layout: make({ timelinePos: 'top', videoW: 480 }) },
   { id: 'cards', name: 'Floating cards', hint: 'Rounded panes with breathing room', layout: make({ paneStyle: 'cards', gap: 10, radius: 14, splitter: 4, videoW: 520 }) },

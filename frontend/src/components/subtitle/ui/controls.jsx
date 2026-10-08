@@ -161,7 +161,7 @@ export function Segmented({ value, options, onChange, label, className }) {
             disabled={o.disabled}
             onClick={() => onChange(o.value)}
             className={cx(
-              'flex-1 min-w-0 h-7 px-2 rounded-md inline-flex items-center justify-center gap-1.5 text-[12px] font-medium cursor-pointer transition-colors disabled:opacity-40 disabled:cursor-not-allowed',
+              'flex-1 min-w-0 h-7 qc-seg px-2 rounded-md inline-flex items-center justify-center gap-1.5 text-[12px] font-medium cursor-pointer transition-colors disabled:opacity-40 disabled:cursor-not-allowed',
               on ? 'bg-[var(--ss-accent)] text-[var(--ss-accent-ink)]' : 'text-[var(--ss-muted)] hover:text-[var(--ss-text)] hover:bg-[var(--ss-raised)]',
             )}
           >
