@@ -51,6 +51,17 @@ export function startJob(apiBase, { id } = {}) {
   return job;
 }
 
+/** Races a promise against an AbortSignal: rejects with CancelledError as soon as the signal aborts (the work itself keeps running unseen). */
+export function abortable(promise, signal) {
+  if (!signal) return promise;
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) { reject(new CancelledError()); return; }
+    const onAbort = () => reject(new CancelledError());
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
+  });
+}
+
 /** Sleep that ends early (throwing CancelledError) when the job is cancelled. */
 export function sleepCancellable(ms, signal) {
   return new Promise((resolve, reject) => {
