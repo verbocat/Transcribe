@@ -15,17 +15,17 @@ export default function LoginPage({ onSwitchToSignup, onSwitchToForgotPassword, 
   // Step 1 Form fields
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [operatingLocation, setOperatingLocation] = useState('');
+  // Sign-in method: 'password' signs in directly; 'otp' emails a one-time code instead
+  const [method, setMethod] = useState('password');
   const [showPassword, setShowPassword] = useState(false);
 
-  // Step state: 'credentials' | 'otp_gate' (password OK, waiting for the user to ask for a code) | 'mfa' | 'takeover_waiting'
+  // Step state: 'credentials' | 'mfa' (code emailed, waiting for it) | 'takeover_waiting'
   const [step, setStep] = useState('credentials');
   const [challengeId, setChallengeId] = useState('');
   const [maskedEmail, setMaskedEmail] = useState('');
   const [otp, setOtp] = useState('');
   const [mfaExpiresIn, setMfaExpiresIn] = useState(300);
   const [resendCooldown, setResendCooldown] = useState(0);
-  const [isRequestingOtp, setIsRequestingOtp] = useState(false);
 
   // Brute-force lockout state
   const [lockoutSeconds, setLockoutSeconds] = useState(0);
@@ -141,7 +141,7 @@ export default function LoginPage({ onSwitchToSignup, onSwitchToForgotPassword, 
     }
   };
 
-  // Step 1: Submit email + password
+  // Step 1: Submit email + password (password method) or email only (OTP method)
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (clearSessionNotice) clearSessionNotice();
@@ -156,7 +156,6 @@ export default function LoginPage({ onSwitchToSignup, onSwitchToForgotPassword, 
 
     const cleanEmail = email.trim().toLowerCase();
 
-    // 1. Email check
     if (!cleanEmail) {
       setError('Please enter your email address.');
       return;
@@ -167,19 +166,11 @@ export default function LoginPage({ onSwitchToSignup, onSwitchToForgotPassword, 
       return;
     }
 
-    // 2. Operating location check
-    if (!operatingLocation) {
-      setError('Please select where you are operating from (In Office or Remote).');
-      return;
-    }
-
-    // 3. Password presence check
-    if (!password) {
+    if (method === 'password' && !password) {
       setError('Please enter your password.');
       return;
     }
 
-    // 4. Bot challenge check if required
     if (botChallenge && !botAnswer.trim()) {
       setError('Please solve the security verification question.');
       return;
@@ -195,29 +186,9 @@ export default function LoginPage({ onSwitchToSignup, onSwitchToForgotPassword, 
     setError('');
 
     try {
-      const data = await loginUser({
-        email: cleanEmail,
-        password,
-        operating_location: operatingLocation,
-        bot_challenge_token: challengeToken
-      });
-
-      // Password accepted. No email has been sent: the user must choose "Login with OTP" first.
-      if (data.mfa_required && data.otp_sent === false) {
-        setProcessModalOpen(false);
-        setChallengeId(data.challenge_id);
-        setMaskedEmail(data.email_masked || cleanEmail);
-        setInfoMessage('');
-        setStep('otp_gate');
-        setBotChallenge(null);
-        setBotAnswer('');
-        setPassword('');
-        return;
-      }
-
-      // If MFA Challenge was generated and a code was already sent (older servers)
-      if (data.mfa_required) {
-        setProcessModalOpen(false);
+      if (method === 'otp') {
+        // OTP sign-in: email the code, then ask for it on the next step
+        const data = await requestLoginOtp({ email: cleanEmail, bot_challenge_token: challengeToken });
         setChallengeId(data.challenge_id);
         setMaskedEmail(data.email_masked || cleanEmail);
         setMfaExpiresIn(data.expires_in_seconds || 300);
@@ -230,7 +201,25 @@ export default function LoginPage({ onSwitchToSignup, onSwitchToForgotPassword, 
         return;
       }
 
-      // If direct login token returned (fallback)
+      // Password sign-in: a correct password signs in directly, no code needed
+      const data = await loginUser({
+        email: cleanEmail,
+        password,
+        bot_challenge_token: challengeToken
+      });
+
+      // Another workstation is signed in: wait for its owner to allow or decline
+      if (data.takeover_pending) {
+        setTakeoverId(data.takeover_id);
+        setExistingDevice(data.existing_device || 'Active Workstation');
+        setTakeoverRemainingSeconds(data.wait_seconds || 60);
+        setStep('takeover_waiting');
+        setPassword('');
+        setBotChallenge(null);
+        setBotAnswer('');
+        return;
+      }
+
       setProcessStage('initializing');
       setProcessModalOpen(true);
       await new Promise(r => setTimeout(r, 450));
@@ -246,13 +235,13 @@ export default function LoginPage({ onSwitchToSignup, onSwitchToForgotPassword, 
       login(data.token, data.user);
     } catch (err) {
       setProcessModalOpen(false);
-      const errMsg = err.message || 'Invalid email or password. Please verify your credentials.';
+      const errMsg = err.message || (method === 'otp' ? 'Could not send the code. Please try again.' : 'Invalid email or password. Please verify your credentials.');
       setProcessStage('error');
       setProcessError(errMsg);
       setError(errMsg);
 
-      // Check if locked out (429)
-      if (err.status === 429 || errMsg.toLowerCase().includes('locked')) {
+      // Check if locked out (429), but not the plain "wait before requesting another code" cooldown
+      if (err.status === 429 && errMsg.toLowerCase().includes('locked')) {
         setLockoutSeconds(900); // 15 minutes
       }
 
@@ -264,7 +253,7 @@ export default function LoginPage({ onSwitchToSignup, onSwitchToForgotPassword, 
       }
 
       // Check if bot challenge required (403 or message trigger)
-      if ((err.status === 403 && !errMsg.toLowerCase().includes('declined')) || errMsg.toLowerCase().includes('verification required') || errMsg.toLowerCase().includes('puzzle') || errMsg.toLowerCase().includes('security verification')) {
+      if ((err.status === 403 && !errMsg.toLowerCase().includes('declined') && !errMsg.toLowerCase().includes('not been verified') && !errMsg.toLowerCase().includes('suspended')) || errMsg.toLowerCase().includes('verification required') || errMsg.toLowerCase().includes('puzzle') || errMsg.toLowerCase().includes('security verification')) {
         loadBotChallenge();
       }
 
@@ -365,38 +354,12 @@ export default function LoginPage({ onSwitchToSignup, onSwitchToForgotPassword, 
     }
   };
 
-  // "Login with OTP": only now is a code generated and emailed
-  const handleRequestOtp = async () => {
-    if (isRequestingOtp) return;
-    setIsRequestingOtp(true);
-    setError('');
-    setInfoMessage('');
-    try {
-      const data = await requestLoginOtp({ challenge_id: challengeId });
-      if (data.email_masked) setMaskedEmail(data.email_masked);
-      setMfaExpiresIn(data.expires_in_seconds || 300);
-      setResendCooldown(data.resend_cooldown_seconds || 60);
-      setInfoMessage(data.message || 'A 6-digit code has been sent to your email.');
-      setOtp('');
-      setStep('mfa');
-    } catch (err) {
-      const msg = err.message || 'Could not send the code. Please try again.';
-      setError(msg);
-      // The sign-in attempt timed out or was invalidated: start over from the password
-      if (err.status === 404 || err.status === 400) {
-        setStep('credentials');
-        setChallengeId('');
-      }
-    } finally {
-      setIsRequestingOtp(false);
-    }
-  };
-
   const handleBackToCredentials = () => {
     setStep('credentials');
     setChallengeId('');
     setTakeoverId('');
     setOtp('');
+    setPassword('');
     setError('');
     setInfoMessage('');
   };
@@ -426,7 +389,7 @@ export default function LoginPage({ onSwitchToSignup, onSwitchToForgotPassword, 
         }`}>
           {step === 'takeover_waiting' ? (
             <Monitor size={22} className="text-amber-500" />
-          ) : step === 'mfa' || step === 'otp_gate' ? (
+          ) : step === 'mfa' ? (
             <ShieldCheck size={22} className={isDark ? 'text-[var(--kt-accent)]' : 'text-blue-600'} />
           ) : (
             <BrandLogo size={30} />
@@ -435,10 +398,8 @@ export default function LoginPage({ onSwitchToSignup, onSwitchToForgotPassword, 
         <h1 className={`text-lg sm:text-xl font-extrabold tracking-tight ${isDark ? 'text-white' : 'text-slate-900'}`}>
           {step === 'takeover_waiting' ? (
             <>Active <span className="text-amber-400 drop-shadow-[0_0_10px_rgba(245,158,11,0.35)]">Workstation</span></>
-          ) : step === 'otp_gate' ? (
-            <>Password <span className={`${isDark ? 'text-[var(--kt-accent)]' : 'text-blue-600'} drop-shadow-[0_0_10px_rgba(var(--kt-accent-rgb),0.35)]`}>Verified</span></>
           ) : step === 'mfa' ? (
-            <>Two-Step <span className={`${isDark ? 'text-[var(--kt-accent)]' : 'text-blue-600'} drop-shadow-[0_0_10px_rgba(var(--kt-accent-rgb),0.35)]`}>Verification</span></>
+            <>Enter <span className={`${isDark ? 'text-[var(--kt-accent)]' : 'text-blue-600'} drop-shadow-[0_0_10px_rgba(var(--kt-accent-rgb),0.35)]`}>Code</span></>
           ) : (
             <>Lower <span className={`${isDark ? 'text-[var(--kt-accent)]' : 'text-blue-600'} drop-shadow-[0_0_10px_rgba(var(--kt-accent-rgb),0.35)]`}>Third</span></>
           )}
@@ -446,8 +407,6 @@ export default function LoginPage({ onSwitchToSignup, onSwitchToForgotPassword, 
         <p className={`text-xs mt-0.5 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
           {step === 'takeover_waiting' ? (
             'Resolving single active session with currently logged in device'
-          ) : step === 'otp_gate' ? (
-            'One more step: sign in with a one-time code'
           ) : step === 'mfa' ? (
             'Enter the temporary 6-digit code sent to your email'
           ) : (
@@ -467,7 +426,7 @@ export default function LoginPage({ onSwitchToSignup, onSwitchToForgotPassword, 
           <div>
             <div className={`font-bold ${isDark ? 'text-rose-200' : 'text-rose-950'}`}>Account Temporarily Locked</div>
             <div className={`mt-0.5 text-[11px] ${isDark ? 'text-rose-300/90' : 'text-rose-800'}`}>
-              Too many failed password attempts. Access is locked for: <strong className={`font-mono ${isDark ? 'text-white' : 'text-rose-950 font-bold'}`}>{formatTimer(lockoutSeconds)}</strong>
+              Too many failed attempts. Access is locked for: <strong className={`font-mono ${isDark ? 'text-white' : 'text-rose-950 font-bold'}`}>{formatTimer(lockoutSeconds)}</strong>
             </div>
           </div>
         </div>
@@ -564,6 +523,27 @@ export default function LoginPage({ onSwitchToSignup, onSwitchToForgotPassword, 
       {/* STEP 1: CREDENTIALS FORM */}
       {step === 'credentials' && (
         <form onSubmit={handleSubmit} className="space-y-2.5">
+          {/* Sign-in method */}
+          <div role="tablist" aria-label="Sign-in method" className={`grid grid-cols-2 gap-1 p-1 rounded-xl border ${isDark ? 'bg-[var(--kt-s0)] border-[var(--kt-s4)]' : 'bg-slate-100 border-slate-200'}`}>
+            {[['password', 'Password', Lock], ['otp', 'OTP', Mail]].map(([key, label, Icon]) => (
+              <button
+                key={key}
+                type="button"
+                role="tab"
+                aria-selected={method === key}
+                onClick={() => { setMethod(key); setError(''); setInfoMessage(''); }}
+                className={`py-1.5 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer border-0 ${
+                  method === key
+                    ? (isDark ? 'bg-[var(--kt-accent)] text-black shadow-sm' : 'bg-white text-blue-700 shadow-sm')
+                    : (isDark ? 'bg-transparent text-slate-400 hover:text-white' : 'bg-transparent text-slate-500 hover:text-slate-800')
+                }`}
+              >
+                <Icon size={13} />
+                <span>{label}</span>
+              </button>
+            ))}
+          </div>
+
           {/* Email */}
           <div>
             <label className={`block text-[11px] mb-1 tracking-wide ${isDark ? 'text-slate-400 font-semibold' : 'text-slate-700 font-semibold'}`}>
@@ -595,32 +575,8 @@ export default function LoginPage({ onSwitchToSignup, onSwitchToForgotPassword, 
             )}
           </div>
 
-          {/* Operating Location */}
-          <div>
-            <label className={`block text-[11px] mb-1 tracking-wide ${isDark ? 'text-slate-400 font-semibold' : 'text-slate-700 font-semibold'}`}>
-              Operating Location <span className={isDark ? 'text-[var(--kt-accent)]' : 'text-blue-600'}>*</span>
-            </label>
-            <div className="relative flex items-center">
-              <Building2 size={16} className={`absolute left-3 pointer-events-none ${isDark ? 'text-slate-500' : 'text-slate-400'}`} />
-              <select
-                value={operatingLocation}
-                onChange={(e) => setOperatingLocation(e.target.value)}
-                required
-                disabled={lockoutSeconds > 0}
-                className={`w-full pl-9 pr-8 py-2 border rounded-lg text-xs outline-none transition-all appearance-none cursor-pointer disabled:opacity-50 ${
-                  isDark
-                    ? 'bg-[var(--kt-s0)] border-[var(--kt-s4)] text-white focus:border-[var(--kt-accent)] focus:ring-1 focus:ring-[var(--kt-accent)]'
-                    : 'bg-slate-50 border-slate-300 text-slate-900 focus:border-blue-600 focus:bg-white focus:ring-1 focus:ring-blue-600/20'
-                }`}
-              >
-                <option value="">Select where you are operating from...</option>
-                <option value="In Office">🏢 In Office</option>
-                <option value="Remote">🏠 Remote</option>
-              </select>
-            </div>
-          </div>
-
-          {/* Password */}
+          {/* Password (password method only) */}
+          {method === 'password' && (
           <div>
             <div className="flex items-center justify-between mb-1">
               <label className={`text-[11px] tracking-wide ${isDark ? 'text-slate-400 font-semibold' : 'text-slate-700 font-semibold'}`}>
@@ -666,6 +622,7 @@ export default function LoginPage({ onSwitchToSignup, onSwitchToForgotPassword, 
               </button>
             </div>
           </div>
+          )}
 
           {/* Bot Defense Challenge (Shown after 2 failed attempts) */}
           {botChallenge && (
@@ -719,63 +676,18 @@ export default function LoginPage({ onSwitchToSignup, onSwitchToForgotPassword, 
             {isSubmitting ? (
               <>
                 <Loader2 size={16} className="animate-spin" />
-                <span>Checking password...</span>
+                <span>{method === 'otp' ? 'Sending code...' : 'Signing in...'}</span>
               </>
             ) : lockoutSeconds > 0 ? (
               <span>Locked ({formatTimer(lockoutSeconds)})</span>
             ) : (
               <>
-                <span>Continue</span>
+                <span>{method === 'otp' ? 'Send me a code' : 'Sign In'}</span>
                 <ArrowRight size={15} />
               </>
             )}
           </button>
         </form>
-      )}
-
-      {/* STEP 1.5: password accepted; the code is only emailed when the user asks for it */}
-      {step === 'otp_gate' && (
-        <div className="space-y-4 animate-in fade-in">
-          <div className="p-3 bg-[var(--kt-s0)] border border-[var(--kt-s4)] rounded-xl text-center">
-            <span className="text-[11px] text-slate-400 block mb-1">Signing in as</span>
-            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[var(--kt-s2)] border border-[var(--kt-s5)] text-xs font-mono text-[var(--kt-accent)]">
-              <Mail size={12} />
-              <span>{maskedEmail}</span>
-            </div>
-          </div>
-
-          <p className="text-[11.5px] text-slate-400 text-center leading-relaxed">
-            Your password was accepted. To finish signing in, request a one-time code. It is only emailed after you tap the button below.
-          </p>
-
-          <button
-            type="button"
-            onClick={handleRequestOtp}
-            disabled={isRequestingOtp}
-            className="w-full py-2.5 px-4 rounded-xl text-xs font-bold bg-[var(--kt-accent)] hover:bg-[var(--kt-accent)] text-[var(--kt-accent-ink)] transition-all shadow-[0_0_20px_rgba(var(--kt-accent-rgb),0.3)] hover:shadow-[0_0_25px_rgba(var(--kt-accent-rgb),0.45)] cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {isRequestingOtp ? (
-              <>
-                <Loader2 size={16} className="animate-spin" />
-                <span>Sending code...</span>
-              </>
-            ) : (
-              <>
-                <Mail size={15} />
-                <span>Login with OTP</span>
-              </>
-            )}
-          </button>
-
-          <button
-            type="button"
-            onClick={handleBackToCredentials}
-            className="w-full text-xs text-slate-400 hover:text-white flex items-center justify-center gap-1.5 transition-colors cursor-pointer bg-transparent border-0 p-1"
-          >
-            <ArrowLeft size={14} />
-            <span>Back to Sign In</span>
-          </button>
-        </div>
       )}
 
       {/* STEP 2: MFA OTP VERIFICATION */}

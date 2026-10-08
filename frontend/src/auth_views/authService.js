@@ -23,7 +23,7 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 12000) {
 /**
  * Authentication API Client for VerboLabs Auth
  */
-export async function signupUser({ name, email, password, confirm_password, employee_id }) {
+export async function signupUser({ name, email, password, confirm_password }) {
   const base = getApiBase();
   const res = await fetchWithTimeout(`${base}/api/auth/signup`, {
     method: 'POST',
@@ -32,8 +32,7 @@ export async function signupUser({ name, email, password, confirm_password, empl
       name,
       email,
       password,
-      confirm_password,
-      employee_id: employee_id || null
+      confirm_password
     })
   }, 15000);
 
@@ -44,16 +43,14 @@ export async function signupUser({ name, email, password, confirm_password, empl
   return data;
 }
 
-export async function loginUser({ name, email, password, operating_location, bot_challenge_token }) {
+export async function loginUser({ email, password, bot_challenge_token }) {
   const base = getApiBase();
   const res = await fetchWithTimeout(`${base}/api/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      name: name || null,
       email,
       password,
-      operating_location,
       bot_challenge_token: bot_challenge_token || null
     })
   }, 15000);
@@ -122,7 +119,9 @@ export async function verifyLoginOtp({ challenge_id, otp }) {
 
   const data = await res.json();
   if (!res.ok) {
-    throw new Error(data.detail || 'Invalid verification code.');
+    const err = new Error(data.detail || 'Invalid verification code.');
+    err.status = res.status;
+    throw err;
   }
   return data;
 }
@@ -142,17 +141,20 @@ export async function resendLoginOtp({ challenge_id }) {
   return data;
 }
 
-export async function requestLoginOtp({ challenge_id }) {
+// OTP sign-in step 1: email a code to the account (no password needed)
+export async function requestLoginOtp({ email, bot_challenge_token }) {
   const base = getApiBase();
-  const res = await fetchWithTimeout(`${base}/api/auth/request-otp`, {
+  const res = await fetchWithTimeout(`${base}/api/auth/login/otp/request`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ challenge_id })
-  }, 15000);
+    body: JSON.stringify({ email, bot_challenge_token: bot_challenge_token || null })
+  }, 20000);
 
   const data = await res.json();
   if (!res.ok) {
-    throw new Error(data.detail || 'Failed to resend verification code.');
+    const err = new Error(data.detail || 'Failed to send the verification code.');
+    err.status = res.status;
+    throw err;
   }
   return data;
 }

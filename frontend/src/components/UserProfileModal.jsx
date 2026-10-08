@@ -13,7 +13,6 @@ export default function UserProfileModal({ isOpen, onClose, initialTab = 'profil
 
   // Profile Form State
   const [name, setName] = useState(user?.name || '');
-  const [location, setLocation] = useState(user?.operating_location || 'In Office');
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [profileMsg, setProfileMsg] = useState('');
   const [profileError, setProfileError] = useState('');
@@ -50,15 +49,14 @@ export default function UserProfileModal({ isOpen, onClose, initialTab = 'profil
           'Authorization': `Bearer ${token || localStorage.getItem('verbolabs_auth_token')}`
         },
         body: JSON.stringify({
-          name: name.trim(),
-          operating_location: location
+          name: name.trim()
         })
       });
       const data = await res.json();
       if (data.success) {
         setProfileMsg('Profile updated successfully.');
         if (updateUser) {
-          updateUser({ ...user, name: name.trim(), operating_location: location });
+          updateUser({ ...user, name: name.trim() });
         }
         setTimeout(() => setProfileMsg(''), 3000);
       } else {
@@ -201,43 +199,6 @@ export default function UserProfileModal({ isOpen, onClose, initialTab = 'profil
                       <Clock size={12} /> Verification Pending
                     </span>
                   )}
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-slate-300 font-semibold mb-1 text-xs">Operating Workstation Location</label>
-                <div className="grid grid-cols-2 gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setLocation('In Office')}
-                    className={`p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all cursor-pointer ${
-                      location === 'In Office'
-                        ? 'bg-[var(--kt-accent)]/10 border-[var(--kt-accent)]/40 text-white shadow-xs'
-                        : 'bg-[var(--kt-s2)] border-[var(--kt-s4)] text-slate-400 hover:text-white'
-                    }`}
-                  >
-                    <span className="text-base">🏢</span>
-                    <div>
-                      <div className="font-semibold text-xs">In Office</div>
-                      <div className="text-[10px] text-slate-400">VerboLabs Studio Facilities</div>
-                    </div>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setLocation('Remote')}
-                    className={`p-3 rounded-xl border text-left flex items-center gap-2.5 transition-all cursor-pointer ${
-                      location === 'Remote'
-                        ? 'bg-[var(--kt-accent)]/10 border-[var(--kt-accent)]/40 text-white shadow-xs'
-                        : 'bg-[var(--kt-s2)] border-[var(--kt-s4)] text-slate-400 hover:text-white'
-                    }`}
-                  >
-                    <span className="text-base">🏠</span>
-                    <div>
-                      <div className="font-semibold text-xs">Remote Workstation</div>
-                      <div className="text-[10px] text-slate-400">Secure Home Office / Field</div>
-                    </div>
-                  </button>
                 </div>
               </div>
 
