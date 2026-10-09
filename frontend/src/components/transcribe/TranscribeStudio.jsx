@@ -48,6 +48,7 @@ export default function TranscribeStudio(p) {
   const [tracks, setTracks] = useState({}); // language code -> translated cues
   const [activeTrack, setActiveTrack] = useState(null);
   const [exportChoice, setExportChoice] = useState(null); // null = follow the active track
+  const [listView, setListView] = useState('side'); // 'side' = source + active language, 'only' = active language alone
   const roster = useMemo(() => buildRoster(p.segments), [p.segments]);
   const hasSegments = p.segments.length > 0;
   const video = p.videoUrl ? <VideoPane src={p.videoUrl} bus={mediaBus} /> : null;
@@ -134,7 +135,19 @@ export default function TranscribeStudio(p) {
     ? { code: activeTrack, byId: new Map(tracks[activeTrack].map((e) => [e.id, e.text])) } : null), [activeTrack, tracks]);
 
   // A new transcript invalidates the translations of the old one
-  useEffect(() => { setTracks({}); setActiveTrack(null); setExportChoice(null); }, [p.audioUrl, p.filename]);
+  // (saved translations for the same file name come back from this browser)
+  useEffect(() => {
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem(`transcribe_tracks_${p.filename || ''}`) || 'null'); } catch { /* none */ }
+    const ok = saved && saved.tracks && Object.keys(saved.tracks).length;
+    setTracks(ok ? saved.tracks : {});
+    setActiveTrack(ok && saved.tracks[saved.active] ? saved.active : null);
+    setExportChoice(null);
+  }, [p.audioUrl, p.filename]);
+  useEffect(() => {
+    if (!p.filename) return;
+    try { localStorage.setItem(`transcribe_tracks_${p.filename}`, JSON.stringify({ tracks, active: activeTrack })); } catch { /* full */ }
+  }, [tracks, activeTrack, p.filename]);
 
   // Export language: follows the track on screen until the user picks one
   const trackCodes = Object.keys(tracks);
@@ -293,7 +306,8 @@ export default function TranscribeStudio(p) {
             onPlaySegment={p.onPlaySegment} onStopSegment={p.onStopSegment}
             onLint={p.onLint} onSplit={p.onSplit} onMerge={p.onMerge} onAdd={p.onAdd}
             onOpenSrtPreview={p.onOpenSrtPreview}
-            translation={translation} onClearTranslation={() => setActiveTrack(null)}
+            translation={translation} viewMode={listView} onViewMode={setListView}
+            trackCodes={trackCodes} sourceLabel={p.detectedLanguage || p.language} onSelectTrack={setActiveTrack} onTranslateMore={openTranslate}
           />
           </div>
           {showQc && (
@@ -353,6 +367,7 @@ export default function TranscribeStudio(p) {
             audioUrl={p.audioUrl}
             videoUrl={p.videoUrl}
             segments={p.segments}
+            textById={translation ? translation.byId : null}
             activeSegmentId={p.activeSegmentId}
             setActiveSegmentId={p.setActiveSegmentId}
             onSegmentTimeChange={p.onSegmentTimeChange}

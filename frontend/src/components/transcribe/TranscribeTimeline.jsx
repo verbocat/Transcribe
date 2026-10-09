@@ -42,7 +42,7 @@ const fmt = (s) => {
  * Transcript segments are presented to the timeline as subtitle events.
  */
 export default function TranscribeTimeline({
-  audioUrl, videoUrl, segments, activeSegmentId, setActiveSegmentId,
+  audioUrl, videoUrl, segments, textById, activeSegmentId, setActiveSegmentId,
   onSegmentTimeChange, onSplit, onMerge, onAdd, onUndo, onRedo,
   playTargetTime, onTimeUpdate, onPlayStateChange,
 }) {
@@ -56,8 +56,8 @@ export default function TranscribeTimeline({
   cbRef.current = { onTimeUpdate, onPlayStateChange };
 
   const events = useMemo(() => (segments || []).map((s) => ({
-    id: s.segment_id, start_time: s.start_time, end_time: s.end_time, text: s.transcript || s.text || '', speaker: s.speaker,
-  })), [segments]);
+    id: s.segment_id, start_time: s.start_time, end_time: s.end_time, text: textById?.get(s.segment_id) || s.transcript || s.text || '', speaker: s.speaker,
+  })), [segments, textById]);
 
   // Peaks for the waveform lane
   useEffect(() => {

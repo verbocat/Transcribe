@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Play, Square, Scissors, Merge, Trash2, Plus, Search, AlertCircle, AlertTriangle, LocateFixed } from 'lucide-react';
 import { usePlayheadSelector } from '../../utils/usePlayheadSelector';
 import { speakerColor, formatStamp } from './speakerUtils';
+import { translateLangName } from '../../data/languageCatalog';
 
 const GENDERS = [
   { value: 'Male', short: 'M' },
@@ -59,7 +60,7 @@ function AutoText({ value, onChange }) {
   );
 }
 
-function SegmentRow({ translated, seg, isLast, isActive, color, speakerNames, onActivate, onPlay, onStop, onField, onSplit, onMerge, onDelete }) {
+function SegmentRow({ translated, only, seg, isLast, isActive, color, speakerNames, onActivate, onPlay, onStop, onField, onSplit, onMerge, onDelete }) {
   const errors = seg.qc_errors || [];
   const issue = errors.some((e) => e.severity === 'error') ? 'error' : errors.length ? 'warning' : undefined;
   const lowWords = lowConfidenceWords(seg);
@@ -136,9 +137,11 @@ function SegmentRow({ translated, seg, isLast, isActive, color, speakerNames, on
       </div>
 
       {/* Source and translation, aligned side by side (stacked when narrow) */}
-      <div className="ts-col-text min-w-0" data-has-translation={translated != null} onClick={(e) => e.stopPropagation()}>
-        <AutoText value={seg.transcript || ''} onChange={(v) => onField(seg.segment_id, 'transcript', v)} />
-        {translated != null && <div className="ts-translation">{translated}</div>}
+      <div className="ts-col-text min-w-0" data-has-translation={translated != null && !only} onClick={(e) => e.stopPropagation()}>
+        {only && translated != null
+          ? <div className="ts-translation">{translated}</div>
+          : <AutoText value={seg.transcript || ''} onChange={(v) => onField(seg.segment_id, 'transcript', v)} />}
+        {!only && translated != null && <div className="ts-translation">{translated}</div>}
         {(lowWords.length > 0 || errors.length > 0) && (
           <div className="ts-chips">
             {lowWords.map((w, i) => (
@@ -186,7 +189,7 @@ export default function TranscriptList({
   segments, roster, filterSpeaker, setFilterSpeaker,
   activeSegmentId, setActiveSegmentId, setSegments,
   onPlaySegment, onStopSegment, onLint, onSplit, onMerge, onAdd, onOpenSrtPreview,
-  translation, onClearTranslation,
+  translation, viewMode, onViewMode, trackCodes = [], sourceLabel, onSelectTrack, onTranslateMore,
 }) {
   const [query, setQuery] = useState('');
   const [issuesOnly, setIssuesOnly] = useState(false);
@@ -311,10 +314,24 @@ export default function TranscriptList({
           <input type="range" min="0" max="95" step="5" value={minConf} onChange={(e) => setMinConf(Number(e.target.value))} style={{ accentColor: 'var(--ts-accent)', width: 90 }} />
           <span className="ts-mono" style={{ minWidth: 32 }}>{minConf ? `${minConf}%` : 'All'}</span>
         </label>
-        {translation && (
-          <button type="button" className="ts-chip ts-chip-accent" onClick={onClearTranslation}>
-            Showing {translation.code.toUpperCase()} translation · hide
-          </button>
+        {(trackCodes.length > 0 || onTranslateMore) && (
+          <div className="flex items-center gap-1.5" role="group" aria-label="Language">
+            <select
+              className="ts-field ts-field-sm" aria-label="Language shown"
+              value={translation ? translation.code : 'src'}
+              onChange={(e) => { if (e.target.value === '__new') onTranslateMore?.(); else onSelectTrack(e.target.value === 'src' ? null : e.target.value); }}
+            >
+              <option value="src">Source{sourceLabel ? ` (${sourceLabel})` : ''}</option>
+              {trackCodes.map((c) => <option key={c} value={c}>{translateLangName(c)}</option>)}
+              <option value="__new">Translate to…</option>
+            </select>
+            {translation && (
+              <div className="ts-seg" role="group" aria-label="List layout">
+                <button type="button" aria-pressed={viewMode !== 'only'} onClick={() => onViewMode('side')}>Side by side</button>
+                <button type="button" aria-pressed={viewMode === 'only'} onClick={() => onViewMode('only')}>Active only</button>
+              </div>
+            )}
+          </div>
         )}
         {filterSpeaker && (
           <button type="button" className="ts-chip ts-chip-accent" onClick={() => setFilterSpeaker(null)}>
@@ -345,6 +362,7 @@ export default function TranscriptList({
               key={seg.segment_id}
               seg={seg}
               translated={translation ? translation.byId.get(seg.segment_id) ?? null : null}
+              only={viewMode === 'only' && Boolean(translation)}
               isLast={seg.segment_id === segments[segments.length - 1]?.segment_id}
               isActive={seg.segment_id === activeSegmentId}
               color={colorOf[seg.speaker] || speakerColor(seg.speaker)}
