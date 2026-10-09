@@ -56,7 +56,7 @@ export default function TranscribeTimeline({
   cbRef.current = { onTimeUpdate, onPlayStateChange };
 
   const events = useMemo(() => (segments || []).map((s) => ({
-    id: s.segment_id, start_time: s.start_time, end_time: s.end_time, text: s.text || '', speaker: s.speaker,
+    id: s.segment_id, start_time: s.start_time, end_time: s.end_time, text: s.transcript || s.text || '', speaker: s.speaker,
   })), [segments]);
 
   // Peaks for the waveform lane
