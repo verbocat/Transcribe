@@ -291,6 +291,8 @@ select.ts-field { padding-right: 4px; }
   --ss-font-script: var(--kt-font-script); --ss-font-mono: var(--kt-font-mono);
 }
 .transcribe-studio .ss-script { font-family: var(--ss-font-script); letter-spacing: 0; }
+/* Timeline block text: keep a minimum text width so blocks too narrow to read clip the text instead of showing a lone ellipsis */
+.transcribe-studio .ss-script.truncate { min-width: 36px; }
 .transcribe-studio .font-mono, .transcribe-studio .tabular-nums { font-family: var(--ss-font-mono); font-variant-numeric: tabular-nums; }
 .transcribe-studio .ss-indeterminate { background-image: linear-gradient(90deg, transparent 0%, var(--ss-accent) 50%, transparent 100%); background-size: 40% 100%; background-repeat: no-repeat; animation: ts-indeterminate 1.3s ease-in-out infinite; }
 
