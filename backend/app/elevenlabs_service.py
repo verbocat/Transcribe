@@ -456,7 +456,8 @@ async def transcribe_with_scribe_v2(
             "start": round(w_start, 3),
             "end": round(w_end, 3),
             "type": w_type,
-            "speaker_id": w_speaker
+            "speaker_id": w_speaker,
+            "logprob": w.get("logprob"),  # Scribe's own confidence: the only source of "unsure" (possibly misheard) words
         })
 
     detected_lang = resp_json.get("language_code") or lang_code or "en"

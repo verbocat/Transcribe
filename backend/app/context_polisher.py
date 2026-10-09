@@ -16,6 +16,7 @@ import asyncio
 import difflib
 import json
 import logging
+import math
 import re
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -29,6 +30,9 @@ NEIGHBOURS = 3
 PARALLEL = 3
 MAX_KEYTERMS = 100
 MIN_SIMILARITY = 0.55
+# A word Scribe scored below this is "unsure" (same line as the low-confidence chips in the editor). Only unsure words may
+# be changed by the AI proofreading pass: a word Scribe heard clearly is never rewritten by our own AI.
+LOW_CONFIDENCE = 0.80
 AUTOFILL_CHAR_BUDGET = 60000
 
 _WORD = r"[\wऀ-ॿঀ-৿਀-੿઀-૿଀-୿஀-௿ఀ-౿ಀ-೿ഀ-ൿ]"
@@ -231,6 +235,56 @@ def _accept_change(old: str, new: str, language: str, style: str, max_cpl: int, 
     return True
 
 
+def word_confidence(w: Dict[str, Any]) -> Optional[float]:
+    """Scribe's own confidence for one word (from its logprob). None when Scribe gave no score."""
+    lp = w.get("logprob")
+    if lp is not None:
+        try:
+            return min(1.0, max(0.0, math.exp(float(lp))))
+        except (TypeError, ValueError, OverflowError):
+            return None
+    c = w.get("confidence")
+    return float(c) if isinstance(c, (int, float)) else None
+
+
+def unsure_words_for_spans(spans: List[Tuple[float, float]], words: List[Dict[str, Any]],
+                           threshold: float = LOW_CONFIDENCE) -> List[List[str]]:
+    """For each (start, end) span, the words inside it that ElevenLabs Scribe scored below `threshold`."""
+    scored = []
+    for w in words or []:
+        if w.get("type", "word") != "word":
+            continue
+        conf = word_confidence(w)
+        text = str(w.get("text") or "").strip()
+        if conf is None or conf >= threshold or not text:
+            continue
+        mid = (float(w.get("start", 0.0)) + float(w.get("end", 0.0))) / 2
+        scored.append((mid, text))
+    out = []
+    for start, end in spans:
+        out.append([t for mid, t in scored if start - 0.05 <= mid <= end + 0.05])
+    return out
+
+
+def _tokens(text: str) -> List[str]:
+    return [t for t in (re.sub(r"[^\w']+", " ", (text or "").lower()).split()) if t]
+
+
+def _only_unsure_changed(old: str, new: str, unsure: List[str]) -> bool:
+    """True when every word the fix removes or replaces is one Scribe was unsure about (punctuation may change).
+    A word may also be added right next to an unsure word (one misheard word that is really two)."""
+    allowed = {t for w in unsure or [] for t in _tokens(w)}
+    if not allowed:
+        return False
+    a, b = _tokens(old), _tokens(new)
+    for op, i1, i2, _, _ in difflib.SequenceMatcher(None, a, b, autojunk=False).get_opcodes():
+        if op in ("replace", "delete") and not all(t in allowed for t in a[i1:i2]):
+            return False
+        if op == "insert" and not ((i1 > 0 and a[i1 - 1] in allowed) or (i1 < len(a) and a[i1] in allowed)):
+            return False
+    return True
+
+
 def _polish_prompt(ctx: Dict[str, Any], language: str, batch, before, after, max_cpl: int, max_lines: int) -> str:
     return f"""You are a senior subtitle proofreader. The subtitles below were produced by speech recognition, so they contain recognition mistakes.
 Language of the speech: {language or 'auto'}.
@@ -241,11 +295,12 @@ VIDEO CONTEXT (hard rules from the client; follow all of them):
 STYLE RULES:
 {style_rules(ctx)}
 
-YOUR JOB: use the context to correct ONLY real recognition mistakes:
-- misheard or misspelled names, brands, places and technical terms (use the key terms, speakers and 'often misheard' list),
-- the same name written several different ways (make them all identical),
-- a wrong word that sounds like the right one when the context makes the right one clear,
-- numbers and punctuation, and the style rules above.
+YOUR JOB: correct ONLY real recognition mistakes, and ONLY in the words the speech engine itself was unsure about.
+Each subtitle lists its 'unsure' words: ElevenLabs Scribe gave them a low confidence score. Every other word was heard
+clearly and MUST stay exactly as it is. Change an unsure word only when it is clearly wrong:
+- a misheard or misspelled name, brand, place or technical term (use the key terms, speakers and 'often misheard' list),
+- a name written differently from the same name elsewhere (make it identical),
+- a wrong word that sounds like the right one when the context makes the right one clear.
 
 ABSOLUTE RULES:
 1. Never paraphrase, summarise, translate, shorten or 'improve' wording. Never make the language more formal.
@@ -271,35 +326,46 @@ async def polish_texts(
     max_lines: int = 2,
     on_progress: Optional[Callable[[int, int], None]] = None,
 ) -> List[Dict[str, Any]]:
-    """items: [{id, text}] in order. Returns accepted fixes: [{id, before, after, reason}]."""
+    """items: [{id, text, unsure}] in order. Returns accepted fixes: [{id, before, after, reason}].
+
+    Only the words ElevenLabs Scribe itself scored as low-confidence ('unsure', see unsure_words_for_spans) may be
+    changed. A subtitle with no unsure words is never sent to the AI, so a word Scribe heard clearly is never rewritten."""
     if not items:
         return []
     ctx = context or {}
     style = str(ctx.get("writing_style") or "spoken")
-    batches = [items[i:i + BATCH_SIZE] for i in range(0, len(items), BATCH_SIZE)]
+    pos = {id(x): n for n, x in enumerate(items)}
+    todo = [x for x in items if x.get("unsure")]
+    if not todo:
+        if on_progress:
+            on_progress(1, 1)
+        return []
+    batches = [todo[i:i + BATCH_SIZE] for i in range(0, len(todo), BATCH_SIZE)]
     sem = asyncio.Semaphore(PARALLEL)
     done = 0
     results: List[List[Dict[str, Any]]] = []
 
     async def run(bi: int) -> List[Dict[str, Any]]:
         nonlocal done
-        start = bi * BATCH_SIZE
-        before = [{"id": x["id"], "text": x["text"]} for x in items[max(0, start - NEIGHBOURS):start]]
-        after = [{"id": x["id"], "text": x["text"]} for x in items[start + len(batches[bi]):start + len(batches[bi]) + NEIGHBOURS]]
-        batch = [{"id": x["id"], "text": x["text"]} for x in batches[bi]]
+        first, last = pos[id(batches[bi][0])], pos[id(batches[bi][-1])]
+        before = [{"id": x["id"], "text": x["text"]} for x in items[max(0, first - NEIGHBOURS):first]]
+        after = [{"id": x["id"], "text": x["text"]} for x in items[last + 1:last + 1 + NEIGHBOURS]]
+        batch = [{"id": x["id"], "text": x["text"], "unsure": list(x["unsure"])} for x in batches[bi]]
         fixes: List[Dict[str, Any]] = []
         async with sem:
             try:
                 data = await _gemini_json(_polish_prompt(ctx, language, batch, before, after, max_cpl, max_lines))
-                by_id = {x["id"]: x["text"] for x in batches[bi]}
+                by_id = {x["id"]: x for x in batches[bi]}
                 for f in (data or {}).get("fixes", []) or []:
                     try:
                         fid = int(f.get("id"))
                     except (TypeError, ValueError):
                         continue
                     new = str(f.get("text") or "")
-                    old = by_id.get(fid)
-                    if old is not None and _accept_change(old, new, language, style, max_cpl, max_lines, False):
+                    item = by_id.get(fid)
+                    old = item["text"] if item is not None else None
+                    if old is not None and _accept_change(old, new, language, style, max_cpl, max_lines, False) \
+                            and _only_unsure_changed(old, new, item["unsure"]):
                         fixes.append({"id": fid, "before": old, "after": new.strip(), "reason": str(f.get("reason") or "").strip()})
             except Exception as exc:  # a failed batch keeps its original text
                 log_terminal("CONTEXT-POLISH", f"Batch {bi + 1}/{len(batches)} skipped: {exc}", level="WARNING")

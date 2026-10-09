@@ -43,6 +43,32 @@ async def post(path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     return res.json()
 
 
+# Centroid turns on its Lower Third behaviour (speaker/gender/language per line, the rule book, gender-aware review
+# and QC) only for requests that carry this client name.
+CLIENT = "lowerthird"
+
+
+def cue_meta(e: Dict[str, Any], text: str, langs: List[str]) -> Dict[str, Any]:
+    """Speaker, voice gender and detected language of one line, for Centroid. Unknown values are left out."""
+    from app.cue_language import detect_cue_language
+    meta: Dict[str, Any] = {}
+    speaker = str(e.get("speaker") or e.get("primary_speaker") or "").strip()
+    if speaker:
+        meta["speaker"] = speaker
+    gender = str(e.get("speaker_gender") or e.get("gender") or "").strip().lower()
+    if gender in ("male", "female", "nonbinary"):
+        meta["speaker_gender"] = gender
+    lang = detect_cue_language(text, langs)
+    if lang:
+        meta["lang"] = lang
+    return meta
+
+
+def langs_of(payload: Dict[str, Any]) -> List[str]:
+    targets = payload.get("target_langs") or ([payload["target_lang"]] if payload.get("target_lang") else [])
+    return [l for l in [payload.get("source_lang"), *targets] if l and str(l).lower() != "auto"]
+
+
 _TIME_TOL = 0.002
 
 

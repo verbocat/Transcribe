@@ -126,7 +126,7 @@ export default function TranscribeStudio(p) {
 
   const events = useMemo(() => p.segments.map((s) => ({
     id: s.segment_id, event_id: s.segment_id, start_time: s.start_time, end_time: s.end_time,
-    start: s.start_time, end: s.end_time, text: s.transcript || '', speaker: s.speaker,
+    start: s.start_time, end: s.end_time, text: s.transcript || '', speaker: s.speaker, gender: s.gender,
   })), [p.segments]);
   // Centroid code of the language the transcript was detected as (null while unknown)
   const detectedCode = useMemo(() => translateCodeForName(p.detectedLanguage), [p.detectedLanguage]);

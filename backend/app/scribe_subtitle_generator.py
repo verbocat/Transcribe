@@ -657,8 +657,10 @@ async def stream_generate_subtitles(
                 progress_state["done"], progress_state["total"] = done_n, total_n
 
             yield prog.event("context", 0.0, f"Proofreading {len(events)} subtitles against your context")
+            unsure = cp.unsure_words_for_spans([(ev.start_time, ev.end_time) for ev in events], words)
             poll = asyncio.create_task(cp.polish_texts(
-                [{"id": ev.id, "text": ev.text} for ev in events], polish_ctx, detected_lang, cpl_limit, max_lines, _on_batch,
+                [{"id": ev.id, "text": ev.text, "unsure": u} for ev, u in zip(events, unsure)], polish_ctx, detected_lang,
+                cpl_limit, max_lines, _on_batch,
             ))
             try:
                 last = -1
@@ -715,6 +717,22 @@ async def stream_generate_subtitles(
                     txt_flat = ev.text.replace("\n", " / ")
                     spk = getattr(ev, "primary_speaker", None) or getattr(ev, "speaker", "Speaker 1")
                     log_terminal("NETFLIX-QC", f"  Card #{ev.id} [{ev.start_time:.3f}s -> {ev.end_time:.3f}s] ({spk}): \"{txt_flat}\" (CPS: {ev.cps:.1f}, CPL: {ev.cpl})")
+
+        # Per card, for later steps (nothing here changes text, timing or the export):
+        #  * unsure_words: words ElevenLabs Scribe scored as low-confidence; the only words AI proofreading may change
+        #  * gender: the voice gender of the speaker, sent to Centroid so translations get gender agreement right
+        try:
+            from app import context_polisher as cp_words
+            for ev, u in zip(events, cp_words.unsure_words_for_spans([(ev.start_time, ev.end_time) for ev in events], words)):
+                setattr(ev, "unsure_words", u)
+        except Exception as exc:
+            logger.warning(f"Low-confidence word tagging skipped: {exc}")
+        try:
+            from app.segment_gender import assign_event_genders
+            tagged = await asyncio.to_thread(assign_event_genders, audio_path, events)
+            log_terminal("NETFLIX-QC", f"Voice gender tagged on {tagged}/{len(events)} subtitles (for translation)")
+        except Exception as exc:
+            logger.warning(f"Subtitle gender detection skipped: {exc}")
 
         yield prog.event("qc", 1.0, "Done")
 

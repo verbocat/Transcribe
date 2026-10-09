@@ -236,8 +236,9 @@ def _combine(sources: List[tuple], segment_id: int):
     return (num / den) if den else None
 
 
-def assign_genders_and_split_speakers(audio_path: str, segments, video_path=None) -> List[str]:
-    """Set gender on every segment, split speakers that mix genders, return notes for the user."""
+def assign_genders(audio_path: str, segments, video_path=None, use_gemini: bool = True) -> List[str]:
+    """Set gender (Male/Female/Unknown) on every segment without renaming any speaker; return notes for the user.
+    use_gemini=False runs only the local model and voice pitch (no Gemini cost or wait)."""
     notes: List[str] = []
     health = {"down": False, "reason": None}
     sources: List[tuple] = []
@@ -245,7 +246,7 @@ def assign_genders_and_split_speakers(audio_path: str, segments, video_path=None
     # The four signals are independent: run them at the same time so the slow Gemini round trips
     # overlap with the local model and pitch instead of queueing behind them.
     def _video():
-        if not (GEMINI_ASSIST and video_path):
+        if not (use_gemini and GEMINI_ASSIST and video_path):
             return {}
         try:
             out = _gemini_video_labels(video_path, segments, health)
@@ -256,7 +257,7 @@ def assign_genders_and_split_speakers(audio_path: str, segments, video_path=None
             return {}
 
     def _clips():
-        if not GEMINI_ASSIST:
+        if not (use_gemini and GEMINI_ASSIST):
             return {}
         try:
             out = _gemini_clip_labels(audio_path, segments, health)
@@ -309,6 +310,12 @@ def assign_genders_and_split_speakers(audio_path: str, segments, video_path=None
         confident = sc is not None and abs(sc - 0.5) >= KEEP_OWN_MIN_CONFIDENCE and (s.end_time - s.start_time) >= KEEP_OWN_MIN_SEC
         s.gender = own if confident else (speaker_gender or own or "Unknown")
 
+    return notes
+
+
+def assign_genders_and_split_speakers(audio_path: str, segments, video_path=None) -> List[str]:
+    """Set gender on every segment, split speakers that mix genders, return notes for the user."""
+    notes = assign_genders(audio_path, segments, video_path)
     labels: Dict[tuple, str] = {}
     for s in segments:
         key = (s.speaker, s.gender)
@@ -316,3 +323,22 @@ def assign_genders_and_split_speakers(audio_path: str, segments, video_path=None
             labels[key] = f"Speaker {len(labels) + 1}"
         s.speaker = labels[key]
     return notes
+
+
+def assign_event_genders(audio_path: str, events) -> int:
+    """Subtitle Studio: put the voice gender ("Male"/"Female") on each subtitle card as `gender`, so translation can get
+    gender agreement right. Speaker labels are not changed. Local model and pitch only, so subtitle generation gets no
+    extra Gemini cost or wait. Returns how many cards got a gender."""
+    from types import SimpleNamespace
+    spans = [SimpleNamespace(segment_id=i, start_time=float(ev.start_time), end_time=float(ev.end_time),
+                             speaker=getattr(ev, "speaker", None) or "Speaker 1", gender="Unknown")
+             for i, ev in enumerate(events)]
+    if not spans:
+        return 0
+    assign_genders(audio_path, spans, use_gemini=False)
+    n = 0
+    for ev, s in zip(events, spans):
+        if s.gender in ("Male", "Female"):
+            setattr(ev, "gender", s.gender)
+            n += 1
+    return n

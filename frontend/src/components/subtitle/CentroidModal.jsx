@@ -68,6 +68,9 @@ const AREA = 'w-full rounded-lg border border-[var(--ss-line)] bg-[var(--ss-bg)]
 // The editor's language setting uses a few codes Centroid doesn't know
 const toCentroidLang = (code) => ({ auto: 'en', hinglish: 'hi' }[code] || code);
 
+// Who speaks a line and their voice gender, so Centroid can get gender agreement right (undefined values are not sent)
+const voiceOf = (c) => ({ speaker: c.speaker || c.primary_speaker || undefined, gender: c.gender || undefined });
+
 const fmtTime = (s) => {
   const t = Math.max(0, Number(s) || 0);
   return `${String(Math.floor(t / 60)).padStart(2, '0')}:${(t % 60).toFixed(1).padStart(4, '0')}`;
@@ -382,7 +385,7 @@ export default function CentroidModal({
     analyzeJob.current = job;
     try {
       const data = await api('/api/centroid/analyze', {
-        events: sourceCues.map((c) => ({ start_time: c.start_time ?? c.start, end_time: c.end_time ?? c.end, text: c.text })),
+        events: sourceCues.map((c) => ({ start_time: c.start_time ?? c.start, end_time: c.end_time ?? c.end, text: c.text, ...voiceOf(c) })),
         source_lang: sourceLang, target_langs: targets, context: buildContext(), ...hint,
       }, job);
       const next = { ...ctx };
@@ -436,11 +439,11 @@ export default function CentroidModal({
     if (code === 'editor') {
       const cur = events.filter((e) => (e.text || '').trim());
       if (cur.length !== snap.length) return { pairs: [], error: `The editor has ${cur.length} subtitles but the source has ${snap.length}. QC needs the same number of cues.` };
-      return { pairs: snap.map((s, i) => ({ id: s.id, start: s.start_time, end: s.end_time, source: s.text, target: cur[i].text, editorId: cur[i].id ?? cur[i].event_id })) };
+      return { pairs: snap.map((s, i) => ({ id: s.id, start: s.start_time, end: s.end_time, source: s.text, target: cur[i].text, editorId: cur[i].id ?? cur[i].event_id, ...voiceOf(s) })) };
     }
     const r = res[code];
     if (!r) return { pairs: [], error: '' };
-    return { pairs: r.cues.map((c, i) => ({ id: i + 1, start: c.start, end: c.end, source: c.source, target: c.target })) };
+    return { pairs: r.cues.map((c, i) => ({ id: i + 1, start: c.start, end: c.end, source: c.source, target: c.target, ...voiceOf(snap[i] || {}) })) };
   }, [events]);
 
   const runQcFor = useCallback(async (code, res, snap) => {
@@ -479,11 +482,11 @@ export default function CentroidModal({
     translateJob.current = job;
     try {
       const data = await api('/api/centroid/translate', {
-        events: sourceCues.map((c) => ({ start_time: c.start_time ?? c.start, end_time: c.end_time ?? c.end, text: c.text })),
+        events: sourceCues.map((c) => ({ start_time: c.start_time ?? c.start, end_time: c.end_time ?? c.end, text: c.text, ...voiceOf(c) })),
         source_lang: sourceLang, target_langs: targets, context: buildContext(), glossary: buildGlossary(), constraints: buildLimits(), ...hint,
         quality,
       }, job);
-      const snap = sourceCues.map((c, i) => ({ id: i + 1, editorId: c.id ?? c.event_id, start_time: c.start_time ?? c.start, end_time: c.end_time ?? c.end, text: c.text }));
+      const snap = sourceCues.map((c, i) => ({ id: i + 1, editorId: c.id ?? c.event_id, start_time: c.start_time ?? c.start, end_time: c.end_time ?? c.end, text: c.text, ...voiceOf(c) }));
       const res = data.results || {};
       setSnapshot(snap);
       setSourceBase(sourceCues);

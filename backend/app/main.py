@@ -2292,7 +2292,10 @@ async def subtitle_context_polish(payload: dict):
     if cp.context_is_empty(ctx):
         raise HTTPException(status_code=400, detail="Fill in some context first (speakers, key terms or notes).")
     corrections = cp.parse_corrections(ctx.get("corrections"))
-    items = [{"id": e.get("id", e.get("event_id", i + 1)), "text": str(e.get("text") or "")} for i, e in enumerate(events)]
+    # Only words ElevenLabs Scribe scored as low-confidence ('unsure_words' on each card) may be changed by the AI
+    has_scribe = any("unsure_words" in e for e in events)
+    items = [{"id": e.get("id", e.get("event_id", i + 1)), "text": str(e.get("text") or ""),
+              "unsure": [str(w) for w in (e.get("unsure_words") or [])]} for i, e in enumerate(events)]
     fixes, seen = [], set()
     for it in items:
         new_text, n = cp.apply_corrections(it["text"], corrections) if corrections else (it["text"], 0)
@@ -2312,6 +2315,9 @@ async def subtitle_context_polish(payload: dict):
                 fixes.append(fx)
     except Exception as e:
         ai_error = str(e)
+    if not has_scribe and not fixes and not ai_error:
+        ai_error = ("these subtitles have no word-confidence data from ElevenLabs Scribe (for example, they were imported), "
+                    "so there were no uncertain words to check")
     return {"fixes": fixes, "count": len(fixes), "ai_error": ai_error}
 
 
@@ -2407,10 +2413,13 @@ async def centroid_translate(payload: dict):
     cues = payload.get("cues") or payload.get("events")
     _resolve_auto_source(body, [str(e.get("text", "")) for e in (cues or [])] or [str(payload.get("srt") or "")], payload)
     if cues and not body.get("srt"):
+        langs = centroid_client.langs_of(body)
         body["cues"] = [
-            {"start": e.get("start_time", e.get("start")), "end": e.get("end_time", e.get("end")), "text": e.get("text", "")}
+            {"start": e.get("start_time", e.get("start")), "end": e.get("end_time", e.get("end")), "text": e.get("text", ""),
+             **centroid_client.cue_meta(e, e.get("text", ""), langs)}
             for e in cues
         ]
+    body["client"] = centroid_client.CLIENT
     data = await centroid_client.post("/subtitles/translate", body)
     if body.get("cues"):
         centroid_client.align_translations(data, body["cues"])
@@ -2425,11 +2434,14 @@ async def centroid_analyze(payload: dict):
     if not cues:
         raise HTTPException(status_code=400, detail="There are no subtitles to analyse.")
     body = {k: payload[k] for k in ("source_lang", "target_langs", "context") if payload.get(k)}
+    langs = centroid_client.langs_of(payload)
     body["cues"] = [
-        {"start": e.get("start_time", e.get("start")), "end": e.get("end_time", e.get("end")), "text": e.get("text", "")}
+        {"start": e.get("start_time", e.get("start")), "end": e.get("end_time", e.get("end")), "text": e.get("text", ""),
+         **centroid_client.cue_meta(e, e.get("text", ""), langs)}
         for e in cues
     ]
     _resolve_auto_source(body, [c["text"] for c in body["cues"]], payload)
+    body["client"] = centroid_client.CLIENT
     return await centroid_client.post("/subtitles/analyze", body)
 
 
@@ -2450,11 +2462,14 @@ async def centroid_qc(payload: dict):
     if not cues or not payload.get("target_lang"):
         raise HTTPException(status_code=400, detail="Provide 'cues' (source + target) and 'target_lang'.")
     body = {k: payload[k] for k in ("source_lang", "target_lang", "context", "glossary", "constraints", "include_technical") if payload.get(k) is not None}
+    langs = centroid_client.langs_of(payload)
     body["cues"] = [
-        {"start": c.get("start"), "end": c.get("end"), "source": c.get("source", ""), "target": c.get("target", "")}
+        {"start": c.get("start"), "end": c.get("end"), "source": c.get("source", ""), "target": c.get("target", ""),
+         **centroid_client.cue_meta(c, c.get("source", ""), langs)}
         for c in cues
     ]
     _resolve_auto_source(body, [c["source"] for c in body["cues"]], payload)
+    body["client"] = centroid_client.CLIENT
     local = run_local_qc(
         body["cues"], payload["target_lang"], body.get("source_lang") or payload.get("source_lang"),
         payload.get("glossary"), payload.get("constraints"),

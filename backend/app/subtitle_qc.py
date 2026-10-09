@@ -180,7 +180,9 @@ def run_local_qc(
         if not flat:
             continue
 
-        if not same_lang and len(flat) > 12 and flat.lower() == _flat(source).lower() and not _NUM.fullmatch(flat):
+        # A line detected as already in the target language (mixed-language video) is meant to stay as it is
+        already_target = str(cue.get("lang") or "").lower()[:2] == lang[:2]
+        if not same_lang and not already_target and len(flat) > 12 and flat.lower() == _flat(source).lower() and not _NUM.fullmatch(flat):
             issues.append(_issue(cue, n, "untranslated", "warning", "Looks untranslated",
                                  "The text is identical to the source. If this is not a name or a quoted phrase, translate it.", None))
 

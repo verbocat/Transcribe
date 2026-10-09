@@ -450,7 +450,7 @@ def process_audio_file(
                     w_e = float(w["end_time"]) + chunk_offset if w.get("end_time") is not None else None
                     words_list.append(WordConfidence(
                         word=str(w["word"]),
-                        confidence=float(w.get("confidence", 0.95)),
+                        confidence=1.0,  # Gemini's self-reported score is not used: only Scribe scores flag words
                         start_time=round(w_s, 3) if w_s is not None else None,
                         end_time=round(w_e, 3) if w_e is not None else None
                     ))
@@ -458,20 +458,11 @@ def process_audio_file(
             tokens = transcript.split()
             seg_dur = max(0.1, duration)
             w_dur = seg_dur / max(1, len(tokens))
-            seg_conf = float(raw.get("confidence", 0.95))
             for idx, tok in enumerate(tokens):
-                tok_clean = tok.strip().lower()
-                if "[unintelligible]" in tok_clean or "[inaudible]" in tok_clean:
-                    w_conf = 0.35
-                elif "-" in tok_clean and len(tok_clean) > 2:
-                    w_conf = 0.70
-                elif "--" in tok_clean:
-                    w_conf = 0.75
-                else:
-                    w_conf = seg_conf
+                # No real word scores here, so none are invented: only ElevenLabs Scribe scores flag words
                 words_list.append(WordConfidence(
                     word=tok,
-                    confidence=round(w_conf, 2),
+                    confidence=1.0,
                     start_time=round(s_time + idx * w_dur, 3),
                     end_time=round(s_time + (idx + 1) * w_dur, 3)
                 ))

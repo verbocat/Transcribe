@@ -156,7 +156,7 @@ export default function ContextPanel({
     jobRef.current = job;
     try {
       const d = await post('/api/subtitle/context_polish', {
-        events: events.map((e) => ({ id: e.id ?? e.event_id, text: e.text })),
+        events: events.map((e) => ({ id: e.id ?? e.event_id, text: e.text, unsure_words: e.unsure_words })),
         context: contextForRequest(ctx), glossary: glossaryTerms, language, cpl_limit: cplLimit, max_lines: maxLines,
       }, job);
       if (d.ai_error) setNote({ tone: 'warn', text: `The AI proofreading could not run (${d.ai_error}). No changes were made.` });

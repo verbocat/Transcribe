@@ -379,8 +379,8 @@ export default function SegmentEditor({
               : (seg.transcript || '').split(/\s+/).filter(Boolean).map((w, wIdx, arr) => {
                   const segDur = Math.max(0.1, seg.end_time - seg.start_time);
                   const wDur = segDur / Math.max(1, arr.length);
-                  let conf = seg.confidence || 0.95;
-                  if (w.includes('[unintelligible]') || w.includes('[inaudible]')) conf = 0.35;
+                  // No word scores from ElevenLabs Scribe for this segment: nothing is flagged as low confidence
+                  const conf = 1.0;
                   return {
                     word: w,
                     confidence: conf,
