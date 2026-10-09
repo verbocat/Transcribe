@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Upload } from 'lucide-react';
 import './transcribe.css';
 import TopBar from './TopBar';
+import TranscribeRail from './TranscribeRail';
 import SpeakerRail from './SpeakerRail';
 import TranscriptList from './TranscriptList';
 import ProgressStrip from './ProgressStrip';
@@ -209,19 +210,13 @@ export default function TranscribeStudio(p) {
     <div className="transcribe-studio">
       <TopBar
         filename={p.filename} canTranscribe={p.canTranscribe}
-        language={p.language} setLanguage={p.setLanguage}
-        script={p.script} setScript={p.setScript}
         isTranscribing={p.isTranscribing} progressPercent={p.progressPercent}
         isExtractingAudio={p.isExtractingAudio}
         onFileSelect={p.onFileSelect} onTranscribe={p.onTranscribe} onBackToHome={p.onBackToHome}
         segmentCount={p.segments.length}
-        complianceScore={hasSegments ? p.complianceScore : null}
-        totalErrors={p.totalErrors} totalWarnings={p.totalWarnings}
         canUndo={p.canUndo} canRedo={p.canRedo} onUndo={p.onUndo} onRedo={p.onRedo}
         isSaving={p.isSaving} onSave={p.onSave}
-        exportFormats={p.exportFormats} onToggleFormat={p.onToggleFormat}
-        onDownload={() => p.onDownload(exportPayload())} onDubbing={() => p.onDubbing(exportPayload())}
-        exportLang={exportLang} exportLangOptions={exportLangOptions} onExportLang={setExportChoice} isExporting={p.isExporting} onCancelExport={p.onCancelExport}
+        exportFormats={p.exportFormats} onDownload={() => p.onDownload(exportPayload())} onDubbing={() => p.onDubbing(exportPayload())} isExporting={p.isExporting}
         onOpenProjects={p.onOpenProjects} onOpenStats={p.onOpenStats} onOpenDiff={p.onOpenDiff}
         onOpenNotes={p.onOpenNotes} onOpenGuidelines={p.onOpenGuidelines}
         onImportSubtitles={p.onImportSubtitles}
@@ -229,9 +224,19 @@ export default function TranscribeStudio(p) {
         onOpenSpeakers={() => setShowSpeakers(true)} speakersOpen={showSpeakers}
         onOpenLayout={() => setShowLayout(true)} onResetLayout={studio.reset}
         timelineHidden={layout.timelinePos === 'hidden'} onToggleTimeline={() => studio.patch({ timelinePos: layout.timelinePos === 'hidden' ? 'bottom' : 'hidden' })}
-        onOpenTranslate={openTranslate} translateOpen={showTranslate}
-        onOpenQc={() => (showQc ? setShowQc(false) : openQc())} qcOpen={showQc} centroidQcIssues={centroidState.qcIssues}
+        onOpenTranslate={openTranslate} onOpenQc={() => (showQc ? setShowQc(false) : openQc())}
       />
+
+      <div className="ts-body">
+      <TranscribeRail
+        disabled={!hasSegments} translateOpen={showTranslate} onTranslate={openTranslate}
+        qcOpen={showQc} onQc={() => (showQc ? setShowQc(false) : openQc())} qcIssues={centroidState.qcIssues}
+        formats={p.exportFormats} onToggleFormat={p.onToggleFormat}
+        onDownload={() => p.onDownload(exportPayload())} onDubbing={() => p.onDubbing(exportPayload())}
+        isExporting={p.isExporting} onCancelExport={p.onCancelExport}
+        exportLang={exportLang} exportLangOptions={exportLangOptions} onExportLang={setExportChoice}
+      />
+      <div className="ts-main">
 
       {p.isTranscribing && (
         <ProgressStrip
@@ -355,6 +360,9 @@ export default function TranscribeStudio(p) {
           />
         </footer>
       )}
+
+      </div>
+      </div>
 
       {/* Kept mounted so translations and QC results survive closing the panels */}
       <CentroidModal

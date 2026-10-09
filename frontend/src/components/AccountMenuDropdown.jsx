@@ -10,7 +10,7 @@ import UserProfileModal from './UserProfileModal';
  * Used across both Transcribe Studio and Subtitle Studio.
  * Now includes direct access to Profile editing, Studio Settings, and User Manual.
  */
-export default function AccountMenuDropdown({ user, onOpenLogoutModal }) {
+export default function AccountMenuDropdown({ user, onOpenLogoutModal, compact = false }) {
   const [isOpen, setIsOpen] = useState(false);
   const [profileModalOpen, setProfileModalOpen] = useState(false);
   const [profileModalTab, setProfileModalTab] = useState('profile');
@@ -56,16 +56,19 @@ export default function AccountMenuDropdown({ user, onOpenLogoutModal }) {
         <button
           type="button"
           onClick={() => setIsOpen(!isOpen)}
-          className="flex items-center gap-1.5 h-8 px-2.5 rounded-lg bg-[var(--kt-s1)] hover:bg-[var(--kt-s3)] border border-[var(--kt-s4)] hover:border-[var(--kt-accent)]/40 transition-all cursor-pointer shadow-xs text-slate-200"
-          title="Account & Seat Status"
+          className={`flex items-center gap-1.5 h-8 ${compact ? 'px-1.5' : 'px-2.5'} rounded-lg bg-[var(--kt-s1)] hover:bg-[var(--kt-s3)] border border-[var(--kt-s4)] hover:border-[var(--kt-accent)]/40 transition-all cursor-pointer shadow-xs text-slate-200`}
+          title={compact ? `${user.name || user.email || 'Account'} · Account & Seat Status` : 'Account & Seat Status'}
+          aria-label="Account menu"
         >
           <div className="w-5 h-5 rounded-full bg-gradient-to-tr from-[var(--kt-accent)] to-[var(--kt-accent)] text-[var(--kt-accent-ink)] font-extrabold flex items-center justify-center text-[10px] shadow-xs">
             {initial}
           </div>
-          <span className="text-xs font-semibold max-w-[90px] sm:max-w-[120px] truncate hidden sm:inline">
-            {user.name || user.email?.split('@')[0]}
-          </span>
-          <ChevronDown size={12} className={`text-slate-400 transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`} />
+          {!compact && (
+            <span className="text-xs font-semibold max-w-[90px] sm:max-w-[120px] truncate hidden sm:inline">
+              {user.name || user.email?.split('@')[0]}
+            </span>
+          )}
+          {!compact && <ChevronDown size={12} className={`text-slate-400 transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`} />}
         </button>
 
         {/* Floating Dropdown Menu */}
