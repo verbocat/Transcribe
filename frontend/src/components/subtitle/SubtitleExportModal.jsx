@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useRef } from 'react';
-import { X, Download, FileText, FileCode, File, Globe, Check, AlertTriangle } from 'lucide-react';
+import { X, Download, FileText, FileCode, File, Globe, Check } from 'lucide-react';
 import { API_BASE } from '../../config';
 import { startJob, jobHeaders, isCancelError } from '../../utils/cancellable';
 
@@ -46,7 +46,7 @@ const EXPORT_FORMATS = [
   },
 ];
 
-export default function SubtitleExportModal({ isOpen, onClose, events: liveEvents = [], filename = 'subtitles', complianceScore = 100, tracks = {}, activeTrack = null, sourceTrack = null }) {
+export default function SubtitleExportModal({ isOpen, onClose, events: liveEvents = [], filename = 'subtitles', tracks = {}, activeTrack = null, sourceTrack = null }) {
   const [selectedFormat, setSelectedFormat] = useState('srt');
   const [isExporting, setIsExporting] = useState(false);
   const exportJob = useRef(null); // the server-side export, if one is running
@@ -102,16 +102,6 @@ export default function SubtitleExportModal({ isOpen, onClose, events: liveEvent
   const languageSuffix = exportLanguageSuffix(language);
   const exportFilename = customFilename.trim() || `${filename.replace(/\.[^/.]+$/, '') || 'subtitles'}${languageSuffix}`;
   const selectedFormatInfo = EXPORT_FORMATS.find(f => f.key === selectedFormat);
-  const isPassing = complianceScore >= 98;
-
-  const srtPreview = useMemo(() => {
-    if (!events || events.length === 0) return '';
-    return events.slice(0, 3).map((ev, idx) => {
-      const start = formatSrtTime(ev.start_time ?? ev.start);
-      const end = formatSrtTime(ev.end_time ?? ev.end);
-      return `${idx + 1}\n${start} --> ${end}\n${ev.text || ''}`;
-    }).join('\n\n');
-  }, [events]);
 
   const handleExport = async () => {
     if (!events || events.length === 0) return;
@@ -183,9 +173,12 @@ export default function SubtitleExportModal({ isOpen, onClose, events: liveEvent
 
   if (!isOpen) return null;
 
+  const labelCls = 'block text-[11px] font-semibold text-[var(--ss-faint)] mb-1.5';
+  const fieldCls = 'w-full h-9 px-3 rounded-lg bg-[var(--ss-bg)] border border-[var(--ss-line)] text-[13px] text-[var(--ss-text)] focus:outline-none focus:border-[var(--ss-accent)] disabled:opacity-60';
+
   return (
     <div
-      className={`fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md transition-opacity duration-200 ${
+      className={`fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/70 backdrop-blur-sm transition-opacity duration-200 ${
         isClosing ? 'animate-mac-backdrop-exit pointer-events-none' : 'animate-in fade-in duration-200'
       }`}
       onClick={(e) => {
@@ -193,124 +186,111 @@ export default function SubtitleExportModal({ isOpen, onClose, events: liveEvent
       }}
     >
       <div
-        className={`bg-[var(--ss-panel)] border border-[var(--ss-line)] rounded-none shadow-2xl w-full max-w-lg overflow-hidden text-slate-200 ${
+        role="dialog"
+        aria-modal="true"
+        aria-label="Export subtitles"
+        className={`flex flex-col bg-[var(--ss-panel)] border border-[var(--ss-line)] rounded-xl shadow-2xl w-full max-w-lg max-h-[calc(100dvh-1.5rem)] sm:max-h-[calc(100dvh-2rem)] overflow-hidden text-[var(--ss-text)] ${
           isClosing ? 'animate-mac-squish-exit' : 'animate-mac-squish'
         }`}
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--ss-line)]">
-          <div>
-            <h2 className="text-base font-semibold text-white">Export subtitles</h2>
-            <p className="text-xs text-slate-400 mt-0.5">{events.length} {events.length === 1 ? 'subtitle' : 'subtitles'} → {exportFilename}{selectedFormatInfo?.ext}</p>
+        <div className="flex items-center justify-between gap-3 px-5 py-3.5 border-b border-[var(--ss-line)] shrink-0">
+          <div className="min-w-0">
+            <h2 className="text-[15px] font-semibold text-[var(--ss-text)]">Export subtitles</h2>
+            <p className="text-[11px] text-[var(--ss-muted)] mt-0.5 truncate">{events.length} {events.length === 1 ? 'subtitle' : 'subtitles'} → {exportFilename}{selectedFormatInfo?.ext}</p>
           </div>
-          <button onClick={handleDismiss} className="p-1.5 rounded-none hover:bg-[var(--ss-hover)] text-slate-400 hover:text-white transition-colors cursor-pointer">
-            <X className="w-5 h-5" />
+          <button onClick={handleDismiss} aria-label="Close" className="p-1.5 rounded-lg hover:bg-[var(--ss-raised)] text-[var(--ss-muted)] hover:text-[var(--ss-text)] transition-colors cursor-pointer shrink-0">
+            <X className="w-4 h-4" />
           </button>
         </div>
 
-        {/* Compliance Alert */}
-        {!isPassing && (
-          <div className="mx-6 mt-4 p-3 rounded-none bg-amber-950/30 border border-amber-800/60 flex items-start gap-3">
-            <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+        {/* Scrollable body: shrinks to any window height */}
+        <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar px-5 py-4 space-y-4">
+          <div className="grid gap-4 sm:grid-cols-2">
             <div>
-              <p className="text-xs font-bold text-amber-300">Guideline QC Compliance: {complianceScore}%</p>
-              <p className="text-[11px] text-amber-200/80 mt-0.5">≥98% compliance is required for delivery. You can still export, or run Auto-Fix first.</p>
+              <label className={labelCls} htmlFor="export-filename">File name</label>
+              <input
+                id="export-filename"
+                type="text"
+                value={customFilename}
+                onChange={e => setCustomFilename(e.target.value)}
+                placeholder={filename.replace(/\.[^/.]+$/, '')}
+                className={`${fieldCls} font-mono`}
+              />
+            </div>
+            <div>
+              <label className={labelCls} htmlFor="export-language">Language</label>
+              <select
+                id="export-language"
+                value={language}
+                onChange={e => setLanguageChoice(e.target.value)}
+                disabled={languageOptions.length < 2}
+                className={fieldCls}
+              >
+                {languageOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+              {languageOptions.length < 2 && (
+                <p className="text-[10px] text-[var(--ss-faint)] mt-1">Translate the subtitles to export other languages.</p>
+              )}
             </div>
           </div>
-        )}
 
-        {/* Filename Input */}
-        <div className="px-6 pt-4">
-          <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">File name</label>
-          <input
-            type="text"
-            value={customFilename}
-            onChange={e => setCustomFilename(e.target.value)}
-            placeholder={filename.replace(/\.[^/.]+$/, '')}
-            className="w-full mt-1 px-3 py-2 rounded-none bg-[var(--ss-bg)] border border-[var(--ss-line)] text-xs text-white focus:outline-none focus:border-[var(--ss-accent)] font-mono"
-          />
-        </div>
-
-        {/* Language */}
-        <div className="px-6 pt-4">
-          <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider" htmlFor="export-language">Language</label>
-          <select
-            id="export-language"
-            value={language}
-            onChange={e => setLanguageChoice(e.target.value)}
-            disabled={languageOptions.length < 2}
-            className="w-full mt-1 px-3 py-2 rounded-none bg-[var(--ss-bg)] border border-[var(--ss-line)] text-xs text-white focus:outline-none focus:border-[var(--ss-accent)] disabled:opacity-60"
-          >
-            {languageOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-          </select>
-          {languageOptions.length < 2 && (
-            <p className="text-[10px] text-slate-500 mt-1">Translate the subtitles to export other languages.</p>
-          )}
-        </div>
-
-        {/* Format Selector */}
-        <div className="px-6 pt-4 space-y-2">
-          <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Format</label>
-          {EXPORT_FORMATS.map(fmt => {
-            const Icon = fmt.icon;
-            const isSelected = selectedFormat === fmt.key;
-            return (
-              <button
-                key={fmt.key}
-                onClick={() => setSelectedFormat(fmt.key)}
-                className={`w-full flex items-center gap-3 p-3 rounded-none border-2 transition-all text-left cursor-pointer ${
-                  isSelected
-                    ? 'border-[var(--ss-accent)] bg-[var(--ss-accent)]/10 shadow-[0_0_12px_rgba(var(--kt-accent-rgb),0.15)]'
-                    : 'border-[var(--ss-line)] bg-[var(--ss-raised)] hover:border-[var(--ss-line)] hover:bg-[var(--ss-hover)]'
-                }`}
-              >
-                <div className={`w-9 h-9 rounded-none flex items-center justify-center shrink-0 ${isSelected ? 'bg-[var(--ss-accent)] text-black shadow-xs' : 'bg-[var(--ss-panel)] text-slate-400'}`}>
-                  <Icon className="w-4 h-4" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className={`text-xs font-bold ${isSelected ? 'text-white' : 'text-slate-300'}`}>{fmt.name}</span>
-                    <span className={`text-[11px] font-medium px-1.5 py-0.5 rounded border ${fmt.badgeColor}`}>{fmt.badge}</span>
-                  </div>
-                  <p className="text-[10px] text-slate-400 mt-0.5 truncate">{fmt.description}</p>
-                </div>
-                {isSelected && (
-                  <div className="w-5 h-5 rounded-none bg-[var(--ss-accent)] text-black flex items-center justify-center shrink-0">
-                    <Check className="w-3 h-3 text-black font-bold" />
-                  </div>
-                )}
-              </button>
-            );
-          })}
-        </div>
-
-        {/* SRT Preview */}
-        {srtPreview && (
-          <div className="px-6 pt-3">
-            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Preview</label>
-            <pre className="mt-1 p-2.5 rounded-none bg-[var(--ss-bg)] border border-[var(--ss-line)] text-[var(--ss-accent)] text-[10px] font-mono max-h-20 overflow-auto custom-scrollbar">
-              {srtPreview}
-            </pre>
+          <div>
+            <span className={labelCls}>Format</span>
+            <div className="space-y-2">
+              {EXPORT_FORMATS.map(fmt => {
+                const Icon = fmt.icon;
+                const isSelected = selectedFormat === fmt.key;
+                return (
+                  <button
+                    key={fmt.key}
+                    onClick={() => setSelectedFormat(fmt.key)}
+                    aria-pressed={isSelected}
+                    className={`w-full flex items-center gap-3 p-2.5 rounded-lg border transition-colors text-left cursor-pointer ${
+                      isSelected
+                        ? 'border-[var(--ss-accent)] bg-[var(--ss-selected)]'
+                        : 'border-[var(--ss-line)] bg-[var(--ss-bg)]/40 hover:bg-[var(--ss-raised)]'
+                    }`}
+                  >
+                    <div className={`w-8 h-8 rounded-md flex items-center justify-center shrink-0 ${isSelected ? 'bg-[var(--ss-accent)] text-[var(--ss-accent-ink)]' : 'bg-[var(--ss-raised)] text-[var(--ss-muted)]'}`}>
+                      <Icon className="w-4 h-4" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-[13px] font-semibold text-[var(--ss-text)]">{fmt.name}</span>
+                        <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-md border bg-[var(--ss-raised)] text-[var(--ss-muted)] border-[var(--ss-line)]">{fmt.badge}</span>
+                      </div>
+                      <p className="text-[11px] text-[var(--ss-muted)] mt-0.5 line-clamp-2">{fmt.description}</p>
+                    </div>
+                    {isSelected && (
+                      <div className="w-5 h-5 rounded-full bg-[var(--ss-accent)] text-[var(--ss-accent-ink)] flex items-center justify-center shrink-0">
+                        <Check className="w-3 h-3" />
+                      </div>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
           </div>
-        )}
+        </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-end gap-2.5 px-6 py-4 mt-3 border-t border-[var(--ss-line)]">
+        <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-[var(--ss-line)] shrink-0">
           <button
             onClick={handleDismiss}
-            className="px-4 py-2 rounded-none text-xs font-semibold text-slate-300 bg-[var(--ss-raised)] hover:bg-[var(--ss-hover)] border border-[var(--ss-line)] transition-colors cursor-pointer"
+            className="h-9 px-4 rounded-lg text-[13px] font-medium text-[var(--ss-muted)] hover:text-[var(--ss-text)] hover:bg-[var(--ss-raised)] border border-[var(--ss-line)] transition-colors cursor-pointer"
           >
             Cancel
           </button>
           <button
             onClick={handleExport}
             disabled={isExporting || !events || events.length === 0}
-            className="px-5 py-2 rounded-none text-xs font-bold text-black bg-[var(--ss-accent)] hover:bg-[var(--ss-accent-hover)] active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-[0_0_12px_rgba(var(--kt-accent-rgb),0.25)] flex items-center gap-1.5 cursor-pointer"
+            className="h-9 px-4 rounded-lg text-[13px] font-semibold text-[var(--ss-accent-ink)] bg-[var(--ss-accent)] hover:bg-[var(--ss-accent-hover)] disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-1.5 cursor-pointer"
           >
             {isExporting ? (
               <>
-                <div className="w-3.5 h-3.5 border-2 border-black/30 border-t-black rounded-none animate-spin" />
+                <div className="w-3.5 h-3.5 border-2 border-current/30 border-t-current rounded-full animate-spin" />
                 Compiling...
               </>
             ) : (
@@ -324,14 +304,5 @@ export default function SubtitleExportModal({ isOpen, onClose, events: liveEvent
       </div>
     </div>
   );
-}
-
-function formatSrtTime(secs) {
-  if (secs == null || isNaN(secs)) return '00:00:00,000';
-  const h = Math.floor(secs / 3600);
-  const m = Math.floor((secs % 3600) / 60);
-  const s = Math.floor(secs % 60);
-  const ms = Math.floor((secs % 1) * 1000);
-  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')},${String(ms).padStart(3, '0')}`;
 }
 
