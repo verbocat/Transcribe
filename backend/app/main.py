@@ -2369,6 +2369,13 @@ async def centroid_status():
     return await centroid_client.status()
 
 
+def _resolve_auto_source(body: dict, texts: list, payload: dict) -> None:
+    """Centroid needs a concrete source language: swap the editor's 'auto' for the detected one."""
+    if str(body.get("source_lang") or "").lower() == "auto":
+        from app.language_catalog import guess_source_lang
+        body["source_lang"] = guess_source_lang(texts, payload.get("source_hint"))
+
+
 @app.post("/api/centroid/translate")
 async def centroid_translate(payload: dict):
     """Send SRT/events to Centroid and return translated SRT(s) per target language."""
@@ -2379,6 +2386,7 @@ async def centroid_translate(payload: dict):
         raise HTTPException(status_code=400, detail="Choose at least one target language.")
     body = {k: payload[k] for k in ("srt", "source_lang", "target_langs", "target_lang", "context", "glossary", "constraints", "quality") if payload.get(k)}
     cues = payload.get("cues") or payload.get("events")
+    _resolve_auto_source(body, [str(e.get("text", "")) for e in (cues or [])] or [str(payload.get("srt") or "")], payload)
     if cues and not body.get("srt"):
         body["cues"] = [
             {"start": e.get("start_time", e.get("start")), "end": e.get("end_time", e.get("end")), "text": e.get("text", "")}
@@ -2402,6 +2410,7 @@ async def centroid_analyze(payload: dict):
         {"start": e.get("start_time", e.get("start")), "end": e.get("end_time", e.get("end")), "text": e.get("text", "")}
         for e in cues
     ]
+    _resolve_auto_source(body, [c["text"] for c in body["cues"]], payload)
     return await centroid_client.post("/subtitles/analyze", body)
 
 
@@ -2426,8 +2435,9 @@ async def centroid_qc(payload: dict):
         {"start": c.get("start"), "end": c.get("end"), "source": c.get("source", ""), "target": c.get("target", "")}
         for c in cues
     ]
+    _resolve_auto_source(body, [c["source"] for c in body["cues"]], payload)
     local = run_local_qc(
-        body["cues"], payload["target_lang"], payload.get("source_lang"),
+        body["cues"], payload["target_lang"], body.get("source_lang") or payload.get("source_lang"),
         payload.get("glossary"), payload.get("constraints"),
     )
     centroid, err = None, None

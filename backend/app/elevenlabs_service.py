@@ -20,6 +20,7 @@ from typing import Dict, Any, List, Optional
 import httpx
 
 from app.config import BASE_DIR
+from app.language_catalog import scribe_code_map
 
 logger = logging.getLogger(__name__)
 
@@ -168,6 +169,10 @@ LANGUAGE_CODE_MAP = {
     "he": "heb",
     "heb": "heb",
 }
+
+
+for _key, _code in scribe_code_map().items():
+    LANGUAGE_CODE_MAP.setdefault(_key, _code)
 
 
 def resolve_language_code(language_name_or_code: Optional[str]) -> Optional[str]:
