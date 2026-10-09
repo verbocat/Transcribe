@@ -9,7 +9,7 @@ import { API_BASE } from '../../config';
 import { startJob, jobHeaders, isCancelError } from '../../utils/cancellable';
 import { parseSrtText, cuesToSrt, downloadBlob, buildZip } from '../../utils/centroidSrt';
 import { Button, IconButton, Segmented, Select, TextInput, Switch, Badge } from './ui/controls';
-import { COMMON_LANGS, OTHER_LANGS, ALL_LANGS, langName } from './languages';
+import { COMMON_LANGS, OTHER_LANGS, ALL_LANGS, langName as subtitleLangName } from './languages';
 
 const COMMON = COMMON_LANGS;
 const OTHERS = OTHER_LANGS;
@@ -96,7 +96,7 @@ function parseGlossary(text) {
 const readStore = (key, fallback) => { try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; } catch (_) { return fallback; } };
 const writeStore = (key, value) => { try { localStorage.setItem(key, JSON.stringify(value)); } catch (_) { /* storage unavailable */ } };
 
-function LangSelect({ value, onChange, label }) {
+function LangSelect({ value, onChange, label, options }) {
   return (
     <select
       aria-label={label}
@@ -104,11 +104,13 @@ function LangSelect({ value, onChange, label }) {
       onChange={(e) => onChange(e.target.value)}
       className="h-9 w-full min-w-0 rounded-lg border border-[var(--ss-line)] bg-[var(--ss-bg)] px-2.5 text-[13px] text-[var(--ss-text)] hover:border-[var(--ss-muted)] focus:border-[var(--ss-accent)] focus:outline-none cursor-pointer"
     >
-      {langOptions().map((g) => (
-        <optgroup key={g.group} label={g.group}>
-          {g.items.map(([c, n]) => <option key={c} value={c}>{n}</option>)}
-        </optgroup>
-      ))}
+      {options
+        ? options.map(([c, n]) => <option key={c} value={c}>{n}</option>)
+        : langOptions().map((g) => (
+          <optgroup key={g.group} label={g.group}>
+            {g.items.map(([c, n]) => <option key={c} value={c}>{n}</option>)}
+          </optgroup>
+        ))}
     </select>
   );
 }
@@ -178,17 +180,23 @@ export default function CentroidModal({
   isOpen, onClose, events = [], cueUnit = 'cue', glossaryTerms = [], cplLimit = 42, maxLines = 2, cpsLimit = 20,
   fileName = 'subtitles', defaultSourceLang = 'en', qcHost = null, onOpenQc, onOpenTranslate,
   activeLang = null, trackLangs = [],
+  // Optional full language lists ([code, name], alphabetical). Without them the original short list is used.
+  // `sourceLanguages` may include ['auto', ...]; `sourceHint` is the language the transcript was detected as.
+  languages = null, sourceLanguages = null, sourceHint = null, langStoreSuffix = '',
   onTranslated, onShowTrack, onApplyTextFixes, onJumpToEvent, onStateChange,
 }) {
   const [status, setStatus] = useState(null);
+  const allLangs = languages || ALL_LANGS;
+  const langName = useCallback((code) => (code === 'auto' ? 'Auto-detect' : (allLangs.find(([c]) => c === code) || [code, subtitleLangName(code)])[1]), [allLangs]);
+  const hint = sourceHint ? { source_hint: sourceHint } : {};
 
   // ---- translate inputs ----
   const [sourceMode, setSourceMode] = useState('editor'); // 'editor' | 'upload'
   const [uploaded, setUploaded] = useState({ name: '', cues: [] });
   const [snapshot, setSnapshot] = useState([]); // source cues used for the last run (QC reference)
   const [sourceBase, setSourceBase] = useState([]); // the full source subtitle objects, used to build each language's track
-  const [sourceLang, setSourceLang] = useState(() => readStore('centroid_src_v2', null) || toCentroidLang(defaultSourceLang));
-  const [targetLang, setTargetLang] = useState(() => readStore('centroid_tgt_v2', null) || 'hi');
+  const [sourceLang, setSourceLang] = useState(() => readStore(`centroid_src_v2${langStoreSuffix}`, null) || (sourceLanguages ? defaultSourceLang : toCentroidLang(defaultSourceLang)));
+  const [targetLang, setTargetLang] = useState(() => readStore(`centroid_tgt_v2${langStoreSuffix}`, null) || 'hi');
   const [extraTargets, setExtraTargets] = useState([]);
   const [showMore, setShowMore] = useState(false);
   const ctxKey = `centroid_ctx_v3:${fileName}`;
@@ -234,7 +242,7 @@ export default function CentroidModal({
   }, [isOpen, Boolean(qcHost)]);
 
   useEffect(() => { setLimits((l) => ({ ...l, max_cpl: cplLimit, max_lines: maxLines, max_cps: cpsLimit })); }, [cplLimit, maxLines, cpsLimit]);
-  useEffect(() => { writeStore('centroid_src_v2', sourceLang); writeStore('centroid_tgt_v2', targetLang); }, [sourceLang, targetLang]);
+  useEffect(() => { writeStore(`centroid_src_v2${langStoreSuffix}`, sourceLang); writeStore(`centroid_tgt_v2${langStoreSuffix}`, targetLang); }, [sourceLang, targetLang, langStoreSuffix]);
   useEffect(() => { writeStore('centroid_autoqc_v2', autoQc); }, [autoQc]);
   useEffect(() => { writeStore('centroid_quality_v1', quality); }, [quality]);
 
@@ -248,11 +256,11 @@ export default function CentroidModal({
 
   // Translating from what you are looking at: when you switch language tracks, that language becomes the source
   useEffect(() => {
-    if (activeLang && ALL_LANGS.some(([c]) => c === activeLang)) {
+    if (activeLang && allLangs.some(([c]) => c === activeLang)) {
       setSourceLang(activeLang);
       setTargetLang((t) => (t === activeLang ? (activeLang === 'en' ? 'hi' : 'en') : t));
     }
-  }, [activeLang]);
+  }, [activeLang]); // eslint-disable-line react-hooks/exhaustive-deps
   // Safety net for saved or default values
   useEffect(() => {
     if (sourceLang === targetLang) setTargetLang(sourceLang === 'en' ? 'hi' : 'en');
@@ -317,9 +325,9 @@ export default function CentroidModal({
   const changeTarget = (code) => { if (code === sourceLang) setSourceLang(targetLang); setTargetLang(code); };
 
   const swapLanguages = () => {
-    const s = sourceLang;
+    const s = sourceLang === 'auto' ? (sourceHint || 'en') : sourceLang;
     setSourceLang(targetLang);
-    setTargetLang(s);
+    setTargetLang(s === targetLang ? (s === 'en' ? 'hi' : 'en') : s);
   };
 
   /** Let Centroid read the whole script and fill in the briefing: synopsis, characters, tone and a name glossary. */
@@ -333,7 +341,7 @@ export default function CentroidModal({
     try {
       const data = await api('/api/centroid/analyze', {
         events: sourceCues.map((c) => ({ start_time: c.start_time ?? c.start, end_time: c.end_time ?? c.end, text: c.text })),
-        source_lang: sourceLang, target_langs: targets, context: buildContext(),
+        source_lang: sourceLang, target_langs: targets, context: buildContext(), ...hint,
       }, job);
       const next = { ...ctx };
       ['title', 'genre', 'audience', 'setting', 'synopsis'].forEach((k) => { if (!String(next[k]).trim() && known(data[k])) next[k] = data[k]; });
@@ -407,7 +415,7 @@ export default function CentroidModal({
     qcJob.current = job;
     try {
       const data = await api('/api/centroid/qc', {
-        cues: pairs, source_lang: sourceLang, target_lang: lang,
+        cues: pairs, source_lang: sourceLang, target_lang: lang, ...hint,
         context: buildContext(), glossary: buildGlossary(), constraints: buildLimits(),
       }, job);
       setQc({ ...data, target: code, issues: (data.issues || []).map((i, n) => ({ ...i, key: `${i.index}-${i.category}-${n}`, status: 'open' })) });
@@ -418,7 +426,7 @@ export default function CentroidModal({
       setQcBusy(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pairsFor, sourceLang, targets, ctx, glossaryText, keepNames, glossaryTerms, limits, cueUnit]);
+  }, [pairsFor, sourceLang, sourceHint, targets, ctx, glossaryText, keepNames, glossaryTerms, limits, cueUnit]);
 
   const runTranslate = async () => {
     setError('');
@@ -430,7 +438,7 @@ export default function CentroidModal({
     try {
       const data = await api('/api/centroid/translate', {
         events: sourceCues.map((c) => ({ start_time: c.start_time ?? c.start, end_time: c.end_time ?? c.end, text: c.text })),
-        source_lang: sourceLang, target_langs: targets, context: buildContext(), glossary: buildGlossary(), constraints: buildLimits(),
+        source_lang: sourceLang, target_langs: targets, context: buildContext(), glossary: buildGlossary(), constraints: buildLimits(), ...hint,
         quality,
       }, job);
       const snap = sourceCues.map((c, i) => ({ id: i + 1, editorId: c.id ?? c.event_id, start_time: c.start_time ?? c.start, end_time: c.end_time ?? c.end, text: c.text }));
@@ -554,7 +562,7 @@ export default function CentroidModal({
     const target = qc.target;
     const lang = target === 'editor' ? targets[0] || sourceLang : target;
     const patched = qcPairs.pairs.map((p) => { const e = edits.find((x) => x.index === p.id); return e ? { ...p, target: e.text ?? p.target, end: e.end ?? p.end } : p; });
-    api('/api/subtitle/qc', { cues: patched, source_lang: sourceLang, target_lang: lang, glossary: buildGlossary(), constraints: buildLimits() })
+    api('/api/subtitle/qc', { cues: patched, source_lang: sourceLang === 'auto' ? (sourceHint || 'en') : sourceLang, target_lang: lang, glossary: buildGlossary(), constraints: buildLimits() })
       .then((data) => {
         setQc((q) => {
           if (!q || q.target !== target) return q;
@@ -760,16 +768,16 @@ export default function CentroidModal({
             <section>
               <h3 className="text-[12.5px] font-semibold mb-2">Languages</h3>
               <div className="grid grid-cols-[1fr_auto_1fr] items-end gap-2">
-                <Field label="From"><LangSelect label="Source language" value={sourceLang} onChange={changeSource} /></Field>
+                <Field label="From"><LangSelect label="Source language" value={sourceLang} onChange={changeSource} options={sourceLanguages} /></Field>
                 <IconButton icon={ArrowLeftRight} label="Swap languages" variant="secondary" size="lg" onClick={swapLanguages} />
-                <Field label="To"><LangSelect label="Target language" value={targetLang} onChange={changeTarget} /></Field>
+                <Field label="To"><LangSelect label="Target language" value={targetLang} onChange={changeTarget} options={languages} /></Field>
               </div>
               <button type="button" onClick={() => setShowMore((v) => !v)} className="mt-2 text-[12px] text-[var(--ss-accent)] hover:underline cursor-pointer inline-flex items-center gap-1">
                 <Plus size={12} /> {showMore ? 'Hide extra languages' : `Also translate into more languages${extraTargets.length ? ` (${extraTargets.length})` : ''}`}
               </button>
               {showMore && (
                 <div className="mt-2 flex flex-wrap gap-1.5 max-h-36 overflow-y-auto">
-                  {ALL_LANGS.filter(([c]) => c !== sourceLang && c !== targetLang).map(([c, n]) => {
+                  {allLangs.filter(([c]) => c !== sourceLang && c !== targetLang).map(([c, n]) => {
                     const on = extraTargets.includes(c);
                     return (
                       <button

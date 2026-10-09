@@ -18,7 +18,7 @@ import { rememberSpeakerName } from './speakerNames';
 import { API_BASE } from '../../config';
 import QcDrawer from './QcDrawer';
 import CentroidModal from '../subtitle/CentroidModal';
-import { ALL_LANGS } from '../subtitle/languages';
+import { AUTO_SOURCE, TRANSLATE_LANGUAGES, TRANSLATE_SOURCE_LANGUAGES, translateCodeForName, translateLangName } from '../../data/languageCatalog';
 import { buildRoster } from './speakerUtils';
 import { exportLanguageOptions, isValidExportLanguage, segmentsForExport, parseExportLanguage } from '../../utils/exportLanguage';
 import { loadCast, saveCast, findCastMember } from './castUtils';
@@ -127,10 +127,8 @@ export default function TranscribeStudio(p) {
     id: s.segment_id, event_id: s.segment_id, start_time: s.start_time, end_time: s.end_time,
     start: s.start_time, end: s.end_time, text: s.transcript || '', speaker: s.speaker,
   })), [p.segments]);
-  const sourceLangCode = useMemo(() => {
-    const name = (p.detectedLanguage || '').toLowerCase();
-    return (ALL_LANGS.find(([, n]) => n.toLowerCase() === name) || [null])[0] || 'hi';
-  }, [p.detectedLanguage]);
+  // Centroid code of the language the transcript was detected as (null while unknown)
+  const detectedCode = useMemo(() => translateCodeForName(p.detectedLanguage), [p.detectedLanguage]);
   const translation = useMemo(() => (activeTrack && tracks[activeTrack]
     ? { code: activeTrack, byId: new Map(tracks[activeTrack].map((e) => [e.id, e.text])) } : null), [activeTrack, tracks]);
 
@@ -148,7 +146,7 @@ export default function TranscribeStudio(p) {
   /** Segments and language label for an export in the chosen language */
   const exportPayload = () => {
     const { kind, code } = parseExportLanguage(exportLang);
-    const label = code ? (ALL_LANGS.find(([c]) => c === code) || [code, code])[1] : null;
+    const label = code ? translateLangName(code) : null;
     return {
       segments: segmentsForExport(exportLang, p.segments, code ? tracks[code] : null),
       translationLanguage: kind === 'both' ? label : null,
@@ -305,6 +303,7 @@ export default function TranscribeStudio(p) {
             filename={p.canTranscribe ? p.filename : null} isExtractingAudio={p.isExtractingAudio} extractionNotice={p.extractionNotice} onCancelExtract={p.onCancelExtract}
             onDropFile={(file) => p.onFileSelect({ target: { files: [file] } })}
             onOpenProjects={p.onOpenProjects} video={video}
+            language={p.language} setLanguage={p.setLanguage}
           />
         )
       )}
@@ -369,7 +368,11 @@ export default function TranscribeStudio(p) {
       <CentroidModal
         isOpen={showTranslate}
         onClose={() => setShowTranslate(false)}
-        defaultSourceLang={sourceLangCode}
+        defaultSourceLang={detectedCode || AUTO_SOURCE}
+        sourceHint={detectedCode}
+        languages={TRANSLATE_LANGUAGES}
+        sourceLanguages={TRANSLATE_SOURCE_LANGUAGES}
+        langStoreSuffix="_transcribe"
         qcHost={showQc && qcView === 'centroid' ? qcHost : null}
         onOpenQc={() => openQc('centroid')}
         onOpenTranslate={() => { setShowQc(false); setShowTranslate(true); }}

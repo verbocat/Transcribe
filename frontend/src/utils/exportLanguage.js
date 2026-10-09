@@ -1,4 +1,8 @@
-import { langName } from '../components/subtitle/languages';
+import { langName as shortListName } from '../components/subtitle/languages';
+import { translateLangName } from '../data/languageCatalog';
+
+// The subtitle short list first, then the full Transcribe Studio list, else the bare code
+const langName = (c) => { const n = shortListName(c); return n !== c ? n : translateLangName(c); };
 
 /**
  * Export language choices shared by Transcribe Studio and Subtitle Studio.

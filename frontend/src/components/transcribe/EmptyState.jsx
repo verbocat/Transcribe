@@ -1,12 +1,13 @@
 import React, { useState } from 'react';
 import { UploadCloud, Loader2, Square } from 'lucide-react';
+import LanguageSelect from './LanguageSelect';
 
 /**
  * Pre-transcription screen: one centered card. Empty, it is a drop zone; once media is loaded it becomes a
- * compact summary; language and Transcribe live in the top bar.
+ * compact summary; the spoken language is picked here and Transcribe is in the top bar.
  */
 export default function EmptyState({
-  filename, isExtractingAudio, extractionNotice, onCancelExtract, onDropFile, onOpenProjects, video,
+  filename, isExtractingAudio, extractionNotice, onCancelExtract, onDropFile, onOpenProjects, video, language, setLanguage,
 }) {
   const [dragging, setDragging] = useState(false);
   const drop = {
@@ -49,9 +50,15 @@ export default function EmptyState({
 
           {!isExtractingAudio && (
             <p style={{ color: 'var(--ts-muted)', marginTop: 16, lineHeight: 1.5 }}>
-              Pick the language in the top bar, then press <strong style={{ color: 'var(--ts-text)' }}>Transcribe</strong>.
+              Check the language below, then press <strong style={{ color: 'var(--ts-text)' }}>Transcribe</strong>.
             </p>
           )}
+        </div>
+      )}
+
+      {setLanguage && !isExtractingAudio && (
+        <div style={{ width: '100%', maxWidth: 440, marginTop: 16 }}>
+          <LanguageSelect value={language} onChange={setLanguage} />
         </div>
       )}
 
