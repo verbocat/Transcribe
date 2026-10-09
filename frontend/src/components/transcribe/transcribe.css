@@ -334,3 +334,11 @@ select.ts-field { padding-right: 4px; }
 }
 .ts-rail-sep { width: 32px; height: 1px; margin: 4px 0; background: var(--ts-line); }
 .ts-rail-pop { left: calc(100% + 8px); right: auto; top: 0; width: 320px; max-height: 80vh; overflow-y: auto; }
+
+.ts-target { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.ts-target-src { font-size: 12px; color: var(--ts-muted, var(--ts-faint)); padding: 0 4px; white-space: nowrap; }
+.ts-target-arrow { color: var(--ts-faint); }
+.ts-target-label { max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ts-target-list { max-height: min(360px, calc(100vh - 80px)); overflow-y: auto; }
+.ts-target-err { color: var(--ts-danger); font-size: 12px; white-space: nowrap; }
+@media (max-width: 1100px) { .ts-target-src, .ts-target-arrow { display: none; } }

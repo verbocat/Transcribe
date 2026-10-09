@@ -69,6 +69,49 @@ function MoreActionsMenu({ p, hasSegments, importRef }) {
   );
 }
 
+/** Source (fixed label) -> target (picker). Picking a target translates the transcript with Centroid. */
+function TargetLanguage({ p }) {
+  const { open, setOpen, ref } = usePopover();
+  const st = p.translateState || {};
+  const busy = Boolean(st.busy);
+  const active = p.activeTarget;
+  const name = (c) => (p.targetLanguages.find(([k]) => k === c) || [c, c])[1];
+  const btnRef = useRef(null);
+  // The top bar clips overflow, so the list is positioned against the viewport
+  const rect = open && btnRef.current ? btnRef.current.getBoundingClientRect() : null;
+  const label = busy ? `Translating to ${name(st.targetLang)}… ${st.elapsed || 0}s` : active ? name(active) : 'Translate to…';
+  return (
+    <div className="ts-target" ref={ref}>
+      <span className="ts-target-src" title="Source language (from the transcript)">{p.sourceLabel}</span>
+      <span aria-hidden="true" className="ts-target-arrow">→</span>
+      <div className="relative">
+        <button ref={btnRef} type="button" className={`ts-btn ts-btn-ghost ${active ? 'ts-topbar-active' : ''}`} disabled={!p.segmentCount} onClick={() => setOpen(!open)}
+          aria-haspopup="listbox" aria-expanded={open} title="Choose the target language to translate into">
+          {busy ? <Loader2 size={14} className="animate-spin" /> : <Languages size={14} />} <span className="ts-target-label">{label}</span>
+        </button>
+        {open && (
+          <div className="ts-popover ts-target-list" role="listbox" style={{ position: 'fixed', top: rect ? rect.bottom + 8 : 48, left: rect ? Math.max(8, Math.min(rect.left, window.innerWidth - 248)) : 8, right: 'auto', width: 240 }}>
+            {active && (
+              <button type="button" className="ts-menu-item" onClick={() => { setOpen(false); p.onPickTarget('none'); }}>
+                <span className="flex-1">Show original only</span>
+              </button>
+            )}
+            {p.targetLanguages.map(([code, nm]) => (
+              <button key={code} type="button" role="option" aria-selected={code === active} className="ts-menu-item"
+                disabled={code === p.sourceCode} onClick={() => { setOpen(false); p.onPickTarget(code); }}>
+                <span className="flex-1">{nm}</span>
+                {p.trackCodes.includes(code) && <span style={{ color: 'var(--ts-faint)', fontSize: 11 }}>{code === active ? 'showing' : 'ready'}</span>}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+      {busy && <button type="button" className="ts-btn ts-btn-ghost" onClick={p.onCancelTranslate}>Cancel</button>}
+      {!busy && st.error && <span className="ts-target-err" title={st.error}>Translation failed</span>}
+    </div>
+  );
+}
+
 export default function TopBar(p) {
   const importRef = useRef(null);
   const hasSegments = p.segmentCount > 0;
@@ -139,6 +182,7 @@ export default function TopBar(p) {
         <button type="button" className="ts-btn ts-btn-primary shrink-0" disabled={!p.canTranscribe || p.isTranscribing || p.isExtractingAudio} onClick={p.onTranscribe} title={p.canTranscribe ? 'Transcribe this media' : 'Import media first'}>
           {p.isTranscribing ? <><Loader2 size={14} className="animate-spin" /> {Math.round(p.progressPercent)}%</> : <><Sparkles size={14} /> Transcribe</>}
         </button>
+        <TargetLanguage p={p} />
       </div>
 
       {/* Right group: icon buttons for key actions + overflow */}

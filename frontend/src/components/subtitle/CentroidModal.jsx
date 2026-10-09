@@ -184,6 +184,8 @@ export default function CentroidModal({
   // `sourceLanguages` may include ['auto', ...]; `sourceHint` is the language the transcript was detected as.
   languages = null, sourceLanguages = null, sourceHint = null, langStoreSuffix = '',
   onTranslated, onShowTrack, onApplyTextFixes, onJumpToEvent, onStateChange,
+  // Optional remote control (Transcribe Studio header): {type: 'translate', code, n} | {type: 'cancel', n}
+  command = null,
 }) {
   const [status, setStatus] = useState(null);
   const allLangs = languages || ALL_LANGS;
@@ -275,7 +277,20 @@ export default function CentroidModal({
 
   const resultLangs = Object.keys(results);
   const hasResults = resultLangs.length > 0;
-  useEffect(() => { onStateChange?.({ hasResults, qcIssues: qc ? qc.issues.filter((i) => i.status === 'open').length : null }); }, [hasResults, qc, onStateChange]);
+  useEffect(() => {
+    onStateChange?.({ hasResults, qcIssues: qc ? qc.issues.filter((i) => i.status === 'open').length : null, busy, elapsed, targetLang, error });
+  }, [hasResults, qc, onStateChange, busy, elapsed, targetLang, error]);
+
+  // Remote control: pick the target, then run once the new target is in state
+  const [pendingRun, setPendingRun] = useState(null);
+  useEffect(() => {
+    if (!command) return;
+    if (command.type === 'cancel') { cancelJob(translateJob); setPendingRun(null); return; }
+    if (command.type === 'translate') { setTargetLang(command.code); setExtraTargets([]); setSourceMode('editor'); setPendingRun(command); }
+  }, [command]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (pendingRun && targetLang === pendingRun.code && !busy) { setPendingRun(null); runTranslate(); }
+  }); // eslint-disable-line react-hooks/exhaustive-deps
 
   const sourceCues = useMemo(() => {
     const raw = sourceMode === 'upload' ? uploaded.cues : events;

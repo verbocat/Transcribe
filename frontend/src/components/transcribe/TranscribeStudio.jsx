@@ -44,6 +44,7 @@ export default function TranscribeStudio(p) {
   const [qcView, setQcView] = useState('karya');
   const [qcHost, setQcHost] = useState(null);
   const [centroidState, setCentroidState] = useState({ hasResults: false, qcIssues: null });
+  const [centroidCmd, setCentroidCmd] = useState(null);
   const [tracks, setTracks] = useState({}); // language code -> translated cues
   const [activeTrack, setActiveTrack] = useState(null);
   const [exportChoice, setExportChoice] = useState(null); // null = follow the active track
@@ -223,6 +224,12 @@ export default function TranscribeStudio(p) {
         onOpenLayout={() => setShowLayout(true)} onResetLayout={studio.reset}
         timelineHidden={layout.timelinePos === 'hidden'} onToggleTimeline={() => studio.patch({ timelinePos: layout.timelinePos === 'hidden' ? 'bottom' : 'hidden' })}
         onOpenTranslate={openTranslate} onOpenQc={() => (showQc ? setShowQc(false) : openQc())}
+        sourceLabel={detectedCode ? translateLangName(detectedCode) : (p.detectedLanguage || 'Auto-detect')} sourceCode={detectedCode}
+        targetLanguages={TRANSLATE_LANGUAGES} translateState={centroidState} activeTarget={activeTrack}
+        trackCodes={Object.keys(tracks)}
+        onPickTarget={(code) => { if (code === 'none') setActiveTrack(null); else if (tracks[code]) setActiveTrack(code); else setCentroidCmd({ type: 'translate', code, n: Date.now() }); }}
+        onRetranslate={(code) => setCentroidCmd({ type: 'translate', code, n: Date.now() })}
+        onCancelTranslate={() => setCentroidCmd({ type: 'cancel', n: Date.now() })}
       />
 
       <div className="ts-body">
@@ -385,7 +392,8 @@ export default function TranscribeStudio(p) {
         onApplyTextFixes={applyTextFixes}
         activeLang={activeTrack}
         trackLangs={Object.keys(tracks)}
-        onTranslated={({ built }) => { setTracks(built); setActiveTrack(null); }}
+        command={centroidCmd}
+        onTranslated={({ built }) => { setTracks(built); const c = Object.keys(built)[0]; setActiveTrack(c || null); }}
         onShowTrack={({ code, events: cues }) => { setTracks((prev) => ({ ...prev, [code]: cues })); setActiveTrack(code); }}
       />
 
