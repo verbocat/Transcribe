@@ -228,6 +228,7 @@ export default function TranscribeStudio(p) {
       />
 
       <div className="ts-body">
+      {layout.toolRail && (
       <TranscribeRail
         disabled={!hasSegments} translateOpen={showTranslate} onTranslate={openTranslate}
         qcOpen={showQc} onQc={() => (showQc ? setShowQc(false) : openQc())} qcIssues={centroidState.qcIssues}
@@ -235,7 +236,7 @@ export default function TranscribeStudio(p) {
         onDownload={() => p.onDownload(exportPayload())} onDubbing={() => p.onDubbing(exportPayload())}
         isExporting={p.isExporting} onCancelExport={p.onCancelExport}
         exportLang={exportLang} exportLangOptions={exportLangOptions} onExportLang={setExportChoice}
-      />
+      />)}
       <div className="ts-main">
 
       {p.isTranscribing && (

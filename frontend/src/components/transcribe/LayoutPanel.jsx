@@ -1,6 +1,7 @@
 import React, { useEffect } from 'react';
 import { X, LayoutPanelLeft, RotateCcw, Check, Cloud, CloudOff } from 'lucide-react';
 import { PRESETS, DEFAULT_LAYOUT, LIMITS, TIMELINE_MIN } from './layoutModel';
+import LayoutPreview from './LayoutPreview';
 import { Segmented, Section, Row, SwitchRow, Slider, Button } from '../subtitle/ui/controls';
 
 const SYNC_TEXT = {
@@ -30,7 +31,7 @@ export default function LayoutPanel({ isOpen, onClose, studio }) {
       <aside
         role="dialog" aria-label="Layout"
         className="absolute top-0 right-0 bottom-0 flex flex-col"
-        style={{ width: 380, maxWidth: '100vw', background: 'var(--ts-panel)', borderLeft: '1px solid var(--ts-line)', boxShadow: '-18px 0 48px rgba(0,0,0,0.45)' }}
+        style={{ width: 440, maxWidth: '100vw', background: 'var(--ts-panel)', borderLeft: '1px solid var(--ts-line)', boxShadow: '-18px 0 48px rgba(0,0,0,0.45)' }}
       >
         <div className="flex items-center justify-between px-4 shrink-0" style={{ height: 52, borderBottom: '1px solid var(--ts-line)' }}>
           <div className="flex items-center gap-2 font-semibold"><LayoutPanelLeft size={16} style={{ color: 'var(--ts-accent)' }} /> Layout</div>
@@ -46,6 +47,14 @@ export default function LayoutPanel({ isOpen, onClose, studio }) {
             {syncText}
           </p>
 
+          <div className="mt-3 rounded-xl p-3 sticky top-0" style={{ zIndex: 2, background: 'var(--ts-raised)', border: '1px solid var(--ts-line)' }}>
+            <div className="flex items-center justify-between mb-2" style={{ fontSize: 12, color: 'var(--ts-muted)' }}>
+              <span style={{ fontWeight: 600, color: 'var(--ts-text)' }}>Live preview</span>
+              <span>{activePreset ? activePreset.name : 'Custom'} · drag the dividers to resize</span>
+            </div>
+            <LayoutPreview layout={layout} onPatch={patch} />
+          </div>
+
           <Section title="Presets">
             <div className="grid grid-cols-2 gap-2 p-3">
               {PRESETS.map((p) => {
@@ -53,9 +62,10 @@ export default function LayoutPanel({ isOpen, onClose, studio }) {
                 return (
                   <button
                     key={p.id} type="button" aria-pressed={on} onClick={() => apply(p.layout)}
-                    className="text-left rounded-xl border p-2.5 transition-colors"
+                    className="text-left rounded-xl border p-2 transition-colors"
                     style={{ borderColor: on ? 'var(--ts-accent)' : 'var(--ts-line)', background: on ? 'rgba(var(--ts-accent-rgb), 0.1)' : 'var(--ts-raised)' }}
                   >
+                    <span style={{ display: 'block', pointerEvents: 'none', marginBottom: 6 }}><LayoutPreview layout={p.layout} /></span>
                     <span className="flex items-center justify-between" style={{ fontWeight: 600, fontSize: 12.5 }}>
                       {p.name} {on && <Check size={12} style={{ color: 'var(--ts-accent)' }} />}
                     </span>
@@ -69,12 +79,13 @@ export default function LayoutPanel({ isOpen, onClose, studio }) {
           <Section title="Arrange">
             <Row label="Speaker list">
               <Segmented label="Speaker list position" value={layout.speakersPos} onChange={set('speakersPos')}
-                options={[{ value: 'left', label: 'Left' }, { value: 'right', label: 'Right' }, { value: 'hidden', label: 'Hidden' }]} />
+                options={[{ value: 'left', label: 'Left' }, { value: 'right', label: 'Right' }, { value: 'hidden', label: 'Off' }]} />
             </Row>
             <Row label="Timeline">
               <Segmented label="Timeline" value={layout.timelinePos} onChange={set('timelinePos')}
-                options={[{ value: 'bottom', label: 'Bottom' }, { value: 'hidden', label: 'Hidden' }]} />
+                options={[{ value: 'bottom', label: 'Bottom' }, { value: 'hidden', label: 'Off' }]} />
             </Row>
+            <SwitchRow label="Left tool panel" hint="Translate, QC and Export" checked={layout.toolRail} onChange={set('toolRail')} />
             <SwitchRow label="Video monitor" hint="The small player above the speaker list" checked={layout.showVideo} onChange={set('showVideo')} />
           </Section>
 

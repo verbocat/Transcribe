@@ -18,6 +18,7 @@ export const DEFAULT_LAYOUT = {
   speakersW: 296,
   timelinePos: 'bottom', // bottom | hidden
   timelineH: 0,          // px, 0 = automatic (a share of the window)
+  toolRail: true,        // the left rail with Translate, QC and Export
   showVideo: true,       // the small video monitor above the speaker list
   paneStyle: 'flat',     // flat | cards
   gap: 0,
@@ -29,7 +30,7 @@ const ENUMS = {
   timelinePos: ['bottom', 'hidden'],
   paneStyle: ['flat', 'cards'],
 };
-const BOOLS = ['showVideo'];
+const BOOLS = ['showVideo', 'toolRail'];
 export const LIMITS = {
   speakersW: [220, 480, 4],
   timelineH: [0, 720, 2],
@@ -65,10 +66,11 @@ const make = (patch) => normalizeLayout({ ...DEFAULT_LAYOUT, ...patch });
 
 export const PRESETS = [
   { id: 'default', name: 'Default', hint: 'Speakers on the left, timeline below', layout: make({}) },
+  { id: 'editing', name: 'Editing focus', hint: 'Wide transcript, slim speaker list', layout: make({ speakersW: 232, showVideo: false, timelineH: 220 }) },
+  { id: 'timeline', name: 'Timeline focus', hint: 'More room for waveform and speaker rows', layout: make({ timelineH: 440 }) },
+  { id: 'review', name: 'Review', hint: 'Video monitor and a roomy speaker list', layout: make({ speakersW: 380, timelineH: 240 }) },
   { id: 'mirrored', name: 'Speakers right', hint: 'Speaker list on the right', layout: make({ speakersPos: 'right' }) },
   { id: 'wide', name: 'Wide transcript', hint: 'Speaker list hidden, full-width lines', layout: make({ speakersPos: 'hidden' }) },
-  { id: 'timeline', name: 'Tall timeline', hint: 'More room for waveform and speaker rows', layout: make({ timelineH: 440 }) },
-  { id: 'compact', name: 'Compact', hint: 'Narrow speakers, no video monitor', layout: make({ speakersW: 232, showVideo: false, timelineH: 260 }) },
   { id: 'cards', name: 'Floating cards', hint: 'Rounded panes with breathing room', layout: make({ paneStyle: 'cards', gap: 10, radius: 14 }) },
   { id: 'focus', name: 'Transcript only', hint: 'Just the transcript', layout: make({ speakersPos: 'hidden', timelinePos: 'hidden' }) },
 ];
