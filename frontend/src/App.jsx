@@ -899,6 +899,8 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
     const name = draftName || selectedFile?.name || transcriptionResult?.filename || file.name;
     setDraftName(name);
     if (file.name === name) setSelectedFile(file);
+    // Playback and the waveform work from the picked file straight away; the small extracted audio replaces it when ready
+    setAudioUrl((prev) => { if (prev && prev.startsWith('blob:')) URL.revokeObjectURL(prev); return URL.createObjectURL(file); });
     await prepareMedia(file, name);
     setDbSaveToast('Media relinked ✓ the timeline is live again');
     setTimeout(() => setDbSaveToast(''), 3000);
@@ -1743,6 +1745,7 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
         restoredDuration={restoredTimeline?.duration}
         onPeaksReady={(peaks, pps) => { peaksRef.current = { peaks, pps }; markStudioDirty(); }}
         onRelinkMedia={handleRelinkMedia}
+        mediaBusyNotice={isExtractingAudio ? (extractionNotice || 'Preparing audio') : ''}
         playTargetTime={playTargetTime}
         notes={transcriptionResult?.processing_notes || []}
         toast={dbSaveToast || autoSaveStatus}

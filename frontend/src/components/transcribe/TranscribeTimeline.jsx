@@ -42,7 +42,7 @@ const fmt = (s) => {
  * Transcript segments are presented to the timeline as subtitle events.
  */
 export default function TranscribeTimeline({
-  audioUrl, videoUrl, segments, textById, restoredPeaks, restoredDuration, onPeaksReady, onRelink, activeSegmentId, setActiveSegmentId,
+  audioUrl, videoUrl, segments, textById, restoredPeaks, restoredDuration, onPeaksReady, onRelink, busyNotice, activeSegmentId, setActiveSegmentId,
   onSegmentTimeChange, onSplit, onMerge, onAdd, onUndo, onRedo,
   playTargetTime, onTimeUpdate, onPlayStateChange,
 }) {
@@ -175,6 +175,7 @@ export default function TranscribeTimeline({
         <span className="font-mono tabular-nums" style={{ fontSize: 12, color: 'var(--ss-muted)' }}>
           {fmt(time)} / {fmt(duration || restoredDuration || lastEnd)}
         </span>
+        {busyNotice && <span data-testid="media-busy" style={{ fontSize: 12, color: 'var(--ss-muted)' }}>{busyNotice}</span>}
         {!audioUrl && (
           <>
             <span style={{ fontSize: 12, color: 'var(--ss-muted)' }}>Media is not loaded, so playback is off. The timeline below is rebuilt from your transcript.</span>

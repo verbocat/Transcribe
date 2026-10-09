@@ -375,6 +375,7 @@ export default function TranscribeStudio(p) {
             restoredPeaks={p.restoredPeaks}
             restoredDuration={p.restoredDuration}
             onPeaksReady={p.onPeaksReady}
+            busyNotice={p.mediaBusyNotice}
             onRelink={() => document.getElementById('ts-relink-input')?.click()}
             segments={p.segments}
             textById={translation ? translation.byId : null}
