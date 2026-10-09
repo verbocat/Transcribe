@@ -186,6 +186,8 @@ export default function CentroidModal({
   onTranslated, onShowTrack, onApplyTextFixes, onJumpToEvent, onStateChange,
   // Optional remote control (Transcribe Studio header): {type: 'translate', code, n} | {type: 'cancel', n}
   command = null,
+  // Optional save / restore (Transcribe Studio drafts): `stateRef.current()` returns what to keep, `restoreState` ({n, data}) puts it back
+  stateRef = null, restoreState = null,
 }) {
   const [status, setStatus] = useState(null);
   const allLangs = languages || ALL_LANGS;
@@ -280,6 +282,31 @@ export default function CentroidModal({
   useEffect(() => {
     onStateChange?.({ hasResults, qcIssues: qc ? qc.issues.filter((i) => i.status === 'open').length : null, busy, elapsed, targetLang, error });
   }, [hasResults, qc, onStateChange, busy, elapsed, targetLang, error]);
+
+  // Drafts: hand out the translate/QC state on demand, and take a saved one back (results, QC findings with their fixed/dismissed state)
+  if (stateRef) {
+    stateRef.current = () => (hasResults || qc ? {
+      sourceLang, targetLang, results, snapshot, sourceBase, failedLangs, previewLang, qcTarget, qc,
+    } : null);
+  }
+  const restoredN = useRef(null);
+  useEffect(() => {
+    const d = restoreState?.data;
+    if (!restoreState || restoredN.current === restoreState.n) return;
+    restoredN.current = restoreState.n;
+    if (!d) return;
+    setResults(d.results || {});
+    setSnapshot(d.snapshot || []);
+    setSourceBase(d.sourceBase || []);
+    setFailedLangs(d.failedLangs || {});
+    setPreviewLang(d.previewLang || null);
+    setQcTarget(d.qcTarget || '');
+    setQc(d.qc || null);
+    setQcError('');
+    setQcNote('');
+    if (d.sourceLang) setSourceLang(d.sourceLang);
+    if (d.targetLang) setTargetLang(d.targetLang);
+  }, [restoreState]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Remote control: pick the target, then run once the new target is in state
   const [pendingRun, setPendingRun] = useState(null);

@@ -49,6 +49,16 @@ class DBSegment(Base):
     project = relationship("DBProject", back_populates="segments")
 
 
+class DBProjectExtras(Base):
+    """Everything a saved Transcribe project needs beyond its segments: translated tracks, QC results and
+    applied-fix state, timeline peaks. One JSON document (with its own "version") per project."""
+    __tablename__ = "project_extras"
+
+    project_id = Column(String(64), ForeignKey("transcription_projects.id", ondelete="CASCADE"), primary_key=True)
+    data = Column(Text, nullable=False, default="{}")
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
 class DBSubtitleProject(Base):
     __tablename__ = "subtitle_projects"
     

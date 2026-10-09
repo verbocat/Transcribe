@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Upload, FileAudio, Film, CheckCircle2, RefreshCw, Sparkles, Package, Loader2, Save, Timer
 } from 'lucide-react';
@@ -9,7 +9,11 @@ import SegmentEditor from './components/SegmentEditor';
 import ExportModal from './components/subtitle/SubtitleExportModal';
 import GuidelinesModal from './components/GuidelinesModal';
 import ProjectsModal from './components/ProjectsModal';
-import { readTranscribeDraft, removeTranscribeDraft, transcribeDraftKey } from './components/transcribe/localDrafts';
+import { readTranscribeDraft, removeTranscribeDraft, writeTranscribeDraft } from './components/transcribe/localDrafts';
+import {
+  buildDraft, buildStudioDoc, saveStudioDoc, loadStudioDoc, normalizeStudioDoc, studioDocForServer,
+  saveMedia, loadMedia,
+} from './components/transcribe/draftStore';
 import SrtPreviewModal from './components/SrtPreviewModal';
 import StatsModal from './components/StatsModal';
 import SpeakerCustomizerModal from './components/SpeakerCustomizerModal';
@@ -553,6 +557,17 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
   const [dbSaveToast, setDbSaveToast] = useState('');
 
   const [selectedFile, setSelectedFile] = useState(null);
+  // Name of a restored draft/project whose media is not loaded (or is a stored copy): keeps the file name for saving
+  const [draftName, setDraftName] = useState('');
+  // Translations, QC state and view choices to hand back to the studio after a restore: { n, data }
+  const [studioRestore, setStudioRestore] = useState(null);
+  // Saved timeline data (waveform peaks, length) so the timeline draws without the media
+  const [restoredTimeline, setRestoredTimeline] = useState(null);
+  const studioApiRef = useRef(null);      // the studio's current translations/QC, read when saving
+  const peaksRef = useRef({ peaks: [], pps: 50 });
+  const mediaKeptRef = useRef({ audio: false, video: false });
+  const [studioTick, setStudioTick] = useState(0);
+  const markStudioDirty = useCallback(() => setStudioTick((t) => t + 1), []);
   const [audioUrl, setAudioUrl] = useState(null);
   const [videoUrl, setVideoUrl] = useState(null);
   const [targetLanguage, setTargetLanguage] = useState('Auto-Detect');
@@ -662,28 +677,42 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
     }
   };
 
-  // FEAT-06: 30-second debounced auto-save to localStorage
+  // Auto-save: the transcript goes to localStorage (lean, versioned); translations, QC state and timeline peaks go to
+  // IndexedDB next to it. Also flushed when the tab is hidden or closed.
+  const currentName = draftName || selectedFile?.name || transcriptionResult?.filename || 'draft_audio';
+  const saveDraftNow = () => {
+    if (!segments || segments.length === 0) return false;
+    const { peaks, pps } = peaksRef.current;
+    const duration = Math.max(peaks.length ? peaks.length / pps : 0, segments.reduce((m, x) => Math.max(m, x.end_time || 0), 0));
+    const ok = writeTranscribeDraft(currentName, buildDraft({
+      segments, complianceScore, totalErrors, totalWarnings, filename: currentName,
+      detectedLanguage: transcriptionResult?.language || '', script: transcriptionResult?.script || '',
+      hasMedia: mediaKeptRef.current.audio || mediaKeptRef.current.video, hasVideo: mediaKeptRef.current.video, duration,
+    }));
+    saveStudioDoc(currentName, buildStudioDoc({ studio: studioApiRef.current?.get?.(), peaks, peaksPps: pps, duration }));
+    return ok;
+  };
+  const saveDraftRef = useRef(saveDraftNow);
+  saveDraftRef.current = saveDraftNow;
   useEffect(() => {
-    if (!segments || segments.length === 0) return;
-    const fileId = selectedFile?.name || transcriptionResult?.filename || 'draft_audio';
+    if (!segments || segments.length === 0) return undefined;
     const timer = setTimeout(() => {
-      try {
-        localStorage.setItem(transcribeDraftKey(fileId), JSON.stringify({
-          segments,
-          complianceScore,
-          totalErrors,
-          totalWarnings,
-          timestamp: new Date().toISOString()
-        }));
+      if (saveDraftRef.current()) {
         setAutoSaveStatus('Draft auto-saved ✓');
         setTimeout(() => setAutoSaveStatus(''), 2500);
-      } catch (e) {
-        console.warn('Auto-save storage quota exceeded', e);
+      } else {
+        console.warn('Auto-save storage quota exceeded');
       }
-    }, 30000);
-
+    }, 6000);
     return () => clearTimeout(timer);
-  }, [segments, complianceScore, totalErrors, totalWarnings, selectedFile, transcriptionResult]);
+  }, [segments, complianceScore, totalErrors, totalWarnings, selectedFile, transcriptionResult, draftName, studioTick]);
+  useEffect(() => {
+    const flush = () => { if (document.visibilityState !== 'visible') saveDraftRef.current(); };
+    const flushHide = () => saveDraftRef.current();
+    document.addEventListener('visibilitychange', flush);
+    window.addEventListener('pagehide', flushHide);
+    return () => { document.removeEventListener('visibilitychange', flush); window.removeEventListener('pagehide', flushHide); };
+  }, []);
 
   // A video/audio opened again: look for a draft from this browser and the newest saved project with the same file name
   const findEarlierWork = async (name) => {
@@ -715,16 +744,76 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
     if (segs.length > 0) setActiveSegmentId(segs[0].segment_id);
   };
 
-  const handleRestoreLocalDraft = () => {
-    const d = pendingDraft?.local;
-    if (!d) return;
-    restoreSegments(d.segments, d.complianceScore, d.totalErrors, d.totalWarnings);
-    setPendingDraft(null);
-    setDbSaveToast('Draft restored ✓');
-    setTimeout(() => setDbSaveToast(''), 2500);
+  // Puts a stored copy of the media for `name` back on screen (audio, and the video when it was small enough to keep)
+  const loadStoredMedia = async (name) => {
+    const rec = await loadMedia(name);
+    if (!rec) return false;
+    const asFile = (blob, fallbackName, type) => (blob instanceof File ? blob : new File([blob], fallbackName, { type: type || blob.type }));
+    const video = rec.video ? asFile(rec.video, rec.videoName || name, rec.videoType) : null;
+    const audio = rec.audio ? asFile(rec.audio, rec.audioName || name, rec.audioType) : null;
+    setVideoUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return video ? URL.createObjectURL(video) : null; });
+    setAudioUrl((prev) => { if (prev && prev.startsWith('blob:')) URL.revokeObjectURL(prev); return URL.createObjectURL(audio || video); });
+    extractedAudioFileRef.current = video && audio ? audio : null;
+    setExtractedAudioName('');
+    // The original file is only "selected" when it is really the one the draft belongs to
+    const original = video || (audio && audio.name === name ? audio : null);
+    setSelectedFile(original);
+    if (original) setExtractedForFile(name);
+    mediaKeptRef.current = { audio: Boolean(audio), video: Boolean(video) };
+    return true;
   };
 
-  // Restores the saved project's text onto the media that is already loaded (unlike handleLoadProject, which swaps the media)
+  // The one restore path for browser drafts, saved projects and the Home page: transcript, scores, translated
+  // languages (and the active one), QC results with applied-fix state, timeline (media from this browser when it has
+  // a copy, else saved waveform peaks plus a Relink button).
+  const restoreEverything = async ({ name, segs, score, errors, warnings, language, script, studioDoc, label, fromServer }) => {
+    const doc = normalizeStudioDoc(studioDoc) || await loadStudioDoc(name);
+    restoreSegments(segs, score, errors, warnings, fromServer ? language : undefined, fromServer ? script : undefined);
+    setDraftName(name);
+    setTranscriptionResult((prev) => (prev && prev.filename === name ? prev : {
+      filename: name, language: language || prev?.language || '', script: script || '', segments: segs,
+      compliance_score: score ?? 100, total_errors: errors || 0, total_warnings: warnings || 0,
+      audio_info: { filename: name, duration: doc?.duration || segs.reduce((m, x) => Math.max(m, x.end_time || 0), 0) },
+    }));
+    peaksRef.current = doc?.peaks?.length ? { peaks: doc.peaks, pps: doc.peaksPps } : { peaks: [], pps: 50 };
+    setRestoredTimeline(doc?.peaks?.length
+      ? { peaks: doc.peaks.flatMap((v) => Array(Math.max(1, Math.round(50 / (doc.peaksPps || 50)))).fill(v)), duration: doc.duration }
+      : (doc?.duration ? { peaks: [], duration: doc.duration } : null));
+    setStudioRestore({ n: Date.now(), data: doc || {} });
+    let mediaBack = false;
+    if (!(selectedFile?.name === name && audioUrl)) {
+      mediaBack = await loadStoredMedia(name);
+      if (!mediaBack) {
+        // No copy of this file's media in this browser: never leave another file's audio under this transcript
+        setSelectedFile(null); setVideoUrl(null); setAudioUrl(null);
+        extractedAudioFileRef.current = null;
+      }
+    } else mediaBack = true;
+    const langs = Object.keys(doc?.tracks || {}).length;
+    const qcOn = Boolean(doc?.centroid?.qc);
+    const parts = [`${segs.length} segments`];
+    if (langs) parts.push(`${langs} translation${langs === 1 ? '' : 's'}`);
+    if (qcOn) parts.push('QC');
+    parts.push(mediaBack ? 'timeline' : 'timeline from transcript (relink media for playback)');
+    setDbSaveToast(`${label || 'Draft restored'} ✓ ${parts.join(', ')}`);
+    setTimeout(() => setDbSaveToast(''), 4000);
+    return mediaBack;
+  };
+
+  const restoreDraftByName = async (name) => {
+    const d = readTranscribeDraft(name);
+    if (!d) return;
+    await restoreEverything({ name, segs: d.segments, score: d.complianceScore, errors: d.totalErrors, warnings: d.totalWarnings, language: d.detectedLanguage, script: d.script });
+  };
+
+  const handleRestoreLocalDraft = async () => {
+    const d = pendingDraft?.local;
+    if (!d) return;
+    setPendingDraft(null);
+    await restoreEverything({ name: pendingDraft.name, segs: d.segments, score: d.complianceScore, errors: d.totalErrors, warnings: d.totalWarnings, language: d.detectedLanguage, script: d.script });
+  };
+
+  // Restores the saved project onto the media that is already loaded (unlike handleLoadProject, which swaps the media)
   const handleRestoreServerProject = async () => {
     const proj = pendingDraft?.server;
     if (!proj) return;
@@ -732,10 +821,11 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
       const res = await fetch(`${API_BASE}/api/projects/${proj.id}`);
       if (!res.ok) return;
       const data = await res.json();
-      restoreSegments(data.segments || [], data.compliance_score, data.total_errors, data.total_warnings, data.language, data.script);
       setPendingDraft(null);
-      setDbSaveToast(`Restored saved project: ${data.filename}`);
-      setTimeout(() => setDbSaveToast(''), 3000);
+      await restoreEverything({
+        name: data.filename || pendingDraft.name, segs: data.segments || [], score: data.compliance_score, errors: data.total_errors,
+        warnings: data.total_warnings, language: data.language, script: data.script, studioDoc: data.extras, fromServer: true, label: `Restored saved project: ${data.filename}`,
+      });
     } catch (err) {
       console.error('Failed to restore project:', err);
     }
@@ -744,6 +834,86 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
   const handleStartFresh = () => {
     if (pendingDraft) removeTranscribeDraft(pendingDraft.name);
     setPendingDraft(null);
+  };
+
+  // Opens the media (extracts the audio of a video on this computer) and keeps a copy in this browser so a later
+  // restore does not need the upload again. `key` is the name the draft is saved under.
+  const prepareMedia = async (file, key) => {
+    mediaKeptRef.current = { audio: false, video: false };
+    const isVideo = Boolean(
+      file.type?.startsWith('video/') ||
+      /\.(mp4|mkv|mov|webm|avi|flv|wmv|m4v|ts)$/i.test(file.name || '')
+    );
+    // Browsers cannot decode WMA, so the server converts it to WAV for the waveform player
+    const needsServerDecode = /\.wma$/i.test(file.name || '');
+
+    setVideoUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return isVideo ? URL.createObjectURL(file) : null; });
+
+    extractedAudioFileRef.current = null;
+    if (isVideo || needsServerDecode) {
+      setIsExtractingAudio(true);
+      setExtractionNotice(isVideo ? 'Extracting audio track from video...' : 'Converting WMA audio for playback...');
+      const extractJob = startJob(API_BASE);
+      extractJobRef.current = extractJob;
+      try {
+        // Audio is extracted ON THIS COMPUTER (WebAssembly FFmpeg), so only ~2 MB per minute of audio is ever
+        // uploaded instead of the whole video. Falls back to the server (with live progress) on any problem.
+        const extracted = await extractAudioFromMedia(file, (p) => {
+          const pct = typeof p.percent === 'number' && Number.isFinite(p.percent) ? ` ${Math.round(p.percent)}%` : '';
+          setExtractionNotice(`${p.detail || 'Preparing audio'}${pct}`);
+        }, API_BASE, { signal: extractJob.signal, job: extractJob });
+        const isBlob = !extracted.audioUrl || extracted.audioUrl.startsWith('blob:');
+        setAudioUrl(extracted.audioUrl || URL.createObjectURL(extracted.audioBlob));
+        extractedAudioFileRef.current = extracted.audioFile || null;
+        // A server-made WAV already sits on the server: reuse it by name instead of uploading it again
+        setExtractedAudioName(isBlob ? '' : (extracted.audioFile?.name || ''));
+        setExtractedForFile(file.name);
+        keepMedia(key, file, isVideo, extracted);
+        setExtractionNotice('Audio extracted successfully ✓');
+        setTimeout(() => setExtractionNotice(''), 3000);
+      } catch (err) {
+        if (extractJob.cancelled || isCancelError(err)) {
+          // Cancelled: keep the file loaded and playable from the original, just without the prepared audio
+          setAudioUrl(URL.createObjectURL(file));
+          keepMedia(key, file, isVideo, null);
+          setExtractionNotice('Audio preparation cancelled');
+          setTimeout(() => setExtractionNotice(''), 3000);
+        } else {
+          console.warn("Video audio extraction fallback:", err);
+          setAudioUrl(URL.createObjectURL(file));
+          keepMedia(key, file, isVideo, null);
+        }
+      } finally {
+        if (extractJobRef.current === extractJob) extractJobRef.current = null;
+        setIsExtractingAudio(false);
+      }
+    } else {
+      const url = URL.createObjectURL(file);
+      setAudioUrl(url);
+      keepMedia(key, file, false, null);
+    }
+  };
+
+  // A transcript is open but its media is not: connect a file to it without touching the transcript
+  const handleRelinkMedia = async (file) => {
+    const name = draftName || selectedFile?.name || transcriptionResult?.filename || file.name;
+    setDraftName(name);
+    if (file.name === name) setSelectedFile(file);
+    await prepareMedia(file, name);
+    setDbSaveToast('Media relinked ✓ the timeline is live again');
+    setTimeout(() => setDbSaveToast(''), 3000);
+  };
+
+  const keepMedia = async (key, file, isVideo, extracted) => {
+    try {
+      let audio = file;
+      if (isVideo || /\.wma$/i.test(file.name || '')) {
+        audio = extracted?.audioFile || extracted?.audioBlob || null;
+        if (!audio && extracted?.audioUrl) audio = await (await fetch(extracted.audioUrl)).blob();
+      }
+      mediaKeptRef.current = await saveMedia(key, { audio, video: isVideo ? file : null });
+      markStudioDirty();
+    } catch (e) { console.warn('Could not keep a copy of the media for restore', e); }
   };
 
   const handleFileSelect = async (e) => {
@@ -757,56 +927,13 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
       setTotalWarnings(0);
       setProgressPercent(0);
       setExtractedAudioName('');
+      setDraftName('');
+      setStudioRestore(null);
+      setRestoredTimeline(null);
+      peaksRef.current = { peaks: [], pps: 50 };
       findEarlierWork(file.name);
+      await prepareMedia(file, file.name);
 
-      const isVideo = Boolean(
-        file.type?.startsWith('video/') ||
-        /\.(mp4|mkv|mov|webm|avi|flv|wmv|m4v|ts)$/i.test(file.name || '')
-      );
-      // Browsers cannot decode WMA, so the server converts it to WAV for the waveform player
-      const needsServerDecode = /\.wma$/i.test(file.name || '');
-
-      setVideoUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return isVideo ? URL.createObjectURL(file) : null; });
-
-      extractedAudioFileRef.current = null;
-      if (isVideo || needsServerDecode) {
-        setIsExtractingAudio(true);
-        setExtractionNotice(isVideo ? 'Extracting audio track from video...' : 'Converting WMA audio for playback...');
-        const extractJob = startJob(API_BASE);
-        extractJobRef.current = extractJob;
-        try {
-          // Audio is extracted ON THIS COMPUTER (WebAssembly FFmpeg), so only ~2 MB per minute of audio is ever
-          // uploaded instead of the whole video. Falls back to the server (with live progress) on any problem.
-          const extracted = await extractAudioFromMedia(file, (p) => {
-            const pct = typeof p.percent === 'number' && Number.isFinite(p.percent) ? ` ${Math.round(p.percent)}%` : '';
-            setExtractionNotice(`${p.detail || 'Preparing audio'}${pct}`);
-          }, API_BASE, { signal: extractJob.signal, job: extractJob });
-          const isBlob = !extracted.audioUrl || extracted.audioUrl.startsWith('blob:');
-          setAudioUrl(extracted.audioUrl || URL.createObjectURL(extracted.audioBlob));
-          extractedAudioFileRef.current = extracted.audioFile || null;
-          // A server-made WAV already sits on the server: reuse it by name instead of uploading it again
-          setExtractedAudioName(isBlob ? '' : (extracted.audioFile?.name || ''));
-          setExtractedForFile(file.name);
-          setExtractionNotice('Audio extracted successfully ✓');
-          setTimeout(() => setExtractionNotice(''), 3000);
-        } catch (err) {
-          if (extractJob.cancelled || isCancelError(err)) {
-            // Cancelled: keep the file loaded and playable from the original, just without the prepared audio
-            setAudioUrl(URL.createObjectURL(file));
-            setExtractionNotice('Audio preparation cancelled');
-            setTimeout(() => setExtractionNotice(''), 3000);
-          } else {
-            console.warn("Video audio extraction fallback:", err);
-            setAudioUrl(URL.createObjectURL(file));
-          }
-        } finally {
-          if (extractJobRef.current === extractJob) extractJobRef.current = null;
-          setIsExtractingAudio(false);
-        }
-      } else {
-        const url = URL.createObjectURL(file);
-        setAudioUrl(url);
-      }
     }
   };
 
@@ -1196,6 +1323,12 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
         compliance_score: complianceScore,
         total_errors: totalErrors,
         total_warnings: totalWarnings,
+        // translations, QC results and timeline data (see draftStore.js); older servers ignore this
+        extras: (() => {
+          const { peaks, pps } = peaksRef.current;
+          const duration = Math.max(peaks.length ? peaks.length / pps : 0, segments.reduce((m, x) => Math.max(m, x.end_time || 0), 0));
+          return studioDocForServer(buildStudioDoc({ studio: studioApiRef.current?.get?.(), peaks, peaksPps: pps, duration }));
+        })(),
         audio_info: transcriptionResult?.audio_info || {
           filename: selectedFile ? selectedFile.name : 'audio.wav',
           duration: segments.length > 0 ? segments[segments.length - 1].end_time : 0,
@@ -1318,26 +1451,17 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
       const res = await fetch(`${API_BASE}/api/projects/${projectId}`);
       if (res.ok) {
         const data = await res.json();
-        setTranscriptionResult(data);
         const segs = data.segments || [];
-        setSegments(segs);
-        setOriginalSegments(JSON.parse(JSON.stringify(segs)));
-        setHistory([segs]);
-        setHistoryIndex(0);
-        setTargetLanguage(data.language || 'Auto-Detect');
-        setTargetScript(data.script || 'Auto-Detect');
-        setComplianceScore(data.compliance_score || 100.0);
-        setTotalErrors(data.total_errors || 0);
-        setTotalWarnings(data.total_warnings || 0);
-        if (segs.length > 0) {
-          setActiveSegmentId(segs[0].segment_id);
+        const mediaBack = await restoreEverything({
+          name: data.filename, segs, score: data.compliance_score || 100.0, errors: data.total_errors || 0, warnings: data.total_warnings || 0,
+          language: data.language || 'Auto-Detect', script: data.script || 'Auto-Detect', studioDoc: data.extras, fromServer: true, label: `Loaded: ${data.filename}`,
+        });
+        setTranscriptionResult(data);
+        if (!mediaBack && data.filename) {
+          // Not in this browser: the server may still hold the audio
+          const url = `${API_BASE}/api/audio/${data.filename}`;
+          try { const head = await fetch(url, { method: 'HEAD' }); if (head.ok) setAudioUrl(url); } catch { /* relink instead */ }
         }
-        setVideoUrl(null);
-        if (data.filename) {
-          setAudioUrl(`${API_BASE}/api/audio/${data.filename}`);
-        }
-        setDbSaveToast(`Loaded: ${data.filename}`);
-        setTimeout(() => setDbSaveToast(''), 3500);
       }
     } catch (err) {
       console.error("Failed to load project:", err);
@@ -1350,8 +1474,7 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
     if (intent?.file) handleFileSelect({ target: { files: [intent.file] } });
     else if (intent?.projectId) handleLoadProject(intent.projectId);
     else if (intent?.draftName) {
-      const d = readTranscribeDraft(intent.draftName);
-      if (d) restoreSegments(d.segments, d.complianceScore, d.totalErrors, d.totalWarnings);
+      restoreDraftByName(intent.draftName);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -1613,6 +1736,13 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
         onSegmentTimeChange={handleSegmentTimeChange}
         audioUrl={audioUrl}
         videoUrl={videoUrl}
+        studioApiRef={studioApiRef}
+        studioRestore={studioRestore}
+        onStudioDirty={markStudioDirty}
+        restoredPeaks={restoredTimeline?.peaks}
+        restoredDuration={restoredTimeline?.duration}
+        onPeaksReady={(peaks, pps) => { peaksRef.current = { peaks, pps }; markStudioDirty(); }}
+        onRelinkMedia={handleRelinkMedia}
         playTargetTime={playTargetTime}
         notes={transcriptionResult?.processing_notes || []}
         toast={dbSaveToast || autoSaveStatus}
@@ -1683,7 +1813,7 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
         isOpen={showProjectsModal}
         onClose={() => setShowProjectsModal(false)}
         projects={savedProjects}
-        onRestoreDraft={(name) => { const d = readTranscribeDraft(name); if (d) restoreSegments(d.segments, d.complianceScore, d.totalErrors, d.totalWarnings); }}
+        onRestoreDraft={(name) => restoreDraftByName(name)}
         isLoading={isLoadingProjects}
         onRefresh={fetchProjects}
         onLoadProject={handleLoadProject}

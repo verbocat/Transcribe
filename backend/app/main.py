@@ -43,7 +43,7 @@ from app.export_service import (
     export_to_dubbing_script,
     export_rejection_csv
 )
-from app.db import init_db, get_db_session, DBProject, DBSegment
+from app.db import init_db, get_db_session, DBProject, DBSegment, DBProjectExtras
 
 from app.video_processor import (
     extract_audio_from_video, detect_shot_changes, get_video_metadata,
@@ -668,6 +668,14 @@ def _get_project_details_from_db(project_id: str):
                 "is_valid": s.is_valid
             })
 
+        extras_out = None
+        try:
+            row = session.query(DBProjectExtras).filter(DBProjectExtras.project_id == proj.id).first()
+            if row and row.data:
+                extras_out = json.loads(row.data)
+        except Exception:
+            extras_out = None
+
         audio_info_parsed = {}
         if proj.audio_info:
             try:
@@ -685,7 +693,8 @@ def _get_project_details_from_db(project_id: str):
             "total_errors": proj.total_errors,
             "total_warnings": proj.total_warnings,
             "audio_info": audio_info_parsed,
-            "segments": segments_out
+            "segments": segments_out,
+            "extras": extras_out,
         }
     finally:
         session.close()
@@ -757,6 +766,15 @@ def _save_project_to_db(payload: dict):
             )
             session.add(db_seg)
 
+        extras = project_data.get("extras")
+        if isinstance(extras, dict):
+            row = session.query(DBProjectExtras).filter(DBProjectExtras.project_id == proj_id).first()
+            blob = json.dumps(extras, ensure_ascii=False)
+            if row:
+                row.data = blob
+            else:
+                session.add(DBProjectExtras(project_id=proj_id, data=blob))
+
         session.commit()
         return proj_id
     except Exception:
@@ -781,6 +799,7 @@ def _delete_project_from_db(project_id: str):
     if not session:
         raise ValueError("Database not available")
     try:
+        session.query(DBProjectExtras).filter(DBProjectExtras.project_id == project_id).delete()
         session.query(DBProject).filter(DBProject.id == project_id).delete()
         session.commit()
         return True

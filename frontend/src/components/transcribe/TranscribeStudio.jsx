@@ -1,5 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { Upload } from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import './transcribe.css';
 import TopBar from './TopBar';
 import TranscribeRail from './TranscribeRail';
@@ -134,20 +133,38 @@ export default function TranscribeStudio(p) {
   const translation = useMemo(() => (activeTrack && tracks[activeTrack]
     ? { code: activeTrack, byId: new Map(tracks[activeTrack].map((e) => [e.id, e.text])) } : null), [activeTrack, tracks]);
 
-  // A new transcript invalidates the translations of the old one
-  // (saved translations for the same file name come back from this browser)
+  // A different transcript invalidates the translations of the old one. Keyed on the file name only: relinking or
+  // restoring media for the same file must not wipe its tracks.
   useEffect(() => {
-    let saved = null;
-    try { saved = JSON.parse(localStorage.getItem(`transcribe_tracks_${p.filename || ''}`) || 'null'); } catch { /* none */ }
-    const ok = saved && saved.tracks && Object.keys(saved.tracks).length;
-    setTracks(ok ? saved.tracks : {});
-    setActiveTrack(ok && saved.tracks[saved.active] ? saved.active : null);
+    setTracks({});
+    setActiveTrack(null);
     setExportChoice(null);
-  }, [p.audioUrl, p.filename]);
+  }, [p.filename]);
+
+  // Draft / project restore: put back translated tracks (and which one was active), QC state and view choices.
+  // Declared after the effect above so a restore that arrives together with a new file name wins.
+  const [centroidRestore, setCentroidRestore] = useState(null);
+  const centroidGet = useRef(null);
   useEffect(() => {
-    if (!p.filename) return;
-    try { localStorage.setItem(`transcribe_tracks_${p.filename}`, JSON.stringify({ tracks, active: activeTrack })); } catch { /* full */ }
-  }, [tracks, activeTrack, p.filename]);
+    const r = p.studioRestore;
+    if (!r) return;
+    const d = r.data || {};
+    setTracks(d.tracks || {});
+    setActiveTrack(d.activeTrack && d.tracks?.[d.activeTrack] ? d.activeTrack : null);
+    setExportChoice(d.exportChoice || null);
+    if (d.listView) setListView(d.listView);
+    if (d.qcView) setQcView(d.qcView);
+    setCentroidRestore({ n: r.n, data: d.centroid || null });
+  }, [p.studioRestore]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // What a draft or saved project keeps. The app reads this when it saves, so it is always current.
+  if (p.studioApiRef) {
+    p.studioApiRef.current = {
+      get: () => ({ tracks, activeTrack, listView, qcView, exportChoice, centroid: centroidGet.current ? centroidGet.current() : null }),
+    };
+  }
+  // Tell the app when there is something new to save (a translation, a QC run, a fix applied)
+  useEffect(() => { p.onStudioDirty?.(); }, [tracks, activeTrack, centroidState, listView, exportChoice]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Export language: follows the track on screen until the user picks one
   const trackCodes = Object.keys(tracks);
@@ -338,25 +355,14 @@ export default function TranscribeStudio(p) {
           <button type="button" className="ts-btn ts-btn-sm ts-btn-ghost" onClick={studio.reset} title="Back to the default layout">Reset layout</button>
         </div>
       )}
-      {!timelineHidden && p.audioUrl && (
+      {!timelineHidden && (p.audioUrl || hasSegments) && (
         <Splitter
           axis="y" sign={-1} label="Resize timeline" thickness={cards ? layout.gap || 6 : 6}
           value={layout.timelineH || 240} min={TIMELINE_MIN} max={LIMITS.timelineH[1]}
           onChange={(v) => studio.patch({ timelineH: v })} onReset={() => studio.patch({ timelineH: 0 })}
         />
       )}
-      {!timelineHidden && !p.audioUrl && hasSegments && (
-        <div
-          className="flex items-center justify-center gap-3 shrink-0 px-3"
-          style={{ height: 96, background: 'var(--ts-panel)', borderTop: '1px solid var(--ts-line)', color: 'var(--ts-muted)' }}
-        >
-          <span>No media loaded, so there is no waveform or timeline.</span>
-          <button type="button" className="ts-btn ts-btn-primary" onClick={() => document.getElementById('ts-media-input')?.click()}>
-            <Upload size={14} /> Import media
-          </button>
-        </div>
-      )}
-      {p.audioUrl && (
+      {(p.audioUrl || hasSegments) && (
         <footer
           className="shrink-0 min-h-0"
           style={timelineHidden
@@ -366,6 +372,10 @@ export default function TranscribeStudio(p) {
           <TranscribeTimeline
             audioUrl={p.audioUrl}
             videoUrl={p.videoUrl}
+            restoredPeaks={p.restoredPeaks}
+            restoredDuration={p.restoredDuration}
+            onPeaksReady={p.onPeaksReady}
+            onRelink={() => document.getElementById('ts-relink-input')?.click()}
             segments={p.segments}
             textById={translation ? translation.byId : null}
             activeSegmentId={p.activeSegmentId}
@@ -385,6 +395,11 @@ export default function TranscribeStudio(p) {
 
       </div>
       </div>
+
+      <input
+        id="ts-relink-input" type="file" accept="video/*,audio/*,.mkv,.ts,.wma" style={{ display: 'none' }}
+        onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) p.onRelinkMedia?.(f); }}
+      />
 
       {/* Kept mounted so translations and QC results survive closing the panels */}
       <CentroidModal
@@ -408,7 +423,9 @@ export default function TranscribeStudio(p) {
         activeLang={activeTrack}
         trackLangs={Object.keys(tracks)}
         command={centroidCmd}
-        onTranslated={({ built }) => { setTracks(built); const c = Object.keys(built)[0]; setActiveTrack(c || null); }}
+        stateRef={centroidGet}
+        restoreState={centroidRestore}
+        onTranslated={({ built }) => { setTracks((prev) => ({ ...prev, ...built })); const c = Object.keys(built)[0]; setActiveTrack(c || null); }}
         onShowTrack={({ code, events: cues }) => { setTracks((prev) => ({ ...prev, [code]: cues })); setActiveTrack(code); }}
       />
 

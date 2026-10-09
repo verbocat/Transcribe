@@ -1,19 +1,28 @@
 // Local (this browser) autosave drafts for the Transcribe Studio, keyed by media file name.
 // App.jsx writes `karya_autosave_<file name>`; these helpers read them back so an old video can offer its draft.
 
+import { normalizeDraft, removeDraftExtras } from './draftStore';
+
 export const TRANSCRIBE_DRAFT_PREFIX = 'karya_autosave_';
 export const transcribeDraftKey = (name) => `${TRANSCRIBE_DRAFT_PREFIX}${name || 'draft_audio'}`;
 
 /** The saved draft for one media file name, or null (missing, empty or unreadable). */
 export function readTranscribeDraft(name) {
   try {
-    const d = JSON.parse(localStorage.getItem(transcribeDraftKey(name)) || 'null');
-    return Array.isArray(d?.segments) && d.segments.length ? d : null;
+    // normalizeDraft accepts every older version of the draft format
+    const d = normalizeDraft(JSON.parse(localStorage.getItem(transcribeDraftKey(name)) || 'null'));
+    return d && d.segments.length ? d : null;
   } catch { return null; }
+}
+
+/** Writes the lean draft; false when the browser's storage is full or unavailable. */
+export function writeTranscribeDraft(name, draft) {
+  try { localStorage.setItem(transcribeDraftKey(name), JSON.stringify(draft)); return true; } catch { return false; }
 }
 
 export function removeTranscribeDraft(name) {
   try { localStorage.removeItem(transcribeDraftKey(name)); } catch { /* storage unavailable */ }
+  removeDraftExtras(name);
 }
 
 /** Every Transcribe draft in this browser, newest first. */

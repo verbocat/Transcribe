@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Play, Pause, Square } from 'lucide-react';
+import { Play, Pause, Square, Link2 } from 'lucide-react';
 import AudioWaveformTimeline from '../subtitle/AudioWaveformTimeline';
 import { publishPlayhead, getPlayhead } from '../../utils/playheadBus';
 
@@ -42,7 +42,7 @@ const fmt = (s) => {
  * Transcript segments are presented to the timeline as subtitle events.
  */
 export default function TranscribeTimeline({
-  audioUrl, videoUrl, segments, textById, activeSegmentId, setActiveSegmentId,
+  audioUrl, videoUrl, segments, textById, restoredPeaks, restoredDuration, onPeaksReady, onRelink, activeSegmentId, setActiveSegmentId,
   onSegmentTimeChange, onSplit, onMerge, onAdd, onUndo, onRedo,
   playTargetTime, onTimeUpdate, onPlayStateChange,
 }) {
@@ -50,7 +50,10 @@ export default function TranscribeTimeline({
   const loopRef = useRef(null);
   const [playing, setPlaying] = useState(false);
   const [duration, setDuration] = useState(0);
-  const [peaks, setPeaks] = useState([]);
+  const [decodedPeaks, setPeaks] = useState([]);
+  // Peaks decoded from the media win; until then (or without media) the saved ones draw the waveform
+  const peaks = decodedPeaks.length ? decodedPeaks : (restoredPeaks || []);
+  const lastEnd = useMemo(() => (segments || []).reduce((m, s) => Math.max(m, s.end_time || 0), 0), [segments]);
   const [time, setTime] = useState(0);
   const cbRef = useRef({});
   cbRef.current = { onTimeUpdate, onPlayStateChange };
@@ -64,7 +67,7 @@ export default function TranscribeTimeline({
     setPeaks([]);
     if (!audioUrl) return undefined;
     const ac = new AbortController();
-    decodePeaks(audioUrl, ac.signal).then(setPeaks).catch(() => {});
+    decodePeaks(audioUrl, ac.signal).then((pk) => { setPeaks(pk); onPeaksReady?.(pk, PEAKS_PER_SEC); }).catch(() => {});
     return () => ac.abort();
   }, [audioUrl]);
 
@@ -161,7 +164,7 @@ export default function TranscribeTimeline({
 
   return (
     <div className="flex flex-col h-full min-h-0" style={{ background: 'var(--ss-bg)' }}>
-      <audio ref={audioRef} src={audioUrl} preload="auto" />
+      <audio ref={audioRef} src={audioUrl || undefined} preload="auto" />
       <div className="shrink-0 flex items-center gap-2 px-3 py-1.5" style={{ borderBottom: '1px solid var(--ss-line)' }}>
         <button type="button" className="ts-btn ts-btn-sm" onClick={toggle} aria-label={playing ? 'Pause' : 'Play'} title="Play / pause (Space)">
           {playing ? <Pause size={14} /> : <Play size={14} />}
@@ -170,8 +173,16 @@ export default function TranscribeTimeline({
           <Square size={13} />
         </button>
         <span className="font-mono tabular-nums" style={{ fontSize: 12, color: 'var(--ss-muted)' }}>
-          {fmt(time)} / {fmt(duration)}
+          {fmt(time)} / {fmt(duration || restoredDuration || lastEnd)}
         </span>
+        {!audioUrl && (
+          <>
+            <span style={{ fontSize: 12, color: 'var(--ss-muted)' }}>Media is not loaded, so playback is off. The timeline below is rebuilt from your transcript.</span>
+            <button type="button" className="ts-btn ts-btn-sm ts-btn-primary" onClick={onRelink} data-testid="relink-media">
+              <Link2 size={13} /> Relink media
+            </button>
+          </>
+        )}
       </div>
       <div className="flex-1 min-h-0">
         <AudioWaveformTimeline
@@ -179,7 +190,7 @@ export default function TranscribeTimeline({
           audioUrl={audioUrl}
           initialPeaks={peaks}
           events={events}
-          duration={duration}
+          duration={duration || restoredDuration || lastEnd}
           activeEventId={activeSegmentId}
           setActiveEventId={setActiveSegmentId}
           onEventTimeChange={onSegmentTimeChange}
