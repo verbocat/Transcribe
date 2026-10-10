@@ -84,7 +84,7 @@ export function encodeWAV(samples, sampleRate) {
 import { xhrPostForm, fetchBlobWithProgress, createRateMeter } from './xhrUpload';
 import { CancelledError, abortable, cancelServerJob, isCancelError, jobHeaders, sleepCancellable } from './cancellable';
 
-export async function extractAudioFromMedia(file, onProgress, apiBase = '', { preferLocal = true, signal, job } = {}) {
+export async function extractAudioFromMedia(file, onProgress, apiBase = '', { preferLocal = true, signal, job, serverFallback = true } = {}) {
   if (signal?.aborted) throw new CancelledError();
   const isVideo = Boolean(
     file.type?.startsWith('video/') ||
@@ -173,15 +173,24 @@ export async function extractAudioFromMedia(file, onProgress, apiBase = '', { pr
   // Preferred for video: extract the audio on THIS computer (WebAssembly FFmpeg) so only ~2 MB per
   // minute of audio is uploaded instead of the whole video. Falls back to the server on any problem.
   if (preferLocal) {
-    try {
-      const { extractAudioInBrowser, browserExtractionSupported } = await import('./browserAudioExtract');
-      if (browserExtractionSupported()) {
+    let localErr = null;
+    // A second attempt starts a fresh engine (a failed run can leave the first one in a bad state)
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const { extractAudioInBrowser, browserExtractionSupported } = await import('./browserAudioExtract');
+        if (!browserExtractionSupported()) { localErr = new Error('This browser cannot extract audio (WebAssembly or Web Workers missing).'); break; }
         return await extractAudioInBrowser(file, onProgress, signal);
+      } catch (err) {
+        if (isCancelError(err)) throw err;
+        localErr = err;
+        console.warn(`Browser audio extraction failed (attempt ${attempt}):`, err);
       }
-    } catch (localErr) {
-      if (isCancelError(localErr)) throw localErr;
-      console.warn('Browser audio extraction unavailable, using the server instead:', localErr);
     }
+    // Callers that must never upload the whole video get the real reason instead of a silent video upload
+    if (!serverFallback) throw new Error(`Could not extract the audio on this computer: ${localErr?.message || localErr}`);
+    console.warn('Browser audio extraction unavailable, using the server instead:', localErr);
+  } else if (!serverFallback) {
+    throw new Error('Audio extraction on this computer is switched off.');
   }
 
   // Server-side extraction with FFmpeg (video files and codecs the browser cannot decode).

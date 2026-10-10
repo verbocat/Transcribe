@@ -861,7 +861,7 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
         const extracted = await extractAudioFromMedia(file, (p) => {
           const pct = typeof p.percent === 'number' && Number.isFinite(p.percent) ? ` ${Math.round(p.percent)}%` : '';
           setExtractionNotice(`${p.detail || 'Preparing audio'}${pct}`);
-        }, API_BASE, { signal: extractJob.signal, job: extractJob });
+        }, API_BASE, { signal: extractJob.signal, job: extractJob, serverFallback: !isVideo });
         const isBlob = !extracted.audioUrl || extracted.audioUrl.startsWith('blob:');
         setAudioUrl(extracted.audioUrl || URL.createObjectURL(extracted.audioBlob));
         extractedAudioFileRef.current = extracted.audioFile || null;
@@ -882,6 +882,8 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
           console.warn("Video audio extraction fallback:", err);
           setAudioUrl(URL.createObjectURL(file));
           keepMedia(key, file, isVideo, null);
+          // The video is never sent to the server: say why the audio could not be prepared (Transcribe retries it)
+          if (isVideo) setExtractionNotice(err?.message || 'Could not extract the audio on this computer');
         }
       } finally {
         if (extractJobRef.current === extractJob) extractJobRef.current = null;
@@ -1085,6 +1087,19 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
       const sameFile = selectedFile.name === extractedForFile;
       const reuse = sameFile && extractedAudioName;
       localWav = sameFile && !reuse ? extractedAudioFileRef.current : null;
+      const selIsVideo = Boolean(selectedFile.type?.startsWith('video/') || /\.(mp4|mkv|mov|webm|avi|flv|wmv|m4v|ts)$/i.test(selectedFile.name || ''));
+      if (selIsVideo && !reuse && !localWav) {
+        // The audio is not ready (extraction failed earlier, or the video came back from a draft): extract it now.
+        // The video itself is never uploaded.
+        const ex = await extractAudioFromMedia(selectedFile, (p) => {
+          const pct = typeof p.percent === 'number' && Number.isFinite(p.percent) ? ` ${Math.round(p.percent)}%` : '';
+          setProgressStage('Preparing audio'); setProgressDetail(`${p.detail || 'Extracting the audio'}${pct}`);
+        }, API_BASE, { signal: job.signal, job, serverFallback: false });
+        localWav = ex.audioFile;
+        extractedAudioFileRef.current = ex.audioFile;
+        setExtractedForFile(selectedFile.name);
+        setExtractedAudioName('');
+      }
       const fd = build(reuse ? null : (localWav || selectedFile));
       if (reuse) fd.append('audio_filename', extractedAudioName);
       else setProgressStepCount(0);
