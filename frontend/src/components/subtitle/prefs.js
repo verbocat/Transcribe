@@ -10,7 +10,7 @@ export const DEFAULT_PREFS = {
   confirmGenerate: true,  // ask before replacing subtitles with a fresh generation
   newSubDuration: 2.4,    // seconds for a newly added subtitle
   newSubText: 'New dialogue subtitle line',
-  localExtraction: 'large', // large (videos of 100 MB+) | always | never: pull the audio out in the browser instead of uploading the video
+  localExtraction: 'always', // always | never: pull the audio out in the browser so only the audio is uploaded, never the video
 };
 
 export const AUTOSAVE_CHOICES = [0, 30, 60, 120, 300];
@@ -27,7 +27,8 @@ export function normalizePrefs(raw) {
     confirmGenerate: typeof s.confirmGenerate === 'boolean' ? s.confirmGenerate : DEFAULT_PREFS.confirmGenerate,
     newSubDuration: num(s.newSubDuration, DEFAULT_PREFS.newSubDuration, 0.5, 10),
     newSubText: typeof s.newSubText === 'string' ? s.newSubText.slice(0, 120) : DEFAULT_PREFS.newSubText,
-    localExtraction: ['large', 'always', 'never'].includes(s.localExtraction) ? s.localExtraction : DEFAULT_PREFS.localExtraction,
+    // 'large' was the old default (videos of 100 MB+ only); it now means the new default, 'always'
+    localExtraction: s.localExtraction === 'never' ? 'never' : 'always',
   };
 }
 

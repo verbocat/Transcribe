@@ -151,10 +151,10 @@ async function uploadFileInChunks(file, apiBase, onProgress, onAllSent, signal, 
 
 // Robust auto video frame rate detector (backend FFprobe container probe with browser HTML5 video fallback)
 async function detectVideoFrameRate(file, apiBase) {
-  // 1. Try high-speed backend probe endpoint (reads first 32MB container headers)
+  // 1. Try high-speed backend probe endpoint (reads only the container headers)
   try {
     const formData = new FormData();
-    const slice = file.slice(0, Math.min(file.size, 32 * 1024 * 1024));
+    const slice = file.slice(0, Math.min(file.size, 8 * 1024 * 1024));
     formData.append('file', slice, file.name);
     const res = await fetch(`${apiBase}/api/subtitle/probe_media`, {
       method: 'POST',
@@ -328,7 +328,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
         uploadTarget = extractedAudioFileRef.current;
       } else {
         try {
-          const extracted = await extractAudioFromMedia(fileToProcess, (p) => report(p), API_BASE, { signal, job: mediaJob, preferLocal: (() => { const m = loadPrefs().localExtraction; return m === 'always' || (m === 'large' && fileToProcess.size >= 100 * 1024 * 1024); })() });
+          const extracted = await extractAudioFromMedia(fileToProcess, (p) => report(p), API_BASE, { signal, job: mediaJob, preferLocal: loadPrefs().localExtraction !== 'never' });
           if (extracted.peaks && extracted.peaks.length > 0) {
             setInitialWaveformPeaks(extracted.peaks);
           }

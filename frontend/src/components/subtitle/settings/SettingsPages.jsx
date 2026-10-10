@@ -324,10 +324,10 @@ export function EditorPage({ c }) {
         <SwitchRow label="Confirm before generating" hint="Generating replaces the current subtitles and uses transcription credits." checked={prefs.confirmGenerate} onChange={(v) => setPref('confirmGenerate', v)} />
       </Section>
 
-      <Section title="Large files">
+      <Section title="Upload">
         <Row
           label="Extract audio on this computer"
-          hint="Uploads only the audio (about 2 MB per minute) instead of the whole video, which is far faster for big files. The audio can differ from the server's by 1 step in 65,536 on a tiny share of samples, so the default only uses it for videos of 100 MB or more."
+          hint="Uploads only the audio (about 2 MB per minute) instead of the whole video, which is far faster. The audio can differ from the server's by 1 step in 65,536 on a tiny share of samples. If it fails, the video is sent to the server instead."
           stacked
         >
           <Segmented
@@ -335,8 +335,7 @@ export function EditorPage({ c }) {
             value={prefs.localExtraction}
             onChange={(v) => setPref('localExtraction', v)}
             options={[
-              { value: 'large', label: 'Large videos only' },
-              { value: 'always', label: 'Always' },
+              { value: 'always', label: 'On this computer' },
               { value: 'never', label: 'Never (server)' },
             ]}
           />
