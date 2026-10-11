@@ -149,29 +149,18 @@ export default function NetflixQCPanel({
         </div>
       )}
 
-      {/* One obvious action: fix what can be fixed. Everything else is tucked under "More tools". */}
-      {fixableOpen.length > 0 ? (
+      {/* One obvious action: fix what can be fixed. It only shows when something can really be fixed automatically. */}
+      {fixableOpen.length > 0 && (
         <button type="button" className="qc-btn qc-btn-primary qc-btn-block" onClick={() => runFixes(fixableOpen)} disabled={anyBusy}
           title="Apply every available one-click fix in one step. Ctrl+Z undoes it.">
           {anyBusy ? <Loader2 size={18} className="animate-spin" /> : <Wand2 size={18} />}
           Fix {fixableOpen.length} {fixableOpen.length === 1 ? 'issue' : 'issues'} automatically
-        </button>
-      ) : (
-        <button type="button" className="qc-btn qc-btn-primary qc-btn-block" onClick={onAutoFix} disabled={toolsDisabled}
-          title="Fix timing, gaps, reading speed and line length using the guideline rules (you review every change before it's kept)">
-          <Wand2 size={18} /> Auto-fix rule issues
         </button>
       )}
 
       <details className="qc-more">
         <summary>More tools</summary>
         <div className="qc-more-body">
-          {fixableOpen.length > 0 && (
-            <button type="button" className="qc-btn" onClick={onAutoFix} disabled={toolsDisabled}
-              title="Fix timing, gaps, reading speed and line length using the guideline rules (you review every change before it's kept)">
-              <Wand2 size={16} /> Review rule fixes
-            </button>
-          )}
           {onRebreakAll && (
             <button type="button" className="qc-btn" onClick={onRebreakAll} disabled={toolsDisabled}
               title={`Re-break every subtitle's lines to fit ${cplLimit} characters`}>

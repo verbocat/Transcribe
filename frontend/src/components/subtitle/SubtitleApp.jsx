@@ -2627,40 +2627,21 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
     });
   };
 
-  // Auto-Fix All Issues
+  // Auto-fix: applies every fix that can really be done right away (one undo step), no preview step
   const handleAutoFix = async () => {
-    await runTask('Auto-fixing issues', async (job) => {
-    try {
-      const res = await fetch(`${API_BASE}/api/subtitle/autofix`, {
-        method: 'POST',
-        signal: job.signal,
-        headers: jobHeaders(job, { 'Content-Type': 'application/json' }),
-        body: JSON.stringify({
-          events: events,
-          shot_changes: shotChanges,
-          frame_rate: frameRate,
-          content_type: contentType,
-          custom_cpl: cplLimit,
-          custom_cps: cpsLimit,
-          custom_max_lines: maxLines,
-          custom_min_duration: minDuration,
-          custom_max_duration: maxDuration
-        })
+    const items = [];
+    events.forEach((ev) => {
+      const id = ev.id ?? ev.event_id;
+      (ev.qc_errors || ev.errors || []).forEach((err) => {
+        const ruleId = err.rule_id || err.error_type || '';
+        if (tools.isQcFixable(ruleId)) items.push({ key: `${id}|${String(ruleId).toUpperCase()}|${err.message}`, eventId: id, ruleId });
       });
-      if (res.ok) {
-        const data = await res.json();
-        setOriginalEvents(events);
-        setEvents(data.events || []);
-        pushToHistory(data.events || []);
-        handleLint(data.events || []);
-        setShowDiffModal(true);
-      }
-    } catch (err) {
-      if (job.cancelled) return;
-      console.error(err);
-      alert('Auto-fix failed');
-    }
     });
+    const results = await applyQcFixes(items);
+    const ok = results.filter(r => r.ok).length;
+    const human = results.length - ok;
+    setAutoSaveStatus(ok ? `Fixed ${ok} ${ok === 1 ? 'issue' : 'issues'}${human ? `, ${human} need you` : ''} (Ctrl+Z undoes)` : (human ? `Nothing could be fixed automatically, ${human} need you` : 'No issues to fix'));
+    setTimeout(() => setAutoSaveStatus(''), 3500);
   };
 
   // Import SRT / VTT File
