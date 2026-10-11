@@ -189,7 +189,7 @@ def style_rules(ctx: Optional[Dict[str, Any]]) -> str:
 
 async def _gemini_json(prompt: str, temperature: float = 0.0) -> Any:
     if not GEMINI_API_KEY:
-        raise RuntimeError("GEMINI_API_KEY is not set on the backend.")
+        raise RuntimeError("The AI service is not configured on the server.")
     from google import genai
     from google.genai import types
     from app.gemini_util import generate_async

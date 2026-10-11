@@ -1365,7 +1365,7 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
       // The backend replies 200 with {status: "error"} when the DB write fails
       const data = res.ok ? await res.json().catch(() => ({})) : {};
       if (res.ok && data.status === 'success') {
-        setDbSaveToast('Saved to Neon PostgreSQL DB!');
+        setDbSaveToast('Saved to cloud!');
       } else {
         setDbSaveToast(`Save failed: ${data.message || `HTTP ${res.status}`}`);
       }
@@ -1497,7 +1497,7 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
   }, []);
 
   const handleDeleteProject = async (projectId) => {
-    if (!window.confirm("Are you sure you want to delete this project from Neon DB?")) return;
+    if (!window.confirm("Are you sure you want to delete this project?")) return;
     try {
       const res = await fetch(`${API_BASE}/api/projects/${projectId}`, { method: 'DELETE' });
       if (res.ok) {

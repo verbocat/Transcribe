@@ -100,7 +100,7 @@ export async function extractAudioInBrowser(file, onProgress, signal) {
     // Same arguments as the server: drop video, 16-bit PCM, 16 kHz, mono
     const code = await ffmpeg.exec(['-i', `${mountDir}/${inputName}`, '-vn', '-acodec', 'pcm_s16le', '-ar', '16000', '-ac', '1', '-y', outName]);
     if (signal?.aborted) throw new CancelledError();
-    if (code !== 0) throw new Error(`FFmpeg exited with code ${code}`);
+    if (code !== 0) throw new Error(`Audio extraction failed (code ${code})`);
 
     const data = await ffmpeg.readFile(outName);
     const bytes = data instanceof Uint8Array ? data : new TextEncoder().encode(String(data));

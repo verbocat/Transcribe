@@ -2117,7 +2117,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
     setIsGenerating(true);
     setProgressPercent(null);
     setProgressStage('Uploading Video & Extracting Audio');
-    setProgressDetail('Demuxing audio stream via FFmpeg...');
+    setProgressDetail('Preparing audio stream...');
     setElapsedSeconds(0);
 
     const startTimer = Date.now();

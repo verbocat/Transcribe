@@ -487,7 +487,7 @@ def get_gemini_client(api_key: Optional[str] = None) -> genai.Client:
     """Initialize and return Google GenAI Client."""
     key = api_key or GEMINI_API_KEY or os.getenv("GEMINI_API_KEY", "")
     if not key:
-        raise ValueError("GEMINI_API_KEY is not configured in .env or environment.")
+        raise ValueError("The AI service is not configured.")
     return genai.Client(api_key=key)
 
 
@@ -1697,7 +1697,7 @@ def generate_subtitles(
                         subs = group_whisper_words_into_subtitles(chunk_whisper_words, chunk_s, cpl_limit=cpl_limit)
                         parsed = {"subtitles": subs}
                     else:
-                        raise RuntimeError(f"Gemini & Whisper generation failed: {last_error}")
+                        raise RuntimeError(f"Subtitle generation failed: {last_error}")
             else:
                 parsed = extract_and_repair_subtitle_json(response.text)
             # Lock language and script across chunks

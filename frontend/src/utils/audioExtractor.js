@@ -247,8 +247,8 @@ export async function extractAudioFromMedia(file, onProgress, apiBase = '', { pr
           stage: 'extract',
           percent: st.percent ?? null,
           detail: have
-            ? `Extracting audio with FFmpeg: ${mmss(st.seconds_done || 0)} of ${mmss(st.seconds_total)} processed`
-            : 'Extracting audio with FFmpeg',
+            ? `Extracting audio: ${mmss(st.seconds_done || 0)} of ${mmss(st.seconds_total)} processed`
+            : 'Extracting audio',
         });
       }
       if (Date.now() - started > 3 * 3600 * 1000) throw new Error('Audio extraction took too long.');

@@ -66,7 +66,7 @@ def get_gemini_client(api_key: Optional[str] = None) -> genai.Client:
     """Initialize and return Google GenAI Client."""
     key = api_key or GEMINI_API_KEY or os.getenv("GEMINI_API_KEY", "")
     if not key:
-        raise ValueError("GEMINI_API_KEY is not configured in .env or environment.")
+        raise ValueError("The AI service is not configured.")
     return genai.Client(api_key=key)
 
 
@@ -115,7 +115,7 @@ def transcribe_audio_with_gemini(
             config=dict(mime_type=mime_type)
         )
     except Exception as upload_err:
-        raise RuntimeError(f"Failed to upload audio to Gemini: {upload_err}")
+        raise RuntimeError(f"Failed to upload audio to the AI service: {upload_err}")
 
     is_auto = (not language or language.lower() in ["auto", "auto-detect", "autodetect"])
 
@@ -188,7 +188,7 @@ Return a valid JSON object matching this schema:
                 pass
 
     if response is None:
-        raise RuntimeError(f"Gemini transcription failed across candidate models: {last_error}")
+        raise RuntimeError(f"Transcription failed across candidate models: {last_error}")
 
     resp_text = (response.text or "").strip()
     

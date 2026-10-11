@@ -66,7 +66,7 @@ export function QcPage({ c }) {
       </Section>
 
       <Section title="Reading comfort" description="Subtitles beyond these limits are flagged in the QC report.">
-        <Slider label="Characters per line (CPL)" hint="Longest line allowed before it must wrap." value={c.cplLimit} min={28} max={50} step={1} unit="ch" defaultValue={QC_DEFAULTS.cpl} onChange={c.setCplLimit} ticks={['28 short', '42 Netflix', '50 wide']} />
+        <Slider label="Characters per line (CPL)" hint="Longest line allowed before it must wrap." value={c.cplLimit} min={28} max={50} step={1} unit="ch" defaultValue={QC_DEFAULTS.cpl} onChange={c.setCplLimit} ticks={['28 short', '42 broadcast', '50 wide']} />
         <Slider label="Reading speed (CPS)" hint="Characters per second. Above this, viewers can't keep up." value={c.cpsLimit} min={5} max={25} step={0.5} unit="cps" decimals={1} defaultValue={QC_DEFAULTS.cps} onChange={c.setCpsLimit} ticks={['5 CJK', '17 kids', '20 adult', '25']} />
         <Row label="Lines per subtitle">
           <Segmented label="Max lines" value={c.maxLines} onChange={c.setMaxLines} options={[{ value: 1, label: '1 line' }, { value: 2, label: '2 lines' }]} className="w-44" />
@@ -178,7 +178,7 @@ export function AiPage({ c }) {
   return (
     <>
       <Section title="Transcription engine" description="Speech-to-text with word timestamps and speaker diarization.">
-        <Row label="Engine"><Badge>scribe_v2</Badge></Row>
+        <Row label="Engine"><Badge>AI transcription</Badge></Row>
         <Row label="Expected speakers" hint="A hint that helps split speaker turns accurately.">
           <Select
             label="Expected speakers"

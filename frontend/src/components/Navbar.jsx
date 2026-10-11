@@ -172,7 +172,7 @@ export default function Navbar({
           <button
             onClick={onOpenProjects}
             className="flex items-center gap-1.5 px-2.5 py-1 bg-[var(--kt-s2)] hover:bg-[var(--kt-s3)] text-[var(--kt-accent)] rounded-lg text-xs font-bold border border-[var(--kt-accent)]/30 transition-colors cursor-pointer shadow-xs"
-            title="Open Neon PostgreSQL Cloud Projects"
+            title="Open cloud projects"
           >
             <Database className="w-3.5 h-3.5 text-[var(--kt-accent)]" />
             <span>Projects</span>
@@ -200,7 +200,7 @@ export default function Navbar({
                 hasApiKey ? 'bg-[var(--kt-accent)] shadow-[0_0_6px_var(--kt-accent)]' : 'bg-amber-400'
               }`}
             />
-            <span className="font-semibold text-[10px]">{hasApiKey ? 'ElevenLabs Scribe' : 'API Key Setup'}</span>
+            <span className="font-semibold text-[10px]">{hasApiKey ? 'AI transcription' : 'API Key Setup'}</span>
           </div>
 
           {/* In-App Administrative Notices & Alerts */}

@@ -85,7 +85,7 @@ export default function ElevenLabsApiKeyModal({
           )}
 
           <div className="text-xs text-slate-300 leading-relaxed">
-            The studio uses <span className="text-[var(--ss-accent)] font-semibold">speech-to-text engine</span> for word-level acoustic synchronization and diarization across 90+ languages, without batch chunking or Whisper.
+            The studio uses <span className="text-[var(--ss-accent)] font-semibold">speech-to-text engine</span> for word-level acoustic synchronization and diarization across 90+ languages, without batch chunking.
           </div>
 
           {/* API Key Input */}
@@ -147,7 +147,7 @@ export default function ElevenLabsApiKeyModal({
               <span>How your key is used:</span>
             </div>
             <p>
-              Your key is passed only with your audio transcription requests and is never stored on our external servers. You can also configure it globally via <code className="text-[var(--ss-accent)]">ELEVENLABS_API_KEY</code> in backend <code className="text-[var(--ss-accent)]">.env</code>.
+              Your key is passed only with your audio transcription requests and is never stored on our external servers. Your administrator can also configure one for everyone on the server.
             </p>
           </div>
 

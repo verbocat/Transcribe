@@ -626,7 +626,7 @@ export default function AdminDashboard({ onBackToStudio, user: currentUser, onLo
                   </span>
                 </div>
                 <div className={`text-[11px] mt-1 ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
-                  Gemini: ${overview.financials.gemini_spend_usd} | Whisper: ${overview.financials.whisper_spend_usd}
+                  AI: ${overview.financials.gemini_spend_usd} | Speech: ${overview.financials.whisper_spend_usd}
                 </div>
               </div>
             </div>
@@ -1048,7 +1048,7 @@ export default function AdminDashboard({ onBackToStudio, user: currentUser, onLo
                                   {(u.total_tokens || 0).toLocaleString()}
                                 </span>
                               </div>
-                              <div className="text-[10px] text-slate-500">Gemini tokens</div>
+                              <div className="text-[10px] text-slate-500">AI tokens</div>
                             </td>
 
                             {/* Cost Consumed */}
@@ -1243,7 +1243,7 @@ export default function AdminDashboard({ onBackToStudio, user: currentUser, onLo
                   <span className={`text-lg font-bold font-mono ${isDark ? 'text-white' : 'text-slate-900'}`}>{hardwareLive.cpu_percent}%</span>
                 </div>
                 <div className={`text-xs ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
-                  Shared across FastAPI server, Whisper alignment models, and audio VAD processing.
+                  Shared across FastAPI server, alignment models, and audio VAD processing.
                 </div>
               </div>
 
@@ -1733,7 +1733,7 @@ export default function AdminDashboard({ onBackToStudio, user: currentUser, onLo
                                   <div className={`font-bold ${isDark ? 'text-slate-200' : 'text-slate-800'}`}>
                                     {(it.total_tokens || 0).toLocaleString()}
                                   </div>
-                                  <div className="text-[10px] text-slate-500">Gemini</div>
+                                  <div className="text-[10px] text-slate-500">AI</div>
                                 </td>
 
                                 {/* Cost */}
@@ -2002,8 +2002,8 @@ export default function AdminDashboard({ onBackToStudio, user: currentUser, onLo
                   isDark ? 'bg-[var(--kt-s0)] border-[var(--kt-s3)]' : 'bg-slate-50 border-slate-200'
                 }`}>
                   <div>
-                    <div className={`font-bold ${isDark ? 'text-slate-200' : 'text-slate-800'}`}>Gemini AI Rebreak & Optimize</div>
-                    <div className={`text-[11px] ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>Allow invoking Gemini AI sentence break and optimization pipelines</div>
+                    <div className={`font-bold ${isDark ? 'text-slate-200' : 'text-slate-800'}`}>AI Rebreak & Optimize</div>
+                    <div className={`text-[11px] ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>Allow invoking AI sentence break and optimization pipelines</div>
                   </div>
                   <input
                     type="checkbox"

@@ -12,18 +12,18 @@ export default function AuthSplitVisual({ activeView = 'login' }) {
       desc: "High-precision verbatim speech segmentation & multi-batch automation.",
       tag: "Live Acoustic Processing",
       badge1: { icon: Zap, text: "0.05s Waveform Sync" },
-      badge2: { icon: ShieldCheck, text: "Netflix QC Guard" }
+      badge2: { icon: ShieldCheck, text: "Broadcast QC Guard" }
     },
     {
       title: "Broadcast-Ready Compliance Engine",
       desc: "Automated Reading Speed (CPS ≤ 20) and Line Length (CPL ≤ 42) validation.",
-      tag: "Netflix Timed Text Standard",
+      tag: "Broadcast Timed Text Standard",
       badge1: { icon: ShieldCheck, text: "Auto Linter Audit" },
       badge2: { icon: Zap, text: "Shot Boundary Snapping" }
     },
     {
       title: "Acoustic AI Speech Diarization",
-      desc: "Gemini accuracy model coupled with onset edge detectors for zero-gap timing.",
+      desc: "AI accuracy model coupled with onset edge detectors for zero-gap timing.",
       tag: "Dual-Engine Architecture",
       badge1: { icon: Sparkles, text: "Multi-Speaker Align" },
       badge2: { icon: Headphones, text: "Lossless Audio Sync" }

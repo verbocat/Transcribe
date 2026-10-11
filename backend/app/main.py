@@ -877,9 +877,9 @@ async def _run_transcribe_job(job_id, target_path, original_media_path, language
         if needs_extract and (ext in get_supported_video_extensions() or ext == ".wma" or ext not in [".wav", ".mp3", ".m4a", ".aac", ".flac", ".ogg", ".opus"]):
             # FFmpeg's own progress drives the first 10% of the bar
             def on_ffmpeg(pct, done, total):
-                on_progress("extracting", 0.0 if pct is None else 10.0 * pct / 100.0, "Extracting the audio track with FFmpeg",
+                on_progress("extracting", 0.0 if pct is None else 10.0 * pct / 100.0, "Extracting the audio track",
                             None if pct is None else round(pct, 1))
-            set_state(stage="extracting", percent=0.0, detail="Extracting the audio track with FFmpeg")
+            set_state(stage="extracting", percent=0.0, detail="Extracting the audio track")
             try:
                 audio_info = await asyncio.to_thread(extract_audio_from_video, target_path, None, on_ffmpeg)
                 extracted = audio_info.get("audio_path")
@@ -1081,7 +1081,7 @@ async def _run_extract_job(job_id: str, file_path: Path, original_filename: str)
         from app.video_processor import extract_audio_from_video, get_video_metadata
         from app.audio_processor import compute_acoustic_waveform_peaks
 
-        set_state(stage="extracting", percent=0.0, detail="Extracting the audio track with FFmpeg")
+        set_state(stage="extracting", percent=0.0, detail="Extracting the audio track")
         audio_info = await asyncio.to_thread(extract_audio_from_video, str(file_path), None, on_ffmpeg)
         audio_path = audio_info.get("audio_path")
         if not audio_path or not os.path.exists(audio_path):
@@ -2316,7 +2316,7 @@ async def subtitle_context_polish(payload: dict):
     except Exception as e:
         ai_error = str(e)
     if not has_scribe and not fixes and not ai_error:
-        ai_error = ("these subtitles have no word-confidence data from ElevenLabs Scribe (for example, they were imported), "
+        ai_error = ("these subtitles have no word-confidence data from the transcription engine (for example, they were imported), "
                     "so there were no uncertain words to check")
     return {"fixes": fixes, "count": len(fixes), "ai_error": ai_error}
 
@@ -2605,7 +2605,7 @@ async def gemini_fix_subtitles_endpoint(payload: dict):
     except Exception as e:
         import traceback
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Gemini QC Fix failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"AI QC fix failed: {str(e)}")
 
 
 @app.post("/api/subtitle/acoustic_sync")
@@ -2700,8 +2700,8 @@ async def acoustic_sync_subtitles_endpoint(request: Request, payload: dict):
             "cps_stats": cps_stats.model_dump() if cps_stats else {}
         },
         "matched_words_count": len(words),
-        "engine": "ElevenLabs Scribe v2 + Netflix Timed Text Engine",
-        "message": f"Successfully synchronized {len(aligned)} subtitles to ElevenLabs acoustic words."
+        "engine": "AI transcription + timed text engine",
+        "message": f"Successfully synchronized {len(aligned)} subtitles to the acoustic words."
     }
 
 

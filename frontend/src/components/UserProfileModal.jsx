@@ -242,7 +242,7 @@ export default function UserProfileModal({ isOpen, onClose, initialTab = 'profil
                       onChange={(e) => setPreferences({ ...preferences, maxCpl: parseInt(e.target.value, 10) || 42 })}
                       className="w-full px-3 py-1.5 bg-[var(--kt-s1)] border border-[var(--kt-s4)] rounded-lg text-white font-mono text-xs focus:outline-hidden focus:border-[var(--kt-accent)]"
                     />
-                    <span className="text-[10px] text-slate-500">Netflix standard: 42 CPL</span>
+                    <span className="text-[10px] text-slate-500">Broadcast standard: 42 CPL</span>
                   </div>
 
                   <div>
@@ -317,7 +317,7 @@ export default function UserProfileModal({ isOpen, onClose, initialTab = 'profil
                 </div>
                 <ol className="list-decimal list-inside space-y-1.5 text-xs text-slate-300 leading-relaxed">
                   <li><strong className="text-white">Import Video/Audio:</strong> Drag and drop your master media file into Subtitle Studio.</li>
-                  <li><strong className="text-white">Acoustic Transcription:</strong> Trigger Gemini Flash + Whisper batch pipeline for sub-millisecond diarization.</li>
+                  <li><strong className="text-white">Acoustic Transcription:</strong> Trigger the AI batch pipeline for precise speaker diarization.</li>
                   <li><strong className="text-white">Timeline Linting:</strong> Real-time QC indicators alert you if speech exceeds 20 CPS or 42 CPL.</li>
                   <li><strong className="text-white">Export:</strong> Download broadcast-compliant SRT, WebVTT, or Plain Text transcripts.</li>
                 </ol>

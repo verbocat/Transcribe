@@ -387,8 +387,8 @@ async def transcribe_with_scribe_v2(
                 ticker.cancel()
             if tmp_upload:
                 Path(upload_path).unlink(missing_ok=True)
-            log_terminal("ELEVENLABS-API", f"Connection error to ElevenLabs API: {exc}", level="ERROR")
-            raise RuntimeError(f"Connection error to ElevenLabs API: {exc}")
+            log_terminal("ELEVENLABS-API", f"Connection error to the transcription service: {exc}", level="ERROR")
+            raise RuntimeError(f"Connection error to the transcription service: {exc}")
 
         if clean_terms and response.status_code in (400, 422) and "keyterm" in (response.text or "").lower():
             # This account/model does not accept key terms: transcribe without them (context polish still fixes the names)
@@ -426,7 +426,7 @@ async def transcribe_with_scribe_v2(
                 pass
             log_terminal("ELEVENLABS-API", f"HTTP {response.status_code} Failure: {err_text}", level="ERROR")
             raise RuntimeError(
-                f"ElevenLabs Scribe v2 transcription failed (HTTP {response.status_code}): {err_text}"
+                f"Transcription failed (HTTP {response.status_code}): {err_text}"
             )
 
         resp_json = response.json()

@@ -187,7 +187,7 @@ def suggest_corrections(lines: List[Line], language: str = "Hindi") -> Tuple[Dic
     if len({ln["speaker"] for ln in lines}) < 2 and len(lines) < 4:
         return {"speaker_map": {}, "reassign": {}}, notes
     if not GEMINI_API_KEY:
-        return {"speaker_map": {}, "reassign": {}}, ["AI speaker review needs a Gemini key on the server."]
+        return {"speaker_map": {}, "reassign": {}}, ["AI speaker review is not configured on the server."]
 
     prof = speaker_profiles(lines)
     health: Dict[str, Any] = {"down": False, "reason": None}

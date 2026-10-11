@@ -89,7 +89,7 @@ def _get_gemini_client() -> genai.Client:
     """Initialize and return Google GenAI client."""
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
-        raise ValueError("GEMINI_API_KEY is not set.")
+        raise ValueError("The AI service is not configured.")
     return genai.Client(api_key=api_key)
 
 

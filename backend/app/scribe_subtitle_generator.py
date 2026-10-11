@@ -548,7 +548,7 @@ async def stream_generate_subtitles(
     speaker_hint_text = f" ({num_speakers} speakers specified)" if num_speakers else " (Auto-diarization)"
     expected = _STT_OVERHEAD_SEC + _load_stt_ratio() * max(audio_duration, 1.0)
     audio_label = f"{_fmt_duration(audio_duration)} of audio" if audio_duration else "your audio"
-    yield prog.event("transcribe", 0.0, f"Transcribing {audio_label} with ElevenLabs Scribe v2{speaker_hint_text}", estimated=True, eta=expected)
+    yield prog.event("transcribe", 0.0, f"Transcribing {audio_label} with AI transcription{speaker_hint_text}", estimated=True, eta=expected)
 
     task = None
     t_stt = time.time()

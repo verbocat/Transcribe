@@ -301,7 +301,7 @@ Return strictly a valid JSON array of objects:
 
             cards = json.loads(raw_json)
             if not isinstance(cards, list) or not cards:
-                raise ValueError("Empty or invalid card list returned from Gemini")
+                raise ValueError("Empty or invalid card list returned from the AI service")
 
             # Monotonic Word Timestamp Alignment
             w_idx = 0

@@ -89,7 +89,7 @@ export default function ProjectsModal({
             </div>
             <div>
               <h2 className="text-base font-bold text-white tracking-tight">Saved Cloud Workstation Sessions</h2>
-              <p className="text-xs text-slate-400">PostgreSQL / Neon database synced project archives</p>
+              <p className="text-xs text-slate-400">Synced project archives</p>
             </div>
           </div>
 
@@ -150,16 +150,16 @@ export default function ProjectsModal({
           {isLoading ? (
             <div className="text-center py-16 text-slate-400">
               <RefreshCw className="w-6 h-6 animate-spin mx-auto mb-2 text-[var(--kt-accent)]" />
-              <p className="text-xs font-semibold text-slate-300">Loading projects from Neon DB...</p>
+              <p className="text-xs font-semibold text-slate-300">Loading projects...</p>
             </div>
           ) : filtered.length === 0 && localDrafts.length > 0 ? null : filtered.length === 0 ? (
             <div className="text-center py-14 px-6 bg-[var(--kt-s2)] border border-dashed border-[var(--kt-s4)] rounded-2xl">
               <div className="w-12 h-12 rounded-2xl bg-[var(--kt-accent)]/15 text-[var(--kt-accent)] border border-[var(--kt-accent)]/30 flex items-center justify-center mx-auto mb-3">
                 <Database className="w-6 h-6" />
               </div>
-              <p className="text-sm font-bold text-white">No saved projects in Neon DB</p>
+              <p className="text-sm font-bold text-white">No saved projects</p>
               <p className="text-xs text-slate-400 mt-1 max-w-sm mx-auto leading-relaxed">
-                Transcribe any audio file or click "Save to Neon DB" to store full transcripts, timestamps, and confidence matrices in your PostgreSQL cloud.
+                Transcribe any audio file or click "Save" to store full transcripts, timestamps, and confidence data in the cloud.
               </p>
               <button
                 onClick={onClose}
@@ -220,7 +220,7 @@ export default function ProjectsModal({
                   <button
                     onClick={() => onDeleteProject(proj.id)}
                     className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-rose-950/40 rounded-lg transition-colors cursor-pointer"
-                    title="Delete project from Neon DB"
+                    title="Delete project"
                   >
                     <Trash2 className="w-4 h-4" />
                   </button>
