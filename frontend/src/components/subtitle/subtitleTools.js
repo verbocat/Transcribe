@@ -294,14 +294,143 @@ export function planQcFixes(events, items, ctx) {
   const maxLines = ctx.maxLines || 2;
   const rebroke = ctx.rebroke || new Map();
   const eps = 0.005;
-  const work = events.map((e) => ({ ...e }));
+  let work = events.map((e) => ({ ...e }));
+  const mergedAway = new Set();
   const results = [];
   const fail = (item, message) => results.push({ key: item.key, ok: false, message });
   const done = (item, message) => results.push({ key: item.key, ok: true, message });
 
+  const LEAD_MAX = 0.25; // how much earlier a subtitle may start than the speech
+  const RIPPLE_MAX = 0.4; // how far following subtitles may be pushed later in total
+  const spk = (e) => String(e.speaker || e.primary_speaker || '');
+  const orderOf = (arr) => arr.map((_, i) => i).sort((a, b) => startOf(arr[a]) - startOf(arr[b]));
+
+  /** Break flat text into at most maxLines lines that each fit the line limit, or null when it cannot fit. */
+  const breakLines = (flatText) => {
+    const t = flatText.replace(/\s+/g, ' ').trim();
+    if (t.length <= cplLimit) return t;
+    if (maxLines < 2) return null;
+    const mid = t.length / 2;
+    let best = null;
+    for (let i = 1; i < t.length - 1; i += 1) {
+      if (t[i] !== ' ') continue;
+      const a = t.slice(0, i);
+      const b = t.slice(i + 1);
+      if (a.length > cplLimit || b.length > cplLimit) continue;
+      if (best === null || Math.abs(i - mid) < Math.abs(best - mid)) best = i;
+    }
+    return best === null ? null : `${t.slice(0, best)}\n${t.slice(best + 1)}`;
+  };
+
+  /**
+   * Give subtitle `idx` a duration of at least `need` seconds, using free time in this order: after it, before it
+   * (start a little earlier, trimming the previous subtitle only if it stays compliant), then by pushing the
+   * following subtitles later while they have slack. Returns the new list, or null when it cannot be done safely.
+   */
+  const grow = (list, idx, need) => {
+    const tmp = list.map((e) => ({ ...e }));
+    const cur = tmp[idx];
+    let s = startOf(cur);
+    let en = endOf(cur);
+    const want = round3(need + 0.002);
+    if (want > maxDuration + eps) return null;
+    if (en - s >= want - 1e-6) return list;
+    const ord = orderOf(tmp);
+    const pos = ord.indexOf(idx);
+    const prevI = pos > 0 ? ord[pos - 1] : -1;
+    const nextI = pos < ord.length - 1 ? ord[pos + 1] : -1;
+    // 1. after: free time up to the next subtitle
+    const roomAfter = nextI >= 0 ? startOf(tmp[nextI]) - gap - en : Infinity;
+    const touched = new Set([idx]);
+    let deficit = want - (en - s);
+    const takeAfter = Math.max(0, Math.min(deficit, roomAfter));
+    en += takeAfter;
+    deficit -= takeAfter;
+    // 2. before: the gap in front, plus slack the previous subtitle can give up
+    if (deficit > 1e-6 && prevI >= 0) {
+      const p = tmp[prevI];
+      const pS = startOf(p);
+      const pE = endOf(p);
+      const pNeed = Math.max(minDuration, readingChars(p.text) / Math.max(1, cpsLimit - 0.05));
+      const pSlack = Math.max(0, pE - pS - pNeed);
+      const free = Math.max(0, s - gap - pE) + pSlack;
+      const lead = Math.min(deficit, LEAD_MAX, free);
+      if (lead > 1e-6) {
+        const newS = round3(s - lead);
+        if (newS - gap < pE) tmp[prevI] = withTimes(p, pS, round3(newS - gap));
+        touched.add(prevI);
+        s = newS;
+        deficit -= lead;
+      }
+    } else if (deficit > 1e-6 && prevI < 0) {
+      const lead = Math.min(deficit, LEAD_MAX, s);
+      if (lead > 1e-6) { s = round3(s - lead); deficit -= lead; }
+    }
+    // 3. push the following subtitles later while they have slack further down
+    if (deficit > 1e-6) {
+      if (deficit > RIPPLE_MAX + 1e-6 || nextI < 0) return null;
+      let need2 = en + deficit + gap;
+      let ok = false;
+      for (let k = pos + 1; k < ord.length; k += 1) {
+        const j = ord[k];
+        const sj = startOf(tmp[j]);
+        if (sj >= need2 - 1e-6) { ok = true; break; }
+        const shift = need2 - sj;
+        if (shift > RIPPLE_MAX + 1e-6) return null;
+        tmp[j] = withTimes(tmp[j], sj + shift, endOf(tmp[j]) + shift);
+        touched.add(j);
+        need2 = endOf(tmp[j]) + gap;
+      }
+      if (!ok && ord.length - 1 > pos) ok = true; // pushed the whole tail; nothing after it to collide with
+      if (!ok) return null;
+      en = round3(en + deficit);
+      deficit = 0;
+    }
+    if (en - s > maxDuration + eps) return null;
+    tmp[idx] = withTimes(cur, s, en);
+    // a gap of 3 to 11 frames flickers: chain the earlier subtitle to 2 frames, for every pair this change touched
+    const ord2 = orderOf(tmp);
+    for (let k = 0; k < ord2.length - 1; k += 1) {
+      const a = ord2[k];
+      const b = ord2[k + 1];
+      if (!touched.has(a) && !touched.has(b)) continue;
+      const left = startOf(tmp[b]) - endOf(tmp[a]);
+      if (left > gap + 1e-6 && left * fps < 12 - 1e-6 && startOf(tmp[b]) - gap - startOf(tmp[a]) <= maxDuration + eps) {
+        tmp[a] = withTimes(tmp[a], startOf(tmp[a]), round3(startOf(tmp[b]) - gap));
+      }
+    }
+    return tmp;
+  };
+
+  /** Merge subtitle `idx` with a neighbour from the same speaker when the result still fits. Returns the new list or null. */
+  const mergeNeighbour = (list, idx) => {
+    const ord = orderOf(list);
+    const pos = ord.indexOf(idx);
+    const tries = [pos < ord.length - 1 ? [idx, ord[pos + 1]] : null, pos > 0 ? [ord[pos - 1], idx] : null].filter(Boolean);
+    for (const [a, b] of tries) {
+      const A = list[a];
+      const B = list[b];
+      if (spk(A) !== spk(B)) continue;
+      const ta = stripMarkup(A.text).trim();
+      const tb = stripMarkup(B.text).trim();
+      if (/^[-–—]/.test(ta) || /^[-–—]/.test(tb) || /<[a-z]/i.test(`${A.text}${B.text}`)) continue;
+      const text = breakLines(`${ta.replace(/\n/g, ' ')} ${tb.replace(/\n/g, ' ')}`);
+      if (!text) continue;
+      const s = startOf(A);
+      const en = endOf(B);
+      const dur = en - s;
+      if (dur > maxDuration + eps || readingChars(text) / dur > cpsLimit) continue;
+      const out = list.map((e) => ({ ...e }));
+      out[a] = { ...withTimes(A, s, en), text, lines: text.split('\n') };
+      mergedAway.add(idOf(B));
+      return out.filter((_, i) => i !== b);
+    }
+    return null;
+  };
+
   for (const item of items) {
     const idx = work.findIndex((e) => idOf(e) === item.eventId);
-    if (idx < 0) { fail(item, 'This subtitle no longer exists.'); continue; }
+    if (idx < 0) { if (mergedAway.has(item.eventId)) done(item, 'Merged into its neighbour'); else fail(item, 'This subtitle no longer exists.'); continue; }
     const e = work[idx];
     const start = startOf(e);
     const end = endOf(e);
@@ -310,38 +439,22 @@ export function planQcFixes(events, items, ctx) {
     const roomEnd = next ? startOf(next) - gap : Infinity;
     const chars = readingChars(text);
     const rule = String(item.ruleId || '').toUpperCase();
-    // A gap of 3 to 11 frames flickers, so an extended subtitle that would leave one is chained to 2 frames instead
-    const setEnd = (t) => {
-      const left = next ? startOf(next) - t : Infinity;
-      const chained = next && left * fps < 12 && roomEnd > t && roomEnd - start <= maxDuration + eps ? roomEnd : t;
-      work[idx] = withTimes(e, start, round3(chained));
-    };
 
     if (rule === 'NF-DURATION-SHORT') {
-      const target = round3(start + minDuration + 0.001);
       if (end - start >= minDuration - eps) { done(item, 'Already long enough'); continue; }
-      if (target > roomEnd + 1e-6) { fail(item, 'No free time after this subtitle to make it longer. Merge it with a neighbour or move the next one.'); continue; }
-      setEnd(target);
-      done(item, `Now ${(endOf(work[idx]) - start).toFixed(2)}s long`);
+      const grown = grow(work, idx, minDuration + 0.001);
+      if (grown) { work = grown; const g = work.find((x) => idOf(x) === item.eventId); done(item, `Now ${(endOf(g) - startOf(g)).toFixed(2)}s long`); continue; }
+      const merged = mergeNeighbour(work, idx);
+      if (merged) { work = merged; done(item, 'Merged with the neighbouring subtitle'); continue; }
+      fail(item, 'No room to lengthen it and it cannot be merged with a neighbour (different speaker or too much text). Re-time or merge it by hand.');
     } else if (rule.startsWith('NF-CPS')) {
-      const warnCps = cpsLimit - 2;
       const dur = end - start;
-      if (chars / Math.max(dur, 1e-6) <= (rule === 'NF-CPS-WARNING' ? warnCps : cpsLimit) + 1e-6) { done(item, 'Reading speed is already fine'); continue; }
-      const durFor = (cps) => Math.ceil((chars / cps) * 1000) / 1000 + 0.002;
-      const best = round3(start + Math.max(durFor(warnCps), minDuration));
-      const least = round3(start + Math.max(durFor(cpsLimit), minDuration));
-      const cap = Math.min(roomEnd, start + maxDuration);
-      let target = null;
-      if (best <= cap + 1e-6) target = best;
-      else if (rule !== 'NF-CPS-WARNING' && least <= cap + 1e-6) target = least;
-      if (target == null || target <= end + eps) {
-        fail(item, next && roomEnd - start < maxDuration
-          ? 'No free time after this subtitle to slow the reading speed. Shorten the text or move the next subtitle.'
-          : 'Cannot be slowed enough within the maximum duration. Shorten the text or split the subtitle.');
-        continue;
-      }
-      setEnd(target);
-      const got = endOf(work[idx]) - start;
+      if (Math.round(chars / Math.max(dur, 1e-6) * 10) / 10 <= cpsLimit) { done(item, 'Reading speed is already fine'); continue; }
+      const grown = grow(work, idx, Math.max(minDuration, Math.ceil((chars / Math.max(1, cpsLimit - 0.05)) * 1000) / 1000));
+      if (!grown) { fail(item, 'Not enough free time around this subtitle to slow it down. Shorten the text (the "Fix with AI" tool can do it) or re-time it.'); continue; }
+      work = grown;
+      const g = work.find((x) => idOf(x) === item.eventId);
+      const got = endOf(g) - startOf(g);
       done(item, `Now ${got.toFixed(2)}s long (${(chars / got).toFixed(1)} chars/s)`);
     } else if (rule.startsWith('NF-GAP') || rule === 'NF-OVERLAP') {
       // The linter flags the LATER subtitle; the cure is to move the EARLIER subtitle's out point

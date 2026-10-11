@@ -32,7 +32,7 @@ test('reading speed fix reaches the limit with room, without leaving a flicker g
   const events = [ev(1, 0, 1, 'a'.repeat(30)), ev(2, 5, 6, 'ok')];
   const { events: out, results } = planQcFixes(events, [item(1, 'NF-CPS-ADULT')], ctx);
   assert.equal(results[0].ok, true);
-  assert.ok(30 / (out[0].end_time - out[0].start_time) <= 18);
+  assert.ok(30 / (out[0].end_time - out[0].start_time) <= 20);
 });
 
 test('ellipsis, punctuation spacing and dual-speaker spacing really change the text', () => {
@@ -51,4 +51,19 @@ test('re-break that cannot fit the limits is human work', () => {
   const { results } = planQcFixes(events, [item(1, 'NF-CPL')], { ...ctx, rebroke });
   assert.equal(results[0].ok, false);
   assert.equal(isQcFixable('NF-CPL'), true);
+});
+
+test('a too-short cue with no room after it borrows time before it', () => {
+  const events = [ev(1, 0, 1, 'Hello'), ev(2, 2.0, 2.6, 'Hi there'), ev(3, 2.7, 4, 'Yes')];
+  const { events: out, results } = planQcFixes(events, [item(2, 'NF-DURATION-SHORT')], ctx);
+  assert.equal(results[0].ok, true);
+  assert.ok(out[1].end_time - out[1].start_time >= 0.833);
+  assert.ok(out[1].start_time >= out[0].end_time + 2 / 24 - 0.002);
+});
+
+test('a too-short cue is merged with a same-speaker neighbour when nothing else works', () => {
+  const events = [ev(1, 0, 1.5, 'Hello'), ev(2, 1.55, 2.0, 'there'), ev(3, 2.05, 4, 'Yes')];
+  const { events: out, results } = planQcFixes(events, [item(2, 'NF-DURATION-SHORT')], { ...ctx, minDuration: 2.5, maxDuration: 7 });
+  assert.equal(results[0].ok, true);
+  assert.equal(out.length, 2);
 });

@@ -656,7 +656,9 @@ def lint_subtitle_event(
     # ── CPS (Reading Speed) Checks (Yellow / Amber Warnings) ──
     if duration > 0:
         cps = calculate_cps(text, duration)
-        if cps > cps_limit:
+        # Rounded to one decimal, like the number shown to the user, so 20.04 against a limit of 20 is not a violation.
+        # (There is no "approaching the limit" warning: a subtitle inside the limit is compliant.)
+        if round(cps, 1) > cps_limit:
             errors.append({
                 "event_id": event_id,
                 "rule_id": f"NF-CPS-{'CHILD' if content_type == 'children' else 'ADULT'}",
@@ -664,15 +666,6 @@ def lint_subtitle_event(
                 "message": f"CPS {cps:.1f} exceeds limit of {cps_limit:.1f}. Text is too dense for the display time.",
                 "severity": "warning",
                 "suggested_fix": f"Extend duration or reduce text to bring CPS below {cps_limit:.1f}.",
-            })
-        elif cps > cps_warning:
-            errors.append({
-                "event_id": event_id,
-                "rule_id": "NF-CPS-WARNING",
-                "field": "text",
-                "message": f"CPS {cps:.1f} is approaching the limit of {cps_limit:.1f}.",
-                "severity": "warning",
-                "suggested_fix": None,
             })
     
     # ── CPL (Characters Per Line) Checks ──
