@@ -15,7 +15,7 @@ def _require_config() -> None:
     if not is_configured():
         raise HTTPException(
             status_code=503,
-            detail="Centroid is not configured. Set CENTROID_API_URL and CENTROID_API_KEY in backend/.env.",
+            detail="Translation is not configured on the server.",
         )
 
 
@@ -29,11 +29,11 @@ async def post(path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         async with httpx.AsyncClient(timeout=CENTROID_TIMEOUT_SEC) as client:
             res = await client.post(f"{CENTROID_API_URL}/api/v1{path}", json=payload, headers=_headers())
     except httpx.TimeoutException:
-        raise HTTPException(status_code=504, detail="Centroid took too long to respond. Try fewer languages or a shorter file.")
+        raise HTTPException(status_code=504, detail="Translation took too long to respond. Try fewer languages or a shorter file.")
     except httpx.HTTPError as e:
-        raise HTTPException(status_code=502, detail=f"Could not reach Centroid: {e}")
+        raise HTTPException(status_code=502, detail=f"Could not reach the translation service: {e}")
     if res.status_code == 401:
-        raise HTTPException(status_code=502, detail="Centroid rejected the API key. Check CENTROID_API_KEY.")
+        raise HTTPException(status_code=502, detail="The translation service rejected the server's API key.")
     if res.status_code >= 400:
         try:
             detail = res.json().get("detail") or res.json().get("error") or res.text

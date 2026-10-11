@@ -1134,7 +1134,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
     }
     const existing = saved[code];
     const edited = existing && JSON.stringify(existing.map((e) => e.text)) !== JSON.stringify(evs.map((e) => e.text));
-    if (edited && !window.confirm(`Replace your ${langName(code)} edits with Centroid's latest ${langName(code)} translation?`)) {
+    if (edited && !window.confirm(`Replace your ${langName(code)} edits with the latest ${langName(code)} translation?`)) {
       // keep the user's version and just switch to it
       setTracks(saved);
       setActiveTrack(code);
@@ -3304,7 +3304,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
                   onChange={setQcView}
                   options={[
                     { value: 'guideline', label: 'Guideline QC', icon: ShieldCheck },
-                    { value: 'centroid', label: centroidState.qcIssues != null ? `Centroid QC · ${centroidState.qcIssues}` : 'Centroid QC', icon: BadgeCheck },
+                    { value: 'centroid', label: centroidState.qcIssues != null ? `Translation QC · ${centroidState.qcIssues}` : 'Translation QC', icon: BadgeCheck },
                   ]}
                 />
               </div>

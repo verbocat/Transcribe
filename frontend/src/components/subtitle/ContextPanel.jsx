@@ -139,7 +139,7 @@ export default function ContextPanel({
       if (!next.content_type && d.content_type) next.content_type = d.content_type;
       next.key_terms = mergeLines(next.key_terms, d.key_terms);
       onChange(next);
-      setNote({ tone: 'good', text: `Centroid read ${d.lines_read} of ${d.lines_total} subtitles and drafted the context: ${(d.key_terms || []).length} key terms. Please check them.` });
+      setNote({ tone: 'good', text: `Read ${d.lines_read} of ${d.lines_total} subtitles and drafted the context: ${(d.key_terms || []).length} key terms. Please check them.` });
     } catch (e) {
       setNote(isCancelError(e) ? { tone: 'warn', text: 'Cancelled. Nothing was changed.' } : { tone: 'danger', text: e.message });
     } finally {

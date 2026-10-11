@@ -46,7 +46,7 @@ export default function TranscribeRail({
 
   return (
     <aside className="ts-rail" aria-label="Tools">
-      {btn('translate', 'Translate', Languages, translateOpen, onTranslate, 'Translate the transcript with Centroid')}
+      {btn('translate', 'Translate', Languages, translateOpen, onTranslate, 'Translate the transcript')}
       {btn('qc', 'QC', ShieldCheck, qcOpen, onQc, `Quality check${qcIssues != null ? ` · ${qcIssues} issues` : ''}`,
         qcIssues != null && <span className="ts-rail-badge">{qcIssues}</span>)}
       <span className="ts-rail-sep" aria-hidden="true" />

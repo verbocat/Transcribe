@@ -423,7 +423,7 @@ export default function CentroidModal({
       });
       if (lines.length) updateGloss([glossaryText.trim(), ...lines].filter(Boolean).join('\n'));
       setOpen((o) => ({ ...o, ctx: true, gloss: lines.length ? true : o.gloss }));
-      setAnalyzeNote(`Centroid read ${data.cues_read} of ${data.cues_total} subtitles and drafted the briefing: ${(data.characters || []).length} characters, ${(data.names || []).length} names${exampleCount ? `, ${exampleCount} example lines` : ''}. Please check the genders, name spellings and example lines. Correct them if they are wrong, because Centroid follows them strictly.`);
+      setAnalyzeNote(`Read ${data.cues_read} of ${data.cues_total} subtitles and drafted the briefing: ${(data.characters || []).length} characters, ${(data.names || []).length} names${exampleCount ? `, ${exampleCount} example lines` : ''}. Please check the genders, name spellings and example lines. Correct them if they are wrong, because the translation follows them strictly.`);
     } catch (e) {
       if (isCancelError(e)) setAnalyzeNote('Cancelled. Nothing was changed.');
       else setError(e.message);
@@ -435,7 +435,7 @@ export default function CentroidModal({
 
   /** Build source/target pairs for QC from a language result, or from the editor. */
   const pairsFor = useCallback((code, res, snap) => {
-    if (!code || !snap.length) return { pairs: [], error: 'Translate first, so Centroid has the source text to compare against.' };
+    if (!code || !snap.length) return { pairs: [], error: 'Translate first, so there is source text to compare against.' };
     if (code === 'editor') {
       const cur = events.filter((e) => (e.text || '').trim());
       if (cur.length !== snap.length) return { pairs: [], error: `The editor has ${cur.length} subtitles but the source has ${snap.length}. QC needs the same number of cues.` };
@@ -642,7 +642,7 @@ export default function CentroidModal({
  <div className="flex-1 min-h-0 overflow-y-auto space-y-4 pr-1" data-lenis-prevent>
     {notReady && (
       <Notice tone="warn">
-        {!status.configured ? 'Centroid is not connected. Add CENTROID_API_URL and CENTROID_API_KEY to backend/.env and restart the backend.' : `Centroid could not be reached${status.error ? ` (${status.error})` : ''}. Check CENTROID_API_URL and the API key.`}
+        {!status.configured ? 'Translation is not connected. Ask your administrator to set it up.' : `Translation could not be reached${status.error ? ` (${status.error})` : ''}. Please try again shortly.`}
       </Notice>
     )}
     {!hasResults && !snapshot.length && (
@@ -664,11 +664,11 @@ export default function CentroidModal({
             />
           </Field>
           <button type="button" className="qc-btn qc-btn-primary" disabled={qcBusy || !qcTarget || notReady} onClick={() => runQcFor(qcTarget, results, snapshot)}>
-            {qcBusy ? <Loader2 size={16} className="animate-spin" /> : <ShieldCheck size={16} />} {qcBusy ? 'Checking…' : qc ? 'Run again' : 'Run Centroid QC'}
+            {qcBusy ? <Loader2 size={16} className="animate-spin" /> : <ShieldCheck size={16} />} {qcBusy ? 'Checking…' : qc ? 'Run again' : 'Run translation QC'}
           </button>
         </section>
 
-        {qcBusy && <Notice tone="good"><span className="inline-flex items-center gap-2"><Loader2 size={13} className="animate-spin" /> Centroid is reviewing every cue against its source. This can take a minute.</span></Notice>}
+        {qcBusy && <Notice tone="good"><span className="inline-flex items-center gap-2"><Loader2 size={13} className="animate-spin" /> Every cue is being reviewed against its source. This can take a minute.</span></Notice>}
         {qcError && <Notice>{qcError}</Notice>}
 
         {qc && (
@@ -680,7 +680,7 @@ export default function CentroidModal({
                 <div className="qc-score-sub">{qc.summary.error_count} {qc.summary.error_count === 1 ? 'error' : 'errors'}, {qc.summary.warning_count} {qc.summary.warning_count === 1 ? 'warning' : 'warnings'}, {qc.summary.clean_percentage}% of cues clean</div>
               </div>
             </div>
-            {qc.centroid_error && <Notice tone="warn">Centroid’s AI review could not run this time, so only the built-in rule checks are shown. Run QC again to retry.</Notice>}
+            {qc.centroid_error && <Notice tone="warn">The AI review could not run this time, so only the built-in rule checks are shown. Run QC again to retry.</Notice>}
             {!qc.summary.ai_checked && !qc.centroid_error && <Notice tone="warn">The AI review didn’t complete for part of the file, so only rule-based checks are shown for it. Run QC again to retry.</Notice>}
 
             {qcNote && <Notice tone="good">{qcNote}</Notice>}
@@ -691,7 +691,7 @@ export default function CentroidModal({
               </button>
             )}
 
-            {openIssues.length === 0 && <Notice tone="good">{fixedIssues.length ? 'All issues are fixed. Run QC again to confirm.' : 'No issues found. The translation passed Centroid QC.'}</Notice>}
+            {openIssues.length === 0 && <Notice tone="good">{fixedIssues.length ? 'All issues are fixed. Run QC again to confirm.' : 'No issues found. The translation passed translation QC.'}</Notice>}
             {openIssues.length > 0 && <h4 className="qc-section-title">{openIssues.length} to review{fixedIssues.length ? ` · ${fixedIssues.length} fixed` : ''}</h4>}
 
             {issueGroups.flatMap((g) => g.items).map((i) => {
@@ -763,7 +763,7 @@ export default function CentroidModal({
     {qcPortal}
     <aside
       role="dialog"
-      aria-label="Translate with Centroid"
+      aria-label="Translate"
       onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); onClose(); } }}
       className="fixed top-0 bottom-0 right-0 z-[60] w-[560px] max-w-[96vw] flex flex-col border-l border-[var(--ss-line)] bg-[var(--ss-panel)] text-[var(--ss-text)] shadow-2xl"
     >
@@ -772,7 +772,7 @@ export default function CentroidModal({
         <Languages size={17} className="text-[var(--ss-accent)]" />
         <div className="flex-1 min-w-0">
           <h2 className="text-[14px] font-semibold leading-tight">Translate</h2>
-          <p className="text-[11.5px] text-[var(--ss-faint)]">Powered by Centroid</p>
+          <p className="text-[11.5px] text-[var(--ss-faint)]">AI subtitle translation</p>
         </div>
         {status?.reachable && <Badge tone="accent">Connected</Badge>}
         <IconButton icon={X} label="Close (Esc)" onClick={onClose} />
@@ -783,8 +783,8 @@ export default function CentroidModal({
           <Notice tone="warn">
             <span className="flex gap-2"><AlertTriangle size={14} className="shrink-0 mt-px" />
               {!status.configured
-                ? 'Centroid is not connected. Add CENTROID_API_URL and CENTROID_API_KEY to backend/.env and restart the backend.'
-                : `Centroid could not be reached${status.error ? ` (${status.error})` : ''}. Check CENTROID_API_URL and the API key.`}
+                ? 'Translation is not connected. Ask your administrator to set it up.'
+                : `Translation could not be reached${status.error ? ` (${status.error})` : ''}. Please try again shortly.`}
             </span>
           </Notice>
         </div>
@@ -844,7 +844,7 @@ export default function CentroidModal({
             <Collapsible title="Context" hint={`${ctx.tone || 'No tone set'} · ${(ctx.characters || []).filter((c) => c.name).length} characters`} open={open.ctx} setOpen={(v) => setOpen((o) => ({ ...o, ctx: v }))}>
               <div className="mb-3 flex items-start gap-3 rounded-lg border border-[var(--ss-accent)]/30 bg-[var(--ss-accent)]/5 p-2.5">
                 <div className="flex-1 min-w-0 text-[11.5px] text-[var(--ss-muted)] leading-snug">
-                  The more Centroid knows, the more natural and consistent the translation. Let it read your subtitles and draft the briefing, then correct anything it got wrong. Centroid follows these fields as strict rules.
+                  The more the translator knows, the more natural and consistent the translation. Let it read your subtitles and draft the briefing, then correct anything it got wrong. These fields are followed as strict rules.
                 </div>
                 {analyzing ? (
                   <Button size="sm" variant="secondary" icon={Square} onClick={() => cancelJob(analyzeJob)}>Cancel</Button>
@@ -901,7 +901,7 @@ export default function CentroidModal({
               </SubGroup>
 
               <SubGroup title="Example lines" hint="Strongest way to set the voice">
-                <p className="mb-2 text-[11.5px] text-[var(--ss-faint)] leading-snug">Write 3 to 6 lines exactly the way you want them to sound. Centroid copies the voice, word choice and formality. Format: <code>English line =&gt; your Hindi line</code>. Add <code>@hi</code> at the end to limit it to one language.</p>
+                <p className="mb-2 text-[11.5px] text-[var(--ss-faint)] leading-snug">Write 3 to 6 lines exactly the way you want them to sound. The translation copies the voice, word choice and formality. Format: <code>English line =&gt; your Hindi line</code>. Add <code>@hi</code> at the end to limit it to one language.</p>
                 <textarea rows={5} className={`${AREA} font-mono`} value={ctx.style_examples} onChange={(e) => patchCtx('style_examples', e.target.value)} placeholder={'I\'m worried about him. => मुझे उसकी बहुत फ़िक्र हो रही है। @hi\nLet\'s go! => चलो चलो, जल्दी करो! @hi'} aria-label="Example lines" />
               </SubGroup>
 
@@ -916,7 +916,7 @@ export default function CentroidModal({
               <div className="mt-3 flex items-center justify-between gap-3 rounded-lg border border-[var(--ss-line)] px-3 py-2">
                 <div className="min-w-0">
                   <div className="text-[12.5px]">Treat this context as strict rules</div>
-                  <div className="text-[11.5px] text-[var(--ss-faint)]">Centroid must obey every field above. With a natural tone, it also re-checks the result for bookish words and rewrites them.</div>
+                  <div className="text-[11.5px] text-[var(--ss-faint)]">Every field above is obeyed. With a natural tone, it also re-checks the result for bookish words and rewrites them.</div>
                 </div>
                 <Switch checked={!!ctx.strict} onChange={(v) => patchCtx('strict', v)} label="Strict context" />
               </div>
@@ -959,10 +959,10 @@ export default function CentroidModal({
 
             <div className="flex items-center justify-between gap-3 rounded-xl border border-[var(--ss-line)] px-3 py-2.5">
               <div className="min-w-0">
-                <div className="text-[12.5px]">Run Centroid QC automatically</div>
+                <div className="text-[12.5px]">Run translation QC automatically</div>
                 <div className="text-[11.5px] text-[var(--ss-faint)]">Check the translation as soon as it finishes</div>
               </div>
-              <Switch checked={autoQc} onChange={setAutoQc} label="Run Centroid QC automatically" />
+              <Switch checked={autoQc} onChange={setAutoQc} label="Run translation QC automatically" />
             </div>
 
             {error && <Notice>{error}</Notice>}
@@ -1000,7 +1000,7 @@ export default function CentroidModal({
                         </ul>
                       )}
                       <div className="mt-3 flex flex-wrap gap-2">
-                        <Button variant="primary" icon={BadgeCheck} onClick={() => runQcFor(code, results, snapshot)} disabled={qcBusy || notReady}>Run Centroid QC</Button>
+                        <Button variant="primary" icon={BadgeCheck} onClick={() => runQcFor(code, results, snapshot)} disabled={qcBusy || notReady}>Run translation QC</Button>
                         <Button icon={Download} onClick={() => downloadLang(code)}>Download SRT</Button>
                         <Button icon={Pencil} onClick={() => openInEditor(code)} disabled={activeLang === code}>{activeLang === code ? 'Showing in editor' : trackLangs.includes(code) ? 'Show in editor' : 'Edit in studio'}</Button>
                       </div>

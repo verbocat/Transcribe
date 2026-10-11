@@ -11,7 +11,7 @@ import {
  * Left tool rail: a slim, icon-only strip (labels appear as tooltips) for the working tools:
  * AI steps | quality check. Panels (Context, Translate, QC) stay highlighted while open.
  * File actions (open, import, export), layout and shortcuts live in the top menu bar only.
- * "QC" opens one view with Guideline and Centroid tabs; the badge counts Centroid issues.
+ * "QC" opens one view with Guideline and Translation tabs; the badge counts translation issues.
  * When docked top or bottom it becomes a compact row with labels.
  */
 export default function Sidebar({
@@ -55,7 +55,7 @@ export default function Sidebar({
         id: 'translate',
         label: 'Translate',
         icon: Languages,
-        title: 'Translate the subtitles into another language with Centroid',
+        title: 'Translate the subtitles into another language',
         active: translateOpen,
       },
     ],
@@ -64,7 +64,7 @@ export default function Sidebar({
         id: 'qc',
         label: 'QC',
         icon: ShieldCheck,
-        title: 'Quality check: Guideline QC and Centroid translation QC',
+        title: 'Quality check: Guideline QC and translation QC',
         active: qcOpen,
         badge: centroidQcCount,
       },
