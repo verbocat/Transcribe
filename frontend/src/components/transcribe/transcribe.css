@@ -333,7 +333,8 @@ select.ts-field { padding-right: 4px; }
   background: var(--ts-warn); color: #000; font-size: 9px; font-weight: 700; line-height: 14px; text-align: center;
 }
 .ts-rail-sep { width: 32px; height: 1px; margin: 4px 0; background: var(--ts-line); }
-.ts-rail-pop { position: fixed; min-width: 0; width: 320px; overflow-y: auto; overscroll-behavior: contain; z-index: 80; }
+.transcribe-studio.ts-portal { position: fixed; inset: 0; height: 0; width: 0; overflow: visible; background: transparent; display: block; z-index: 2147483000; }
+.ts-rail-pop { position: fixed; min-width: 0; width: 320px; overflow-y: auto; overscroll-behavior: contain; z-index: 2147483000; }
 .ts-rail-pop .ts-menu-item { min-width: 0; }
 .ts-rail-pop .ts-menu-item > .flex-1 { min-width: 0; overflow-wrap: anywhere; }
 

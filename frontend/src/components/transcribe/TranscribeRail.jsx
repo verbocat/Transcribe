@@ -1,3 +1,4 @@
+import { createPortal } from 'react-dom';
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Languages, ShieldCheck, Download, Loader2, Check, Square, Clapperboard } from 'lucide-react';
 
@@ -52,7 +53,7 @@ export default function TranscribeRail({
 
   useEffect(() => {
     if (!open) return undefined;
-    const onDown = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    const onDown = (e) => { if (ref.current && !ref.current.contains(e.target) && !(popRef.current && popRef.current.contains(e.target))) setOpen(false); };
     const onKey = (e) => { if (e.key === 'Escape') setOpen(false); };
     document.addEventListener('mousedown', onDown);
     document.addEventListener('keydown', onKey);
@@ -81,7 +82,8 @@ export default function TranscribeRail({
         {isExporting && onCancelExport
           ? btn('cancel', 'Cancel', Square, true, onCancelExport, 'Stop the export')
           : btn('export', 'Export', Download, open, () => setOpen(!open), 'Export the transcript')}
-        {open && (
+        {open && createPortal(
+          <div className="transcribe-studio ts-portal">
           <div ref={popRef} className="ts-popover ts-rail-pop" role="menu" style={popStyle || { visibility: 'hidden' }}>
             <label style={{ display: 'block', padding: '6px 10px 4px' }}>
               <span style={{ color: 'var(--ts-faint)', fontSize: 12, display: 'block', marginBottom: 4 }}>Language</span>
@@ -124,6 +126,8 @@ export default function TranscribeRail({
               </span>
             </button>
           </div>
+          </div>,
+          document.body,
         )}
       </div>
     </aside>
