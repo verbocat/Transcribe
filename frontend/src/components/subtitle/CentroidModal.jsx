@@ -175,7 +175,7 @@ const Notice = ({ tone = 'danger', children }) => {
 
 /**
  * Translate + Centroid QC drawer.
- * Flow: pick source and target language -> Translate -> "Run Centroid QC" appears on the result
+ * Flow: pick source and target language -> Translate -> "Run translation QC" appears on the result
  * (and on the tool rail) -> review issues, apply Centroid's fixes, download or open in the editor.
  * Stays mounted while closed so results survive.
  */
@@ -375,7 +375,7 @@ export default function CentroidModal({
     setTargetLang(s === targetLang ? (s === 'en' ? 'hi' : 'en') : s);
   };
 
-  /** Let Centroid read the whole script and fill in the briefing: synopsis, characters, tone and a name glossary. */
+  /** Read the whole script and fill in the briefing: synopsis, characters, tone and a name glossary. */
   const runAnalyze = async () => {
     setError('');
     setAnalyzeNote('');
@@ -538,7 +538,7 @@ export default function CentroidModal({
       duration: Math.round((end - start) * 1000) / 1000,
       text,
       lines: text.split('\n'),
-      // A subtitle Centroid did not translate (or returned out of step) is flagged on that subtitle only
+      // A subtitle that was not translated (or returned out of step) is flagged on that subtitle only
       qc_errors: c.align_error ? [{ rule_id: 'TRANSLATION-ALIGN', field: 'text', severity: 'error', message: c.align_error, suggested_fix: null }] : [],
       errors: [],
       is_valid: !c.align_error,
@@ -559,8 +559,11 @@ export default function CentroidModal({
   const setIssueStatus = (key, status) => setQc((q) => (q ? { ...q, issues: q.issues.map((i) => (i.key === key ? { ...i, status } : i)) } : q));
   const dropIssue = (key) => setIssueStatus(key, 'dismissed');
 
-  /** A fix is new text, a new end time (reading speed), or both. */
-  const isFixable = (i) => i.status === 'open' && (i.suggestion || i.suggestion_end != null);
+  /** A fix is new text, a new end time (reading speed), or both, and it must actually change something. */
+  const normText = (t) => String(t || '').replace(/\s+/g, ' ').trim();
+  const isFixable = (i) => i.status === 'open' && (
+    (i.suggestion && normText(i.suggestion) !== normText(i.target) && i.suggestion !== i.target)
+    || (i.suggestion_end != null && Number(i.suggestion_end) > Number(i.end ?? 0) + 0.004));
 
   /** Write the suggested text and timing into the subtitles (and the language result), mark those issues as fixed,
    *  then re-check the edited cues so the list only keeps what is still wrong. */
@@ -580,7 +583,14 @@ export default function CentroidModal({
       const pair = qcPairs.pairs.find((p) => p.id === index);
       return { id: pair?.editorId, index, start: pair?.start, text: f.text, end: f.end };
     });
-    const applied = onApplyTextFixes ? onApplyTextFixes(qc.target, edits) : 0;
+    const landed = onApplyTextFixes ? onApplyTextFixes(qc.target, edits) : new Set();
+    const inEditor = (n) => (landed instanceof Set ? landed.has(n) : false);
+    // A saved language result is always updated; the editor only for cues it could find
+    const appliedEdits = qc.target === 'editor' ? edits.filter((e) => inEditor(e.index)) : edits;
+    if (!appliedEdits.length) {
+      setQcNote(`Could not find these subtitles in the editor. Open the ${langName(qc.target)} track and try again.`);
+      return;
+    }
     const patchCue = (c, e) => ({ ...c, ...(e.text != null ? { target: e.text } : {}), ...(e.end != null ? { end: e.end } : {}) });
     if (qc.target !== 'editor') {
       // keep the result (and the SRT you can download) in step with the track
@@ -591,22 +601,28 @@ export default function CentroidModal({
         return { ...prev, [qc.target]: { ...r, cues, srt: cuesToSrt(cues.map((c) => ({ ...c, text: c.target || c.source })), 'text') } };
       });
     }
-    const doneKeys = new Set([...byCue.values()].flatMap((f) => f.issues.map((i) => i.key)));
-    const edited = new Set(byCue.keys());
+    const appliedCues = new Set(appliedEdits.map((e) => e.index));
+    // Only the findings whose own suggestion was written count as fixed
+    const doneKeys = new Set();
+    appliedEdits.forEach((e) => {
+      byCue.get(e.index).issues.forEach((i) => {
+        if ((i.suggestion && i.suggestion === e.text) || (i.suggestion_end != null && i.suggestion_end === e.end)) doneKeys.add(i.key);
+      });
+    });
+    const edited = appliedCues;
     const dismissedKeys = new Set((qc.issues || []).filter((i) => i.status === 'dismissed').map((i) => `${i.index}|${i.category}|${i.title}`));
     // Anything else still open on an edited cue was written against the old text: AI findings are dropped, rule checks are re-run
     setQc((q) => (q ? { ...q, issues: q.issues
       .filter((i) => doneKeys.has(i.key) || !(edited.has(i.index) && i.status === 'open'))
       .map((i) => (doneKeys.has(i.key) ? { ...i, status: 'fixed' } : i)) } : q));
-    const word = edits.length === 1 ? 'fix' : 'fixes';
-    setQcNote(applied > 0 || qc.target !== 'editor'
-      ? `Applied ${edits.length} ${word}. The subtitle text is updated${applied ? ' in the editor' : ''}. Ctrl+Z undoes it in the editor.`
-      : `Could not find these subtitles in the editor. Open the ${langName(qc.target)} track and try again.`);
+    const word = appliedEdits.length === 1 ? 'fix' : 'fixes';
+    const skipped = edits.length - appliedEdits.length;
+    setQcNote(`Applied ${appliedEdits.length} ${word}. The subtitles are updated${qc.target === 'editor' || landed.size ? ' in the editor' : ''}. Ctrl+Z undoes it in the editor.${skipped ? ` ${skipped} could not be found in the editor.` : ''}`);
 
     // Re-check the edited cues with the rule checks (no AI call) and show what is left
     const target = qc.target;
     const lang = target === 'editor' ? targets[0] || sourceLang : target;
-    const patched = qcPairs.pairs.map((p) => { const e = edits.find((x) => x.index === p.id); return e ? { ...p, target: e.text ?? p.target, end: e.end ?? p.end } : p; });
+    const patched = qcPairs.pairs.map((p) => { const e = appliedEdits.find((x) => x.index === p.id); return e ? { ...p, target: e.text ?? p.target, end: e.end ?? p.end } : p; });
     api('/api/subtitle/qc', { cues: patched, source_lang: sourceLang === 'auto' ? (sourceHint || 'en') : sourceLang, target_lang: lang, glossary: buildGlossary(), constraints: buildLimits() })
       .then((data) => {
         setQc((q) => {
@@ -624,8 +640,24 @@ export default function CentroidModal({
 
   const openIssues = (qc?.issues || []).filter((i) => i.status === 'open');
   const fixedIssues = (qc?.issues || []).filter((i) => i.status === 'fixed');
-  const fixable = openIssues.filter(isFixable).length;
-  const applyAll = () => applyFixes(openIssues);
+  // Several findings can propose different text for one cue; only one text (and one end time) is written per cue,
+  // so only the findings that apply as-is count towards "Apply all"
+  const autoIssues = (() => {
+    const slots = new Map();
+    return openIssues.filter(isFixable).filter((i) => {
+      const cur = slots.get(i.index) || { text: null, end: null };
+      const textOk = i.suggestion && (cur.text == null || cur.text === i.suggestion);
+      const endOk = i.suggestion_end != null && (cur.end == null || cur.end === i.suggestion_end);
+      if (!textOk && !endOk) return false;
+      if (textOk) cur.text = i.suggestion;
+      if (endOk) cur.end = i.suggestion_end;
+      slots.set(i.index, cur);
+      return true;
+    });
+  })();
+  const fixable = autoIssues.length;
+  const needHuman = openIssues.length - fixable;
+  const applyAll = () => applyFixes(autoIssues);
   const issueGroups = [
     { key: 'error', title: 'Errors', tone: 'danger', items: openIssues.filter((i) => i.severity === 'error').sort((x, y) => x.index - y.index) },
     { key: 'warning', title: 'Warnings', tone: 'warn', items: openIssues.filter((i) => i.severity !== 'error').sort((x, y) => x.index - y.index) },
@@ -691,12 +723,12 @@ export default function CentroidModal({
               </button>
             )}
 
-            {openIssues.length === 0 && <Notice tone="good">{fixedIssues.length ? 'All issues are fixed. Run QC again to confirm.' : 'No issues found. The translation passed translation QC.'}</Notice>}
-            {openIssues.length > 0 && <h4 className="qc-section-title">{openIssues.length} to review{fixedIssues.length ? ` · ${fixedIssues.length} fixed` : ''}</h4>}
+            {openIssues.length === 0 && <Notice tone="good">{fixedIssues.length ? 'All issues are fixed. Run QC again to confirm.' : 'No issues found. The translation passed QC.'}</Notice>}
+            {openIssues.length > 0 && <h4 className="qc-section-title">{openIssues.length} to review{fixable ? ` · ${fixable} automatic` : ''}{needHuman ? ` · ${needHuman} need a person` : ''}{fixedIssues.length ? ` · ${fixedIssues.length} fixed` : ''}</h4>}
 
             {issueGroups.flatMap((g) => g.items).map((i) => {
               const jumpId = jumpIdFor(i);
-              const canFix = i.suggestion || i.suggestion_end != null;
+              const canFix = isFixable(i);
               return (
                 <article key={i.key} className="qc-finding" data-sev={i.severity === 'error' ? 'error' : 'warning'}>
                   <div className="qc-finding-meta">
@@ -721,6 +753,7 @@ export default function CentroidModal({
                     {jumpId != null && onJumpToEvent && <button type="button" className="qc-btn" onClick={() => onJumpToEvent(jumpId)}><Crosshair size={16} /> Go to cue</button>}
                     <button type="button" className="qc-btn qc-btn-quiet" onClick={() => dropIssue(i.key)}>Dismiss</button>
                   </div>
+                  {!canFix && <p className="qc-finding-hint"><b>Human interaction required.</b> {i.suggestion || i.suggestion_end != null ? 'The suggestion would not change anything. Edit this subtitle by hand.' : 'There is no automatic fix for this one. Edit the subtitle or dismiss it.'}</p>}
                 </article>
               );
             })}

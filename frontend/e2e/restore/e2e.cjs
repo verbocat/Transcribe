@@ -41,14 +41,14 @@ async function openProjectsRestore(page, name) {
   await page.waitForTimeout(2500);
   check('S1 translated track shown', (await text(page)).includes('[fr] Hello, this is the first line.'));
   await page.getByRole('button', { name: /^QC/ }).first().click();
-  await page.getByText('Centroid QC').first().click();
-  await page.getByText('Run Centroid QC').click();
+  await page.getByText('Translation QC').first().click();
+  await page.getByText('Run translation QC').click();
   await page.waitForTimeout(1500);
   await page.getByRole('button', { name: 'Apply fix' }).first().click();
   await page.waitForTimeout(1200);
   const s1 = await text(page);
   check('S1 fix applied to track text', s1.includes('[fixed]'));
-  const s1Tab = s1.match(/Centroid QC · (\d+)/);
+  const s1Tab = s1.match(/Translation QC · (\d+)/);
   console.log('   QC tab after fix:', s1Tab ? s1Tab[0] : '(none)');
   // speaker gender edit (applies to the whole speaker)
   await page.locator('button', { hasText: /^F$/ }).first().click();
@@ -74,15 +74,15 @@ async function openProjectsRestore(page, name) {
     check(`${label}: translated language back and active`, t.includes('[fixed]') || t.includes('[fr]'), '');
     check(`${label}: FR track is the active one`, t.includes('[fr] And this is the second line'));
     const tabs = await p.evaluate(() => window.__t = 1);
-    // open QC drawer and look at Centroid QC state
+    // open QC drawer and look at Translation QC state
     await p.getByRole('button', { name: /^QC/ }).first().click();
     await p.waitForTimeout(500);
     const t2 = await text(p);
-    check(`${label}: Centroid QC findings back`, /Centroid QC · \d/.test(t2), (t2.match(/Centroid QC[^\n]*/) || [''])[0]);
-    await p.getByText('Centroid QC').first().click();
+    check(`${label}: Translation QC findings back`, /Translation QC · \d/.test(t2), (t2.match(/Translation QC[^\n]*/) || [''])[0]);
+    await p.getByText('Translation QC').first().click();
     await p.waitForTimeout(400);
     const t3 = await text(p);
-    check(`${label}: applied-fix state back (fixed list / reduced count)`, /Fixed|fixed/.test(t3) || /Centroid QC · 1\b/.test(t3), (t3.match(/\d+ to review|Fixed[^\n]*/g) || []).join(' / '));
+    check(`${label}: applied-fix state back (fixed list / reduced count)`, /Fixed|fixed/.test(t3) || /Translation QC · 1\b/.test(t3), (t3.match(/\d+ to review|Fixed[^\n]*/g) || []).join(' / '));
     check(`${label}: fixed text kept in track`, t3.includes('[fixed]'));
     check(`${label}: rule-check score back`, (await (async () => { await p.getByText('Rule checks').first().click(); return text(p); })()).includes('91.5%'));
     // timeline

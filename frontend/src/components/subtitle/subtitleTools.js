@@ -258,9 +258,129 @@ export const QC_REBREAK_RULES = new Set([
   'NF-LINE-BREAK-ARTICLE', 'NF-LINE-BREAK-PRONOUN', 'NF-LINE-BREAK-TITLE', 'NF-LINE-BREAK-POSTPOSITION', 'NF-LINE-BREAK-NUMBER',
 ]);
 
-/** Can the quality check repair this guideline rule with one click? */
+/** Guideline rules that have a one-click fix at all. Whether the fix is possible for a given subtitle is decided by planQcFixes. */
 export function isQcFixable(ruleId) {
   const r = String(ruleId || '').toUpperCase();
   return r === 'NF-DURATION-SHORT' || r.startsWith('NF-CPS') || r.startsWith('NF-GAP') || r === 'NF-OVERLAP'
-    || r === 'NF-PUNCT-SPACE' || r === 'NF-ELLIPSIS' || QC_REBREAK_RULES.has(r);
+    || r === 'NF-PUNCT-SPACE' || r === 'NF-ELLIPSIS' || r === 'NF-DUAL-SPEAKER-SPACE' || QC_REBREAK_RULES.has(r);
+}
+
+const stripMarkup = (t) => String(t || '').replace(/<[^>]*>/g, '').replace(/\{\\an[1-9]\}/g, '');
+
+/** Characters that count towards reading speed (same counting as the backend linter). */
+export function readingChars(text) {
+  return stripMarkup(text).replace(/[♪♫]/g, '').split('\n').map((l) => l.trim().replace(/^-\s*/, '')).join(' ').replace(/\s+/g, ' ').trim().length;
+}
+
+/** Do all lines fit the characters-per-line and line-count limits? (A leading speaker dash is not counted.) */
+export function fitsLines(text, cplLimit, maxLines = 2) {
+  const lines = String(text || '').split('\n');
+  return lines.length <= maxLines && lines.every((l) => stripMarkup(l).trim().replace(/^-\s*/, '').length <= cplLimit);
+}
+
+/**
+ * Work out what each one-click QC fix would do, without touching the input.
+ *   items: [{ key, eventId, ruleId }]
+ *   ctx:   { fps, cplLimit, cpsLimit, minDuration, maxDuration, maxLines, rebroke: Map(eventId -> re-broken text) }
+ * Items are applied one after another on a copy, so a batch behaves exactly like "fix all".
+ * A fix that cannot be done (no free gap, would break another rule, text too long) comes back with
+ * ok:false and the reason, so the UI can ask for a human instead of counting it as fixable.
+ * Returns { events, results: [{ key, ok, message }] }.
+ */
+export function planQcFixes(events, items, ctx) {
+  const fps = ctx.fps > 0 ? ctx.fps : 24;
+  const gap = 2 / fps;
+  const { cplLimit, cpsLimit, minDuration, maxDuration } = ctx;
+  const maxLines = ctx.maxLines || 2;
+  const rebroke = ctx.rebroke || new Map();
+  const eps = 0.005;
+  const work = events.map((e) => ({ ...e }));
+  const results = [];
+  const fail = (item, message) => results.push({ key: item.key, ok: false, message });
+  const done = (item, message) => results.push({ key: item.key, ok: true, message });
+
+  for (const item of items) {
+    const idx = work.findIndex((e) => idOf(e) === item.eventId);
+    if (idx < 0) { fail(item, 'This subtitle no longer exists.'); continue; }
+    const e = work[idx];
+    const start = startOf(e);
+    const end = endOf(e);
+    const text = e.text || '';
+    const next = work.reduce((best, o, j) => (j !== idx && startOf(o) > start + 1e-6 && (!best || startOf(o) < startOf(best)) ? o : best), null);
+    const roomEnd = next ? startOf(next) - gap : Infinity;
+    const chars = readingChars(text);
+    const rule = String(item.ruleId || '').toUpperCase();
+    // A gap of 3 to 11 frames flickers, so an extended subtitle that would leave one is chained to 2 frames instead
+    const setEnd = (t) => {
+      const left = next ? startOf(next) - t : Infinity;
+      const chained = next && left * fps < 12 && roomEnd > t && roomEnd - start <= maxDuration + eps ? roomEnd : t;
+      work[idx] = withTimes(e, start, round3(chained));
+    };
+
+    if (rule === 'NF-DURATION-SHORT') {
+      const target = round3(start + minDuration + 0.001);
+      if (end - start >= minDuration - eps) { done(item, 'Already long enough'); continue; }
+      if (target > roomEnd + 1e-6) { fail(item, 'No free time after this subtitle to make it longer. Merge it with a neighbour or move the next one.'); continue; }
+      setEnd(target);
+      done(item, `Now ${(endOf(work[idx]) - start).toFixed(2)}s long`);
+    } else if (rule.startsWith('NF-CPS')) {
+      const warnCps = cpsLimit - 2;
+      const dur = end - start;
+      if (chars / Math.max(dur, 1e-6) <= (rule === 'NF-CPS-WARNING' ? warnCps : cpsLimit) + 1e-6) { done(item, 'Reading speed is already fine'); continue; }
+      const durFor = (cps) => Math.ceil((chars / cps) * 1000) / 1000 + 0.002;
+      const best = round3(start + Math.max(durFor(warnCps), minDuration));
+      const least = round3(start + Math.max(durFor(cpsLimit), minDuration));
+      const cap = Math.min(roomEnd, start + maxDuration);
+      let target = null;
+      if (best <= cap + 1e-6) target = best;
+      else if (rule !== 'NF-CPS-WARNING' && least <= cap + 1e-6) target = least;
+      if (target == null || target <= end + eps) {
+        fail(item, next && roomEnd - start < maxDuration
+          ? 'No free time after this subtitle to slow the reading speed. Shorten the text or move the next subtitle.'
+          : 'Cannot be slowed enough within the maximum duration. Shorten the text or split the subtitle.');
+        continue;
+      }
+      setEnd(target);
+      const got = endOf(work[idx]) - start;
+      done(item, `Now ${got.toFixed(2)}s long (${(chars / got).toFixed(1)} chars/s)`);
+    } else if (rule.startsWith('NF-GAP') || rule === 'NF-OVERLAP') {
+      // The linter flags the LATER subtitle; the cure is to move the EARLIER subtitle's out point
+      const pi = work.reduce((best, o, j) => (j !== idx && startOf(o) < start - 1e-6 && (best < 0 || startOf(o) > startOf(work[best])) ? j : best), -1);
+      if (pi < 0) { fail(item, 'There is no earlier subtitle to space this one from.'); continue; }
+      const prev = work[pi];
+      const ps = startOf(prev);
+      const pe = endOf(prev);
+      const target = round3(start - gap);
+      if (Math.abs(target - pe) < 0.0005) { done(item, 'Gap is already 2 frames'); continue; }
+      const dur = target - ps;
+      const pchars = readingChars(prev.text);
+      const who = `Subtitle #${idOf(prev)}`;
+      if (dur < 0.1) { fail(item, `No space between these subtitles: closing the gap would leave #${idOf(prev)} almost no time on screen. Re-time one of them.`); continue; }
+      if (dur < minDuration - eps && pe - ps >= minDuration - eps) { fail(item, `No space between these subtitles: closing the gap would make #${idOf(prev)} shorter than the minimum duration. Re-time one of them.`); continue; }
+      if (dur > maxDuration + eps && pe - ps <= maxDuration + eps) { fail(item, `Chaining would make ${who} longer than the maximum duration. Re-time it by hand.`); continue; }
+      if (target < pe && pchars / dur > cpsLimit && pchars / (pe - ps) <= cpsLimit) { fail(item, `Closing the gap would make ${who} too fast to read. Shorten its text or re-time it.`); continue; }
+      work[pi] = withTimes(prev, ps, target);
+      done(item, `${who} now ends 2 frames before this one`);
+    } else if (QC_REBREAK_RULES.has(rule)) {
+      const t = rebroke.get(item.eventId);
+      const hard = rule === 'NF-CPL' || rule === 'NF-MAX-LINES';
+      if (t === undefined || t === text || (hard && !fitsLines(t, cplLimit, maxLines))) {
+        fail(item, hard ? `The text is too long to fit ${maxLines} lines of ${cplLimit} characters. Shorten it or split the subtitle.` : 'The lines cannot be broken any better. Edit the text by hand.');
+        continue;
+      }
+      work[idx] = withText(e, t);
+      done(item, 'Lines re-broken to fit');
+    } else if (rule === 'NF-PUNCT-SPACE' || rule === 'NF-ELLIPSIS' || rule === 'NF-DUAL-SPEAKER-SPACE') {
+      let t = text;
+      if (rule === 'NF-PUNCT-SPACE') t = text.replace(/(?<=\S)[ \t]+([,.!?;:।॥…])/g, '$1');
+      else if (rule === 'NF-ELLIPSIS') t = text.replace(/\.{3}/g, '…');
+      else t = text.split('\n').map((l) => l.replace(/^(\s*(?:<[^>]+>)*[-–—])\s+/, '$1')).join('\n');
+      if (t === text) { fail(item, 'Edit this one by hand in the editor.'); continue; }
+      work[idx] = withText(e, t);
+      done(item, rule === 'NF-ELLIPSIS' ? 'Three dots replaced with …' : 'Spacing fixed');
+    } else {
+      fail(item, 'This one needs a manual edit.');
+    }
+  }
+  return { events: work, results };
 }

@@ -69,7 +69,7 @@ function MoreActionsMenu({ p, hasSegments, importRef }) {
   );
 }
 
-/** Source (fixed label) -> target (picker). Picking a target translates the transcript with Centroid. */
+/** Source (fixed label) -> target (picker). Picking a target translates the transcript. */
 function TargetLanguage({ p }) {
   const { open, setOpen, ref } = usePopover();
   const st = p.translateState || {};

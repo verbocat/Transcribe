@@ -1,6 +1,6 @@
 # Restore harness
 
-Browser test for "restore a draft brings everything back": transcript fixture (WAV + SRT), mock translate, mock Centroid QC,
+Browser test for "restore a draft brings everything back": transcript fixture (WAV + SRT), mock translate, mock Translation QC,
 apply a fix, save the draft, reload, then restore four ways (same file uploaded again, no upload, media removed + Relink,
 version-1 draft, cloud project on an empty browser). The backend API is mocked in `common.cjs`.
 
