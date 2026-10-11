@@ -2423,7 +2423,44 @@ async def centroid_translate(payload: dict):
     data = await centroid_client.post("/subtitles/translate", body)
     if body.get("cues"):
         centroid_client.align_translations(data, body["cues"])
+        try:
+            await _retry_untranslated(data, body)
+        except Exception:
+            import traceback
+            traceback.print_exc()  # the first answer is still good; a failed retry must not lose it
     return data
+
+
+_HAS_LETTERS = re.compile(r"[^\W\d_]", re.UNICODE)
+
+
+async def _retry_untranslated(data: dict, body: dict) -> None:
+    """Short lines ("No.", "Oh my God.") sometimes come back identical to the source. Send just those cues again,
+    without the per-line language hint that can make the translator treat them as already translated."""
+    from app import centroid_client
+    cues = body.get("cues") or []
+    for lang, res in list((data.get("results") or {}).items()):
+        out = (res or {}).get("cues") or []
+        if len(out) != len(cues) or str(body.get("source_lang") or "")[:2].lower() == str(lang)[:2].lower():
+            continue
+        redo = [n for n, (c, src) in enumerate(zip(out, cues))
+                if (c.get("target") or "").strip() == (src.get("text") or "").strip()
+                and _HAS_LETTERS.search(src.get("text") or "")
+                and (src.get("text") or "").strip().upper() != (src.get("text") or "").strip()]
+        if not redo:
+            continue
+        retry = {k: v for k, v in body.items() if k not in ("cues", "srt", "target_langs", "target_lang")}
+        retry["target_langs"] = [lang]
+        retry["cues"] = [{"start": cues[n]["start"], "end": cues[n]["end"], "text": cues[n]["text"]} for n in redo]
+        again = await centroid_client.post("/subtitles/translate", retry)
+        new_cues = ((again.get("results") or {}).get(lang) or {}).get("cues") or []
+        if len(new_cues) != len(redo):
+            continue
+        for n, nc in zip(redo, new_cues):
+            t = (nc.get("target") or "").strip()
+            if t and t != (cues[n].get("text") or "").strip():
+                out[n]["target"] = t
+        res["srt"] = centroid_client._srt(out)
 
 
 @app.post("/api/centroid/analyze")

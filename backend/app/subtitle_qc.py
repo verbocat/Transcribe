@@ -356,7 +356,7 @@ def _dedupe_conflicting(issues: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     for i in issues:
         if i.get("suggestion"):
             if i["index"] in seen_fix:
-                i = {**i, "suggestion": None}
+                i = {**i, "suggestion": None, "deferred": True}
             else:
                 seen_fix.add(i["index"])
         out.append(i)

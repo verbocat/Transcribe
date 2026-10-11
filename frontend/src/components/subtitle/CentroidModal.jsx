@@ -8,6 +8,7 @@ import {
 import { API_BASE } from '../../config';
 import { startJob, jobHeaders, isCancelError } from '../../utils/cancellable';
 import { parseSrtText, cuesToSrt, downloadBlob, buildZip } from '../../utils/centroidSrt';
+import { safeSuggestion, isRespelling } from './qcSafe';
 import { Button, IconButton, Segmented, Select, TextInput, Switch, Badge } from './ui/controls';
 import { COMMON_LANGS, OTHER_LANGS, ALL_LANGS, langName as subtitleLangName } from './languages';
 
@@ -241,6 +242,7 @@ export default function CentroidModal({
   const [qc, setQc] = useState(null); // {summary, issues, target}
   const [qcError, setQcError] = useState('');
   const [qcNote, setQcNote] = useState('');
+  const [applying, setApplying] = useState(false);
   const [showResolved, setShowResolved] = useState(false);
 
   useEffect(() => {
@@ -463,7 +465,9 @@ export default function CentroidModal({
         cues: pairs, source_lang: sourceLang, target_lang: lang, ...hint,
         context: buildContext(), glossary: buildGlossary(), constraints: buildLimits(),
       }, job);
-      setQc({ ...data, target: code, issues: (data.issues || []).map((i, n) => ({ ...i, key: `${i.index}-${i.category}-${n}`, status: 'open' })) });
+      // A "fix" that only respells one word (a name) is not a real finding
+      const real = (data.issues || []).filter((i) => !(i.origin === 'ai' && i.suggestion && i.suggestion_end == null && isRespelling(i.target, i.suggestion)));
+      setQc({ ...data, target: code, issues: real.map((i, n) => ({ ...i, key: `${i.index}-${i.category}-${n}`, status: 'open' })) });
     } catch (e) {
       setQcError(isCancelError(e) ? 'Cancelled. Run the check again whenever you like.' : e.message);
     } finally {
@@ -561,20 +565,89 @@ export default function CentroidModal({
 
   /** A fix is new text, a new end time (reading speed), or both, and it must actually change something. */
   const normText = (t) => String(t || '').trim();
-  const isFixable = (i) => i.status === 'open' && (
-    (i.suggestion && normText(i.suggestion) !== normText(i.target) && i.suggestion !== i.target)
-    || (i.suggestion_end != null && Number(i.suggestion_end) > Number(i.end ?? 0) + 0.004));
+  /** The full text a suggestion would leave in the cue. An AI suggestion that covers only part of the cue is merged
+   *  into the line or sentence it replaces, so applying it can never drop the rest of the subtitle. */
+  const effText = (i) => {
+    if (!i.suggestion) return null;
+    const t = i.origin === 'local' || i.origin === 'ai-retry' ? i.suggestion : safeSuggestion(i.target, i.suggestion);
+    return t && normText(t) !== normText(i.target) ? t : null;
+  };
+  const catOf = (i) => String(i.category || '').toLowerCase().replace(/_/g, '-');
+  const endFix = (i) => i.suggestion_end != null && Number(i.suggestion_end) > Number(i.end ?? 0) + 0.004;
+  /** Untranslated cues and reading-speed cues with no room are fixed by asking the AI to translate that cue again. */
+  const needsAi = (i) => i.status === 'open' && !i.aiFailed && !effText(i) && !endFix(i)
+    && (catOf(i) === 'untranslated' || (catOf(i) === 'reading-speed' && i.suggestion_end == null));
+  const isFixable = (i) => i.status === 'open' && (!!effText(i) || endFix(i) || needsAi(i));
+
+  /** Translate (or tighten) the cues that have no ready-made fix. Returns { texts: key -> text, failed: key -> why }. */
+  const resolveAi = async (list) => {
+    const texts = new Map();
+    const failed = new Map();
+    if (!list.length) return { texts, failed };
+    const lang = qc.target === 'editor' ? targets[0] || sourceLang : qc.target;
+    const cps = Number(limits.max_cps) || 20;
+    const groups = [
+      { items: list.filter((i) => catOf(i) === 'untranslated'), constraints: buildLimits() },
+      { items: list.filter((i) => catOf(i) !== 'untranslated'), constraints: { ...buildLimits(), max_cps: Math.max(8, cps - 3) } },
+    ].filter((g) => g.items.length);
+    for (const g of groups) {
+      try {
+        const data = await api('/api/centroid/translate', {
+          events: g.items.map((i) => ({ start_time: i.start, end_time: i.end, text: i.source })),
+          source_lang: sourceLang, target_langs: [lang], context: buildContext(), glossary: buildGlossary(), constraints: g.constraints, ...hint, quality,
+        });
+        const cues = (data.results || {})[lang]?.cues || [];
+        g.items.forEach((i, n) => {
+          const t = String(cues[n]?.target || '').trim();
+          if (!t) { failed.set(i.key, 'The translation service returned nothing for this cue. Try again.'); return; }
+          if (catOf(i) === 'untranslated') {
+            if (normText(t) === normText(i.source)) { failed.set(i.key, 'This looks like a name or a quoted phrase that stays as it is. Dismiss it if that is right.'); return; }
+          } else {
+            const chars = t.replace(/\s+/g, ' ').replace(/^-\s*/gm, '').length;
+            const dur = Number(i.end) - Number(i.start);
+            if (dur > 0 && chars / dur > cps + 0.05) { failed.set(i.key, 'A shorter version still reads too fast. Shorten the text by hand.'); return; }
+            if (normText(t) === normText(i.target)) { failed.set(i.key, 'No shorter wording was found. Shorten the text by hand.'); return; }
+          }
+          texts.set(i.key, t);
+        });
+      } catch (e) {
+        g.items.forEach((i) => failed.set(i.key, `Could not reach the translation service (${e.message}). Try again.`));
+      }
+    }
+    return { texts, failed };
+  };
 
   /** Write the suggested text and timing into the subtitles (and the language result), mark those issues as fixed,
-   *  then re-check the edited cues so the list only keeps what is still wrong. */
-  const applyFixes = useCallback((issues) => {
-    if (!qc) return;
+   *  then re-check every cue so the list only keeps what is still wrong. */
+  const applyFixes = async (requested) => {
+    if (!qc || applying) return;
+    setApplying(true);
+    try {
+      const wantAi = requested.filter(needsAi);
+      let issues = requested;
+      if (wantAi.length) {
+        setQcNote(`Asking the AI to fix ${wantAi.length} ${wantAi.length === 1 ? 'cue' : 'cues'}…`);
+        const { texts, failed } = await resolveAi(wantAi);
+        issues = requested.map((i) => (texts.has(i.key) ? { ...i, suggestion: texts.get(i.key), origin: 'ai-retry' } : i));
+        if (failed.size) setQc((q) => (q ? { ...q, issues: q.issues.map((i) => (failed.has(i.key) ? { ...i, aiFailed: failed.get(i.key) } : i)) } : q));
+        if (!issues.some((i) => isFixableNow(i))) { setQcNote([...failed.values()][0] || 'Nothing could be fixed automatically.'); return; }
+      }
+      applyResolved(issues);
+    } finally {
+      setApplying(false);
+    }
+  };
+
+  const isFixableNow = (i) => i.status === 'open' && (!!effText(i) || endFix(i));
+
+  const applyResolved = (issues) => {
     // One edit per cue: its first text suggestion plus its first timing suggestion
     const byCue = new Map();
-    issues.filter(isFixable).forEach((i) => {
+    issues.filter(isFixableNow).forEach((i) => {
       const cur = byCue.get(i.index) || { text: null, end: null, issues: [] };
-      if (i.suggestion && cur.text == null) cur.text = i.suggestion;
-      if (i.suggestion_end != null && cur.end == null) cur.end = i.suggestion_end;
+      const t = effText(i);
+      if (t && cur.text == null) { cur.text = t; cur.textKey = i.key; }
+      if (endFix(i) && cur.end == null) cur.end = i.suggestion_end;
       cur.issues.push(i);
       byCue.set(i.index, cur);
     });
@@ -616,7 +689,7 @@ export default function CentroidModal({
     const doneKeys = new Set();
     appliedEdits.forEach((e) => {
       byCue.get(e.index).issues.forEach((i) => {
-        if ((i.suggestion && i.suggestion === e.text) || (i.suggestion_end != null && i.suggestion_end === e.end)) doneKeys.add(i.key);
+        if ((effText(i) && effText(i) === e.text) || (endFix(i) && i.suggestion_end === e.end)) doneKeys.add(i.key);
       });
     });
     const edited = appliedCues;
@@ -649,8 +722,7 @@ export default function CentroidModal({
         });
       })
       .catch(() => {});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [qc, qcPairs, onApplyTextFixes, targets, sourceLang, limits, cueUnit]);
+  };
 
   const openIssues = (qc?.issues || []).filter((i) => i.status === 'open');
   // The score, counts and clean percentage always follow the open findings, so they update the moment a fix is applied
@@ -669,10 +741,11 @@ export default function CentroidModal({
     const slots = new Map();
     return openIssues.filter(isFixable).filter((i) => {
       const cur = slots.get(i.index) || { text: null, end: null };
-      const textOk = i.suggestion && (cur.text == null || cur.text === i.suggestion);
-      const endOk = i.suggestion_end != null && (cur.end == null || cur.end === i.suggestion_end);
+      const t = effText(i);
+      const textOk = (!!t && (cur.text == null || cur.text === t)) || needsAi(i);
+      const endOk = endFix(i) && (cur.end == null || cur.end === i.suggestion_end);
       if (!textOk && !endOk) return false;
-      if (textOk) cur.text = i.suggestion;
+      if (t && textOk) cur.text = t; else if (needsAi(i)) cur.text = cur.text ?? '(ai)';
       if (endOk) cur.end = i.suggestion_end;
       slots.set(i.index, cur);
       return true;
@@ -741,8 +814,8 @@ export default function CentroidModal({
             {qcNote && <Notice tone="good">{qcNote}</Notice>}
 
             {fixable > 0 && (
-              <button type="button" className="qc-btn qc-btn-primary qc-btn-block" onClick={applyAll}>
-                <Wand2 size={18} /> Apply all {fixable} fixes
+              <button type="button" className="qc-btn qc-btn-primary qc-btn-block" onClick={applyAll} disabled={applying}>
+                {applying ? <Loader2 size={18} className="animate-spin" /> : <Wand2 size={18} />} Apply all {fixable} fixes
               </button>
             )}
 
@@ -767,16 +840,19 @@ export default function CentroidModal({
                   {canFix && (
                     <div className="qc-finding-fix">
                       <div className="qc-pair-label">Suggested fix</div>
-                      {i.suggestion && <div>{i.suggestion}</div>}
-                      {i.suggestion_end != null && <div>Show until {fmtTime(i.suggestion_end)} (now {fmtTime(i.end)})</div>}
+                      {effText(i) && <div className="whitespace-pre-wrap">{effText(i)}</div>}
+                      {needsAi(i) && <div>{catOf(i) === 'untranslated' ? 'The AI will translate this cue.' : 'The AI will write a shorter version that fits the reading speed.'}</div>}
+                      {endFix(i) && <div>Show until {fmtTime(i.suggestion_end)} (now {fmtTime(i.end)})</div>}
                     </div>
                   )}
                   <div className="qc-finding-actions">
-                    {canFix && <button type="button" className="qc-btn qc-btn-primary" onClick={() => applyFixes([i])}><Check size={16} /> Apply fix</button>}
+                    {canFix && <button type="button" className="qc-btn qc-btn-primary" disabled={applying} onClick={() => applyFixes([i])}>{applying ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />} {needsAi(i) ? (catOf(i) === 'untranslated' ? 'Translate cue' : 'Shorten with AI') : 'Apply fix'}</button>}
                     {jumpId != null && onJumpToEvent && <button type="button" className="qc-btn" onClick={() => onJumpToEvent(jumpId)}><Crosshair size={16} /> Go to cue</button>}
                     <button type="button" className="qc-btn qc-btn-quiet" onClick={() => dropIssue(i.key)}>Dismiss</button>
                   </div>
-                  {!canFix && <p className="qc-finding-hint"><b>Human interaction required.</b> {i.suggestion || i.suggestion_end != null ? 'The suggestion would not change anything. Edit this subtitle by hand.' : 'There is no automatic fix for this one. Edit the subtitle or dismiss it.'}</p>}
+                  {!canFix && (i.deferred
+                    ? <p className="qc-finding-hint">This is re-checked right after the other fix on this cue is applied.</p>
+                    : <p className="qc-finding-hint"><b>Human interaction required.</b> {i.aiFailed || (i.suggestion && !effText(i) ? 'The suggestion only covers part of the cue or changes nothing, so it was not applied. Edit this subtitle by hand.' : 'There is no automatic fix for this one. Edit the subtitle or dismiss it.')}</p>)}
                 </article>
               );
             })}
