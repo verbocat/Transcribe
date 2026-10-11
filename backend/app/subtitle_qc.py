@@ -372,7 +372,11 @@ def merge_qc(centroid: Optional[Dict[str, Any]], local: List[Dict[str, Any]], to
     for i in ai_issues:
         i.setdefault("origin", "ai")
     seen = {(i.get("index"), i.get("category")) for i in ai_issues}
-    extra = [i for i in local if (i["index"], i["category"]) not in seen]
+    ai_fixable = {(i.get("index"), i.get("category")) for i in ai_issues if i.get("suggestion") or i.get("suggestion_end") is not None}
+    # A local finding is dropped when the AI already reported that category for the cue, unless the local one carries
+    # a fix the AI one lacks: hiding it would only make it pop up after the first fix is applied
+    extra = [i for i in local if (i["index"], i["category"]) not in seen
+             or ((i.get("suggestion") or i.get("suggestion_end") is not None) and (i["index"], i["category"]) not in ai_fixable)]
     issues = _dedupe_conflicting(ai_issues + extra)
     issues.sort(key=lambda i: (i.get("index") or 0, 0 if i.get("severity") == "error" else 1))
     errors = sum(1 for i in issues if i.get("severity") == "error")

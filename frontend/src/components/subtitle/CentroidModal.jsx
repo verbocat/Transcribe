@@ -582,7 +582,17 @@ export default function CentroidModal({
     const edits = [...byCue.entries()].map(([index, f]) => {
       const pair = qcPairs.pairs.find((p) => p.id === index);
       return { id: pair?.editorId, index, start: pair?.start, text: f.text, end: f.end };
+    }).filter((e) => {
+      const pair = qcPairs.pairs.find((p) => p.id === e.index);
+      return (e.text != null && normText(e.text) !== normText(pair?.target)) || (e.end != null && Number(e.end) > Number(pair?.end ?? 0) + 0.004);
     });
+    if (!edits.length) {
+      // Nothing would change: the suggestion is already in the text, so the finding is stale
+      const stale = new Set(issues.map((i) => i.key));
+      setQc((q) => (q ? { ...q, issues: q.issues.filter((i) => !stale.has(i.key)) } : q));
+      setQcNote('That fix was already in the subtitle, so the finding was removed.');
+      return;
+    }
     const landed = onApplyTextFixes ? onApplyTextFixes(qc.target, edits) : new Set();
     const inEditor = (n) => (landed instanceof Set ? landed.has(n) : false);
     // A saved language result is always updated; the editor only for cues it could find
@@ -627,11 +637,15 @@ export default function CentroidModal({
       .then((data) => {
         setQc((q) => {
           if (!q || q.target !== target) return q;
-          const have = new Set(q.issues.filter((i) => i.status === 'open').map((i) => `${i.index}|${i.category}`));
-          const fresh = (data.issues || []).filter((i) => edited.has(i.index)
-            && !have.has(`${i.index}|${i.category}`) && !dismissedKeys.has(`${i.index}|${i.category}|${i.title}`))
+          // Rule checks run on every cue again (a fix can change its neighbours), so the list is complete right now.
+          // Only AI findings on cues that were not edited are kept.
+          const kept = q.issues.filter((i) => !(i.origin === 'local' && i.status === 'open'));
+          const aiOpen = new Set(kept.filter((i) => i.status === 'open').map((i) => `${i.index}|${i.category}`));
+          const fresh = (data.issues || [])
+            .filter((i) => !dismissedKeys.has(`${i.index}|${i.category}|${i.title}`)
+              && (!aiOpen.has(`${i.index}|${i.category}`) || i.suggestion || i.suggestion_end != null))
             .map((i, n) => ({ ...i, key: `${i.index}-${i.category}-re${Date.now()}-${n}`, status: 'open' }));
-          return fresh.length ? { ...q, issues: [...q.issues, ...fresh] } : q;
+          return { ...q, issues: [...kept, ...fresh] };
         });
       })
       .catch(() => {});
@@ -639,6 +653,15 @@ export default function CentroidModal({
   }, [qc, qcPairs, onApplyTextFixes, targets, sourceLang, limits, cueUnit]);
 
   const openIssues = (qc?.issues || []).filter((i) => i.status === 'open');
+  // The score, counts and clean percentage always follow the open findings, so they update the moment a fix is applied
+  const live = (() => {
+    const total = Math.max(qcPairs.pairs.length, 1);
+    const errs = openIssues.filter((i) => i.severity === 'error').length;
+    const warns = openIssues.length - errs;
+    const bad = new Set(openIssues.map((i) => i.index)).size;
+    return { error_count: errs, warning_count: warns, clean_percentage: Math.round(1000 * (total - bad) / total) / 10,
+      mqm_score: Math.max(0, Math.round(10 * (100 - 100 * (errs * 5 + warns) / Math.max(total * 8, 1))) / 10) };
+  })();
   const fixedIssues = (qc?.issues || []).filter((i) => i.status === 'fixed');
   // Several findings can propose different text for one cue; only one text (and one end time) is written per cue,
   // so only the findings that apply as-is count towards "Apply all"
@@ -706,10 +729,10 @@ export default function CentroidModal({
         {qc && (
           <>
             <div className="qc-score">
-              <span className={`qc-score-num ${qc.summary.mqm_score >= 95 ? 'qc-good' : qc.summary.mqm_score >= 85 ? 'qc-warn' : 'qc-bad'}`}>{qc.summary.mqm_score}</span>
+              <span className={`qc-score-num ${live.mqm_score >= 95 ? 'qc-good' : live.mqm_score >= 85 ? 'qc-warn' : 'qc-bad'}`}>{live.mqm_score}</span>
               <div className="min-w-0">
                 <div className="qc-score-label">Translation score</div>
-                <div className="qc-score-sub">{qc.summary.error_count} {qc.summary.error_count === 1 ? 'error' : 'errors'}, {qc.summary.warning_count} {qc.summary.warning_count === 1 ? 'warning' : 'warnings'}, {qc.summary.clean_percentage}% of cues clean</div>
+                <div className="qc-score-sub">{live.error_count} {live.error_count === 1 ? 'error' : 'errors'}, {live.warning_count} {live.warning_count === 1 ? 'warning' : 'warnings'}, {live.clean_percentage}% of cues clean</div>
               </div>
             </div>
             {qc.centroid_error && <Notice tone="warn">The AI review could not run this time, so only the built-in rule checks are shown. Run QC again to retry.</Notice>}
