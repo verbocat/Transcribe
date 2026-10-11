@@ -560,7 +560,7 @@ export default function CentroidModal({
   const dropIssue = (key) => setIssueStatus(key, 'dismissed');
 
   /** A fix is new text, a new end time (reading speed), or both, and it must actually change something. */
-  const normText = (t) => String(t || '').replace(/\s+/g, ' ').trim();
+  const normText = (t) => String(t || '').trim();
   const isFixable = (i) => i.status === 'open' && (
     (i.suggestion && normText(i.suggestion) !== normText(i.target) && i.suggestion !== i.target)
     || (i.suggestion_end != null && Number(i.suggestion_end) > Number(i.end ?? 0) + 0.004));
@@ -633,7 +633,7 @@ export default function CentroidModal({
     const target = qc.target;
     const lang = target === 'editor' ? targets[0] || sourceLang : target;
     const patched = qcPairs.pairs.map((p) => { const e = appliedEdits.find((x) => x.index === p.id); return e ? { ...p, target: e.text ?? p.target, end: e.end ?? p.end } : p; });
-    api('/api/subtitle/qc', { cues: patched, source_lang: sourceLang === 'auto' ? (sourceHint || 'en') : sourceLang, target_lang: lang, glossary: buildGlossary(), constraints: buildLimits() })
+    api('/api/subtitle/qc', { cues: patched, source_lang: sourceLang, target_lang: lang, ...hint, glossary: buildGlossary(), constraints: buildLimits() })
       .then((data) => {
         setQc((q) => {
           if (!q || q.target !== target) return q;

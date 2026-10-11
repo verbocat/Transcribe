@@ -219,14 +219,14 @@ def run_local_qc(
         if dur > 0:
             body = re.sub(r"^\s*[-–—]\s*", "", flat)
             cps = len(body) / dur
-            if cps > max_cps:
+            if round(cps, 1) > max_cps:
                 new_end = _extended_end(cues, n, len(body), max_cps, card_rules)
                 severe = cps > max_cps * 1.2
                 fix_note = (f" Ends {new_end - float(cue.get('end')):.2f} s later to fit." if new_end is not None
                             else " There is no room to lengthen it, so shorten the text.")
                 issues.append(_issue(cue, n, "reading-speed", "error" if severe else "warning",
                                      "Reads too fast" if severe else "Reading speed is high",
-                                     f"{cps:.0f} characters per second (limit {max_cps:.0f})." + fix_note,
+                                     f"{cps:.1f} characters per second (limit {max_cps:.0f})." + fix_note,
                                      None, new_end))
 
         # ---- Punctuation -------------------------------------------------------------------------------
