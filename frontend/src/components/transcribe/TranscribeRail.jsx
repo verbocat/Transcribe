@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Languages, ShieldCheck, Download, Loader2, Check, Square, Clapperboard } from 'lucide-react';
 
 const FORMATS = [
@@ -23,6 +23,33 @@ export default function TranscribeRail({
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
+  const popRef = useRef(null);
+  const [popStyle, setPopStyle] = useState(null);
+
+  // Place the menu beside the Export button, but keep it fully on screen at any window size:
+  // shifted up when the window is short, scrollable, and a centred sheet on narrow screens.
+  useLayoutEffect(() => {
+    if (!open) return undefined;
+    const place = () => {
+      const btnEl = ref.current?.firstElementChild;
+      const pop = popRef.current;
+      if (!btnEl || !pop) return;
+      const r = btnEl.getBoundingClientRect();
+      const margin = 8;
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      const maxHeight = vh - margin * 2;
+      const h = Math.min(pop.scrollHeight + 14, maxHeight);
+      const top = Math.max(margin, Math.min(r.top, vh - h - margin));
+      const room = vw - r.right - margin * 2;
+      if (room >= 260) setPopStyle({ top, left: r.right + margin, width: Math.min(320, room), maxHeight });
+      else setPopStyle({ top, left: margin, right: margin, width: 'auto', maxHeight, margin: '0 auto', maxWidth: 360 });
+    };
+    place();
+    window.addEventListener('resize', place);
+    return () => window.removeEventListener('resize', place);
+  }, [open]);
+
   useEffect(() => {
     if (!open) return undefined;
     const onDown = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
@@ -55,7 +82,7 @@ export default function TranscribeRail({
           ? btn('cancel', 'Cancel', Square, true, onCancelExport, 'Stop the export')
           : btn('export', 'Export', Download, open, () => setOpen(!open), 'Export the transcript')}
         {open && (
-          <div className="ts-popover ts-rail-pop" role="menu">
+          <div ref={popRef} className="ts-popover ts-rail-pop" role="menu" style={popStyle || { visibility: 'hidden' }}>
             <label style={{ display: 'block', padding: '6px 10px 4px' }}>
               <span style={{ color: 'var(--ts-faint)', fontSize: 12, display: 'block', marginBottom: 4 }}>Language</span>
               <select className="ts-field" style={{ width: '100%' }} value={exportLang} onChange={(e) => onExportLang(e.target.value)}
