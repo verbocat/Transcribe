@@ -1,10 +1,12 @@
 import React, { useState, useMemo, useRef } from 'react';
-import { X, Download, FileText, FileCode, File, Globe, Check } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { X, Download, FileText, FileCode, File, Globe, Check, Clapperboard } from 'lucide-react';
 import { API_BASE } from '../../config';
 import { startJob, jobHeaders, isCancelError } from '../../utils/cancellable';
 
 import { langName } from './languages';
-import { exportLanguageOptions, isValidExportLanguage, eventsForExport, exportLanguageSuffix } from '../../utils/exportLanguage';
+import { stripFormatting } from './formatTags';
+import { exportLanguageOptions, isValidExportLanguage, eventsForExport, exportLanguageSuffix, parseExportLanguage, segmentsForExport } from '../../utils/exportLanguage';
 import { exportSrtLocally, exportVttLocally, exportTtmlLocally, exportTxtLocally, downloadLocally } from '../../utils/localExporter';
 
 const EXPORT_FORMATS = [
@@ -43,6 +45,15 @@ const EXPORT_FORMATS = [
     description: 'Clean dialogue text without timecodes for review and print deliverables.',
     badge: 'No timecodes',
     badgeColor: 'bg-[var(--ss-raised)] text-slate-300 border-[var(--ss-line)]',
+  },
+  {
+    key: 'dubbing',
+    name: 'Dubbing script',
+    ext: '.xlsx',
+    icon: Clapperboard,
+    description: 'Spreadsheet for voice recording: time in/out, dialogue, character and gender, plus a character list.',
+    badge: 'For dubbing',
+    group: 'script',
   },
 ];
 
@@ -103,8 +114,53 @@ export default function SubtitleExportModal({ isOpen, onClose, events: liveEvent
   const exportFilename = customFilename.trim() || `${filename.replace(/\.[^/.]+$/, '') || 'subtitles'}${languageSuffix}`;
   const selectedFormatInfo = EXPORT_FORMATS.find(f => f.key === selectedFormat);
 
+  const handleDubbingExport = async () => {
+    const { kind } = parseExportLanguage(language);
+    const sourceEvents = (sourceCode ? trackEventsFor(sourceCode) || liveEvents : liveEvents) || [];
+    const base = sourceEvents.map((ev) => ({
+      segment_id: ev.id,
+      speaker: (ev.speakers && ev.speakers[0]) || ev.speaker || 'Speaker 1',
+      gender: ev.gender || 'Unknown',
+      start_time: ev.start_time ?? ev.start ?? 0,
+      end_time: ev.end_time ?? ev.end ?? 0,
+      transcript: stripFormatting(ev.text || '').replace(/\n/g, ' ').trim(),
+    }));
+    const paired = segmentsForExport(language, base, languageCode ? trackEventsFor(languageCode) : null)
+      .map((seg, i) => ({ ...seg, segment_id: i + 1 }));
+    const job = startJob(API_BASE);
+    exportJob.current = job;
+    setIsExporting(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/export/dubbing`, {
+        method: 'POST',
+        signal: job.signal,
+        headers: jobHeaders(job, { 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          result: {
+            filename: exportFilename,
+            language: langName(languageCode && kind === 'tr' ? languageCode : sourceCode || 'en'),
+            translation_language: kind === 'both' ? langName(languageCode) : undefined,
+            segments: paired,
+          },
+        }),
+      });
+      if (!res.ok) throw new Error('Export failed');
+      const blob = await res.blob();
+      downloadLocally(blob, `${exportFilename}_dubbing_script.xlsx`, blob.type);
+      onClose();
+    } catch (err) {
+      if (isCancelError(err)) return;
+      console.error('Dubbing export error:', err);
+      alert('Dubbing script export failed. Please verify the backend connection.');
+    } finally {
+      if (exportJob.current === job) exportJob.current = null;
+      setIsExporting(false);
+    }
+  };
+
   const handleExport = async () => {
     if (!events || events.length === 0) return;
+    if (selectedFormat === 'dubbing') return handleDubbingExport();
     setIsExporting(true);
 
     try {
@@ -176,9 +232,9 @@ export default function SubtitleExportModal({ isOpen, onClose, events: liveEvent
   const labelCls = 'block text-[11px] font-semibold text-[var(--ss-faint)] mb-1.5';
   const fieldCls = 'w-full h-9 px-3 rounded-lg bg-[var(--ss-bg)] border border-[var(--ss-line)] text-[13px] text-[var(--ss-text)] focus:outline-none focus:border-[var(--ss-accent)] disabled:opacity-60';
 
-  return (
+  return createPortal(
     <div
-      className={`fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/70 backdrop-blur-sm transition-opacity duration-200 ${
+      className={`fixed inset-0 z-[3000] flex items-center justify-center p-3 sm:p-4 bg-black/70 backdrop-blur-sm transition-opacity duration-200 ${
         isClosing ? 'animate-mac-backdrop-exit pointer-events-none' : 'animate-in fade-in duration-200'
       }`}
       onClick={(e) => {
@@ -198,7 +254,7 @@ export default function SubtitleExportModal({ isOpen, onClose, events: liveEvent
         <div className="flex items-center justify-between gap-3 px-5 py-3.5 border-b border-[var(--ss-line)] shrink-0">
           <div className="min-w-0">
             <h2 className="text-[15px] font-semibold text-[var(--ss-text)]">Export subtitles</h2>
-            <p className="text-[11px] text-[var(--ss-muted)] mt-0.5 truncate">{events.length} {events.length === 1 ? 'subtitle' : 'subtitles'} → {exportFilename}{selectedFormatInfo?.ext}</p>
+            <p className="text-[11px] text-[var(--ss-muted)] mt-0.5 truncate">{events.length} {events.length === 1 ? 'subtitle' : 'subtitles'} → {exportFilename}{selectedFormat === 'dubbing' ? '_dubbing_script' : ''}{selectedFormatInfo?.ext}</p>
           </div>
           <button onClick={handleDismiss} aria-label="Close" className="p-1.5 rounded-lg hover:bg-[var(--ss-raised)] text-[var(--ss-muted)] hover:text-[var(--ss-text)] transition-colors cursor-pointer shrink-0">
             <X className="w-4 h-4" />
@@ -239,12 +295,14 @@ export default function SubtitleExportModal({ isOpen, onClose, events: liveEvent
           <div>
             <span className={labelCls}>Format</span>
             <div className="space-y-2">
-              {EXPORT_FORMATS.map(fmt => {
+              {EXPORT_FORMATS.map((fmt, idx) => {
                 const Icon = fmt.icon;
+                const startsScripts = fmt.group === 'script' && EXPORT_FORMATS[idx - 1]?.group !== 'script';
                 const isSelected = selectedFormat === fmt.key;
                 return (
+                  <React.Fragment key={fmt.key}>
+                  {startsScripts && <span className={`${labelCls} pt-2`}>Scripts</span>}
                   <button
-                    key={fmt.key}
                     onClick={() => setSelectedFormat(fmt.key)}
                     aria-pressed={isSelected}
                     className={`w-full flex items-center gap-3 p-2.5 rounded-lg border transition-colors text-left cursor-pointer ${
@@ -269,9 +327,13 @@ export default function SubtitleExportModal({ isOpen, onClose, events: liveEvent
                       </div>
                     )}
                   </button>
+                  </React.Fragment>
                 );
               })}
             </div>
+            {selectedFormat === 'dubbing' && (
+              <p className="text-[11px] text-[var(--ss-muted)] mt-2">Lines are grouped by speaker. Pick a language above to get its dialogue, or Original + a language for a second column.</p>
+            )}
           </div>
         </div>
 
@@ -302,7 +364,8 @@ export default function SubtitleExportModal({ isOpen, onClose, events: liveEvent
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
