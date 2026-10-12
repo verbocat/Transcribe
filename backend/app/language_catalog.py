@@ -82,6 +82,7 @@ CATALOG: List[Tuple[str, Optional[str], Optional[str]]] = [
     ('Polish', 'pl', 'pol'),
     ('Portuguese', 'pt', 'por'),
     ('Portuguese (Brazil)', 'pt-br', None),
+    ('Portuguese (Portugal)', 'pt-pt', None),
     ('Punjabi', 'pa', 'pan'),
     ('Romanian', 'ro', 'ron'),
     ('Russian', 'ru', 'rus'),
