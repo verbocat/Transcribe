@@ -182,7 +182,7 @@ const Notice = ({ tone = 'danger', children }) => {
  */
 export default function CentroidModal({
   isOpen, onClose, events = [], cueUnit = 'cue', glossaryTerms = [], cplLimit = 42, maxLines = 2, cpsLimit = 20,
-  fileName = 'subtitles', defaultSourceLang = 'en', qcHost = null, onOpenQc, onOpenTranslate,
+  fileName = 'subtitles', defaultSourceLang = 'en', spokenSource = null, qcHost = null, onOpenQc, onOpenTranslate,
   activeLang = null, trackLangs = [],
   // Optional full language lists ([code, name], alphabetical). Without them the original short list is used.
   // `sourceLanguages` may include ['auto', ...]; `sourceHint` is the language the transcript was detected as.
@@ -204,6 +204,13 @@ export default function CentroidModal({
   const [snapshot, setSnapshot] = useState([]); // source cues used for the last run (QC reference)
   const [sourceBase, setSourceBase] = useState([]); // the full source subtitle objects, used to build each language's track
   const [sourceLang, setSourceLang] = useState(() => readStore(`centroid_src_v2${langStoreSuffix}`, null) || (sourceLanguages ? defaultSourceLang : toCentroidLang(defaultSourceLang)));
+  // A spoken language picked at upload becomes the translation source (this keeps Portuguese from Portugal vs Brazil)
+  const spokenSeen = useRef(spokenSource);
+  useEffect(() => {
+    if (spokenSeen.current === spokenSource) return;
+    spokenSeen.current = spokenSource;
+    if (spokenSource) setSourceLang(spokenSource);
+  }, [spokenSource]);
   const [targetLang, setTargetLang] = useState(() => readStore(`centroid_tgt_v2${langStoreSuffix}`, null) || 'hi');
   const [extraTargets, setExtraTargets] = useState([]);
   const [showMore, setShowMore] = useState(false);

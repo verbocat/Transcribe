@@ -2096,6 +2096,9 @@ async def generate_subtitles_stream_endpoint(request: Request, payload: dict):
     """Progressively stream subtitle batches using Server-Sent Events (SSE) with dynamic settings."""
     video_id = payload.get("video_id")
     language = payload.get("language", "auto")
+    # The spoken language picked in Subtitle Studio ("Auto-Detect" or a language name) drives transcription when sent
+    if payload.get("source_language"):
+        language = str(payload["source_language"])
     script = payload.get("script", "auto")
     content_type = payload.get("content_type", "adult")
     sdh_mode = payload.get("sdh_mode", False)
@@ -2617,6 +2620,8 @@ async def acoustic_sync_subtitles_endpoint(request: Request, payload: dict):
     video_id = payload.get("video_id")
     raw_events = payload.get("events", [])
     language = payload.get("language", "auto")
+    if payload.get("source_language"):
+        language = str(payload["source_language"])
     content_type = payload.get("content_type", "adult")
     frame_rate = float(payload.get("frame_rate", 24.0))
     cpl_limit = int(payload.get("cpl_limit", 42))

@@ -30,6 +30,7 @@ import StudioMenuBar from './StudioMenuBar';
 import CommandPalette from './CommandPalette';
 import LanguageTracks from './LanguageTracks';
 import { langName } from './languages';
+import { SUBTITLE_SOURCE_LANGUAGES, AUTO_DETECT, engineLanguage, spokenVariantCode, translateCodeForName } from '../../data/languageCatalog';
 import { ShiftTimingsDialog, GoToDialog, FindReplaceDialog } from './ToolDialogs';
 import { Button, IconButton, Kbd, Segmented } from './ui/controls';
 import BrandLogo from '../BrandLogo';
@@ -479,6 +480,17 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
       return (saved && saved !== 'hi') ? saved : 'en';
     } catch (_) { return 'en'; }
   });
+  // Spoken language of the media, picked next to the file: sent to the transcription engine (Auto-Detect lets it decide)
+  const [spokenLang, setSpokenLang] = useState(() => {
+    try {
+      const saved = localStorage.getItem('karya_sub_spoken_language');
+      return SUBTITLE_SOURCE_LANGUAGES.some(([v]) => v === saved) ? saved : AUTO_DETECT;
+    } catch (_) { return AUTO_DETECT; }
+  });
+  const handleSpokenLangChange = useCallback((v) => {
+    setSpokenLang(v);
+    try { localStorage.setItem('karya_sub_spoken_language', v); } catch (_) { }
+  }, []);
   const [script, setScript] = useState(() => {
     try {
       const saved = localStorage.getItem('karya_sub_script');
@@ -2195,6 +2207,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
         'Selected File': selectedFile?.name || 'N/A',
         'File Size': selectedFile ? `${(selectedFile.size / (1024 * 1024)).toFixed(2)} MB` : 'N/A',
         'Target Language': language,
+        'Spoken Language': spokenLang,
         'Target Script': script,
         'Content Type': contentType,
         'CPL Limit': cplLimit,
@@ -2216,6 +2229,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
         body: JSON.stringify({
           video_id: videoId,
           language,
+          source_language: engineLanguage(spokenLang),
           script,
           content_type: contentType,
           sdh_mode: sdhMode,
@@ -2265,6 +2279,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
           body: JSON.stringify({
             video_id: videoId,
             language,
+            source_language: engineLanguage(spokenLang),
             script,
             content_type: contentType,
             sdh_mode: sdhMode,
@@ -2579,6 +2594,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
           video_id: currentVideoId,
           events: events,
           language: language,
+          source_language: engineLanguage(spokenLang),
           content_type: contentType,
           frame_rate: frameRate,
           cpl_limit: cplLimit,
@@ -3008,6 +3024,19 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
               <ChevronDown size={13} className="text-[var(--ss-faint)] shrink-0" />
             </button>
           )}
+          <label className="ml-2 h-8 shrink-0 inline-flex items-center gap-1.5 text-[11.5px] text-[var(--ss-muted)]" title="The language spoken in the media. Pick it so transcription is exact; Auto-detect lets the engine decide.">
+            <Languages size={13} className="shrink-0" />
+            <span className="hidden lg:inline">Spoken</span>
+            <select
+              value={spokenLang}
+              disabled={isGenerating}
+              onChange={(e) => handleSpokenLangChange(e.target.value)}
+              aria-label="Spoken language"
+              className="h-8 max-w-[160px] rounded-lg border border-[var(--ss-line)] bg-[var(--ss-raised)] text-[var(--ss-text)] text-[12px] px-2 cursor-pointer outline-none focus:border-[var(--ss-accent)]"
+            >
+              {SUBTITLE_SOURCE_LANGUAGES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            </select>
+          </label>
         </div>
 
         {/* Right: status, history, search, export, settings, account */}
@@ -3507,6 +3536,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
         isOpen={showCentroidModal}
         onClose={() => setShowCentroidModal(false)}
         defaultSourceLang={language}
+        spokenSource={spokenVariantCode(spokenLang) || translateCodeForName(engineLanguage(spokenLang))}
         qcHost={showQcDrawer && qcView === 'centroid' ? qcHost : null}
         onOpenQc={() => openQc('centroid')}
         onOpenTranslate={() => { setShowQcDrawer(false); openCentroid(); }}

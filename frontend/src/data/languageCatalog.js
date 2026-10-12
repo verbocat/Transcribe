@@ -17,6 +17,19 @@ export const TRANSCRIBE_LANGUAGES = [
   ...catalog.filter((l) => l.scribe).sort(byName).map((l) => [l.name, label(l)]),
 ];
 
+/**
+ * Subtitle Studio's spoken-language list: the same list plus the Portuguese regional variants.
+ * The speech engine has a single Portuguese, so a variant is sent to it as "Portuguese" and kept
+ * separately (spokenVariantCode) for translation and rule-book steps.
+ */
+const PT_VARIANTS = { 'Portuguese (Portugal)': 'pt-pt', 'Portuguese (Brazil)': 'pt-br' };
+export const SUBTITLE_SOURCE_LANGUAGES = TRANSCRIBE_LANGUAGES.flatMap(([v, l]) =>
+  v === 'Portuguese' ? [[v, l], ['Portuguese (Portugal)', 'Portuguese (Portugal)'], ['Portuguese (Brazil)', 'Portuguese (Brazil)']] : [[v, l]]);
+/** The name the transcription engine takes for a picker value */
+export const engineLanguage = (v) => (PT_VARIANTS[v] ? 'Portuguese' : v || AUTO_DETECT);
+/** Regional variant code (for translation) when the picker value is one, else null */
+export const spokenVariantCode = (v) => PT_VARIANTS[v] || null;
+
 /** [code, name] for the Centroid translate pickers, alphabetical */
 export const TRANSLATE_LANGUAGES = catalog.filter((l) => l.translate).sort(byName).map((l) => [l.translate, l.name]);
 export const TRANSLATE_SOURCE_LANGUAGES = [[AUTO_SOURCE, 'Auto-detect'], ...TRANSLATE_LANGUAGES];
