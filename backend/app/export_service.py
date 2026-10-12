@@ -516,7 +516,7 @@ def export_to_dubbing_script(
     ws.title = (Path(result.filename).stem or "Dubbing Script")[:31]
 
     tr = _has_translation(result)
-    headers = ["Sr. No.", "Time In", "Time Out", "Dialogue", "Character"]
+    headers = ["Sr. No.", "Time In", "Time Out", "Dialogue", "Character", "Gender"]
     if tr:
         label = f" ({result.translation_language})" if result.translation_language else ""
         headers.insert(4, f"Translation{label}")
@@ -543,19 +543,27 @@ def export_to_dubbing_script(
         else:
             groups.append({"name": name, "start": seg.start_time, "end": seg.end_time, "lines": [text], "tr": [(seg.translation or "").strip()]})
 
+    def char_gender(name: str) -> str:
+        # Most frequent known gender for the character; "Unknown" only when nothing else was detected
+        counts = characters.get(name) or {}
+        known = {k: v for k, v in counts.items() if k and k != "Unknown"}
+        pool = known or counts
+        return max(pool, key=pool.get) if pool else "Unknown"
+
     for i, g in enumerate(groups, start=1):
         row = i + 2
         values = [i, _dubbing_timecode(g["start"]), _dubbing_timecode(g["end"]), "\n".join(g["lines"])]
         if tr:
             values.append("\n".join(t for t in g["tr"] if t))
         values.append(g["name"] or None)
+        values.append(char_gender(g["name"]) if g["name"] else None)
         for col, val in enumerate(values, start=2):
             c = ws.cell(row=row, column=col, value=val)
             c.border = border
             c.alignment = wrap if col in (5, 6) and (col == 5 or tr) else center
 
-    for col, width in ({"A": 3, "B": 7, "C": 13, "D": 13, "E": 60, "F": 60, "G": 18} if tr
-                       else {"A": 3, "B": 7, "C": 13, "D": 13, "E": 76, "F": 18}).items():
+    for col, width in ({"A": 3, "B": 7, "C": 13, "D": 13, "E": 60, "F": 60, "G": 18, "H": 10} if tr
+                       else {"A": 3, "B": 7, "C": 13, "D": 13, "E": 76, "F": 18, "G": 10}).items():
         ws.column_dimensions[col].width = width
     ws.freeze_panes = "B3"
 
@@ -564,8 +572,7 @@ def export_to_dubbing_script(
         c = ws2.cell(row=2, column=col, value=title)
         c.fill, c.font, c.border, c.alignment = header_fill, header_font, border, center
     for i, name in enumerate(sorted(characters, key=str.casefold), start=1):
-        genders = characters[name]
-        gender = max(genders, key=genders.get)  # most frequent gender label for that character
+        gender = char_gender(name)
         for col, val in enumerate([i, name, gender], start=2):
             c = ws2.cell(row=i + 2, column=col, value=val)
             c.border, c.alignment = border, center
