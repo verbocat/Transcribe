@@ -234,7 +234,7 @@ export default function SubtitleExportModal({ isOpen, onClose, events: liveEvent
 
   return createPortal(
     <div
-      className={`fixed inset-0 z-[3000] flex items-center justify-center p-3 sm:p-4 bg-black/70 backdrop-blur-sm transition-opacity duration-200 ${
+      className={`ss-modal-scope fixed inset-0 z-[3000] flex items-center justify-center p-3 sm:p-4 bg-black/70 backdrop-blur-sm transition-opacity duration-200 ${
         isClosing ? 'animate-mac-backdrop-exit pointer-events-none' : 'animate-in fade-in duration-200'
       }`}
       onClick={(e) => {

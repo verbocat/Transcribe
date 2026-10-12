@@ -4,6 +4,29 @@
    Plex Mono only for timecodes, Noto script faces for subtitle text.
    ========================================================================== */
 
+/* Portaled dialogs render under <body>, outside .subtitle-studio, so they need the tokens themselves
+   (without them --ss-panel is undefined and the panel paints transparent). */
+.ss-modal-scope {
+  --ss-bg: var(--kt-s0);
+  --ss-panel: var(--kt-s1);
+  --ss-raised: var(--kt-s2);
+  --ss-hover: var(--kt-s3);
+  --ss-selected: var(--kt-selected);
+  --ss-line: var(--kt-s4);
+  --ss-line-soft: var(--kt-s2);
+  --ss-text: var(--kt-text);
+  --ss-muted: var(--kt-muted);
+  --ss-faint: var(--kt-faint);
+  --ss-accent: var(--kt-accent);
+  --ss-accent-hover: var(--kt-accent-soft);
+  --ss-accent-ink: var(--kt-accent-ink);
+  --ss-danger: var(--kt-danger);
+  --ss-warn: var(--kt-warn);
+  --ss-font-ui: var(--kt-font-ui);
+  --ss-font-mono: var(--kt-font-mono);
+  font-family: var(--ss-font-ui);
+}
+
 .subtitle-studio {
   --ss-bg: var(--kt-s0);
   --ss-panel: var(--kt-s1);
