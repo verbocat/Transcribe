@@ -15,7 +15,7 @@ from pathlib import Path
 from contextlib import asynccontextmanager
 from typing import List, Optional
 from pydantic import BaseModel
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Response, Request
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Response, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 
@@ -64,6 +64,10 @@ from app.netflix_engine import (
 )
 from app.export_service import export_netflix_srt, export_netflix_vtt, export_netflix_ttml
 from app.db import DBSubtitleProject, DBSubtitleEvent
+from app.auth_module.routes import get_current_user_from_token
+from app.auth_module.models import User
+from app.auth_module import usage as usage_mod
+from app import metering
 
 # In-memory storage for active sessions with TTL eviction (BUG-W2)
 active_sessions = {}
@@ -271,6 +275,14 @@ async def lifespan(app: FastAPI):
     _evict_expired_sessions()
     init_db()
     init_auth_db()
+    try:  # jobs from before this restart are gone; charge their held hours rather than leak them
+        _db = usage_mod.new_session()
+        try:
+            usage_mod.reap_stale(_db, older_than=None)
+        finally:
+            _db.close()
+    except Exception:
+        logger.exception("could not close orphaned usage reservations")
     monitor_task = asyncio.create_task(_hardware_monitor_loop())
     # Load the local gender model now so the first transcription does not pay for it
     try:
@@ -353,7 +365,7 @@ async def custom_http_exception_handler(request: Request, exc: HTTPException):
     """Ensure HTTP exceptions (e.g. 429, 404, 413) always include CORS headers."""
     return JSONResponse(
         status_code=exc.status_code,
-        content={"detail": exc.detail},
+        content={"detail": exc.detail, **getattr(exc, "extra", {})},
         headers=_cors_headers(request),
     )
 
@@ -367,7 +379,7 @@ async def custom_general_exception_handler(request: Request, exc: Exception):
     print(tb, flush=True)
     return JSONResponse(
         status_code=500,
-        content={"detail": f"Internal server error: {str(exc)}", "traceback": tb},
+        content={"detail": f"Internal server error: {str(exc)}"},  # the traceback stays in the server log
         headers=_cors_headers(request),
     )
 
@@ -532,11 +544,14 @@ async def transcribe_audio(
     audio_id: Optional[str] = Form(None),
     language: str = Form("Auto-Detect"),
     script: str = Form("Auto-Detect"),
-    elevenlabs_api_key: Optional[str] = Form(None)
+    elevenlabs_api_key: Optional[str] = Form(None),
+    current_user: User = Depends(get_current_user_from_token),
 ):
     """Transcribe single audio file using ElevenLabs Scribe v2 pipeline + Karya linting."""
     client_ip = request.client.host if request.client else "127.0.0.1"
     _check_rate_limit(client_ip)
+    owner = metering.user_ref(current_user)
+    uploaded_here = bool(file)
     if file:
         unique_prefix = uuid.uuid4().hex[:8]
         safe_filename = f"{unique_prefix}_{file.filename}"
@@ -550,6 +565,17 @@ async def transcribe_audio(
         raise HTTPException(status_code=400, detail="Audio file or valid audio_id is required.")
 
     original_media_path = target_path  # kept so gender detection can watch the video
+
+    # Hours are held before any work starts; the length comes from ffprobe on the stored file, not from the client.
+    try:
+        meter = metering.Metered(
+            owner, usage_mod.TRANSCRIBE, await metering.probe_duration_ms(target_path),
+            "/api/transcribe", Path(target_path).name,
+        ).reserve()
+    except HTTPException:
+        if uploaded_here:
+            Path(target_path).unlink(missing_ok=True)
+        raise
 
     # Auto-extract 16kHz mono audio WAV if input is a video file or container or format needing conversion like .wma
     ext = Path(target_path).suffix.lower()
@@ -569,15 +595,20 @@ async def transcribe_audio(
             language=language,
             script=script,
             elevenlabs_api_key=elevenlabs_api_key,
-            video_path=original_media_path if Path(original_media_path).suffix.lower() in get_supported_video_extensions() else None
+            video_path=original_media_path if Path(original_media_path).suffix.lower() in get_supported_video_extensions() else None,
+            progress_cb=metering.transcribe_stage_hook(meter),
         )
-    except Exception as trans_err:
+    except BaseException as trans_err:
+        meter.on_error(trans_err)
+        if isinstance(trans_err, asyncio.CancelledError):
+            raise
         import traceback
         traceback.print_exc()
         raise HTTPException(
             status_code=500,
             detail=f"Transcription failed: {str(trans_err)}"
         )
+    meter.finish(True)
 
     # Ensure result filename points to the accessible audio file in uploads
     result.filename = Path(target_path).name
@@ -843,7 +874,7 @@ def _prune_transcribe_jobs():
         _transcribe_jobs.pop(jid, None)
 
 
-async def _run_transcribe_job(job_id, target_path, original_media_path, language, script, elevenlabs_api_key, needs_extract=True, cancel_id=None):
+async def _run_transcribe_job(job_id, target_path, original_media_path, language, script, elevenlabs_api_key, needs_extract=True, cancel_id=None, meter=None):
     job = _transcribe_jobs[job_id]
     # Registered under the id the browser sent as X-Job-Id (or the poll id), so POST /api/jobs/{id}/cancel stops FFmpeg and the run
     scope_id = cancel_id or job_id
@@ -869,6 +900,8 @@ async def _run_transcribe_job(job_id, target_path, original_media_path, language
     def on_progress(stage, overall, detail, stage_pct=None):
         # Never let the bar move backwards (stages can report from worker threads)
         overall = max(overall, job.get("percent") or 0.0)
+        if meter is not None:
+            meter.note_stage(stage)
         set_state(stage=stage, percent=min(99.0, overall), stage_percent=stage_pct, detail=detail)
 
     try:
@@ -902,14 +935,22 @@ async def _run_transcribe_job(job_id, target_path, original_media_path, language
         active_sessions[result.audio_id] = {"filename": result.filename, "file_path": target_path, "result": result}
         set_state(stage="saving", percent=99.0, detail="Saving the project")
         await asyncio.to_thread(_save_transcription_to_db, result, target_path)
+        if meter is not None:
+            meter.finish(True)
         set_state(stage="done", percent=100.0, detail="Done", result=result.model_dump(mode="json"))
     except Exception as err:
         import traceback
         traceback.print_exc()
+        if meter is not None:
+            meter.on_error(err)
         set_state(stage="error", error=f"Transcription failed: {err}")
     except asyncio.CancelledError:
+        if meter is not None:
+            meter.on_error(asyncio.CancelledError())
         set_state(stage="error", error="Transcription cancelled.", cancelled=True)
     finally:
+        if meter is not None:
+            meter.on_error(RuntimeError("job ended"))  # no-op once closed; covers any path that fell through
         job_control.unregister(scope_id, scope)
         job_control._current.reset(scope_token)
 
@@ -922,7 +963,8 @@ async def transcribe_audio_async(
     language: str = Form("Auto-Detect"),
     script: str = Form("Auto-Detect"),
     elevenlabs_api_key: Optional[str] = Form(None),
-    audio_filename: Optional[str] = Form(None)
+    audio_filename: Optional[str] = Form(None),
+    current_user: User = Depends(get_current_user_from_token),
 ):
     """Start a transcription in the background and return a job id to poll.
 
@@ -933,6 +975,7 @@ async def transcribe_audio_async(
     _prune_transcribe_jobs()
     original_path = None
     needs_extract = True
+    uploaded_here = False
     if audio_filename:
         wav_path = UPLOAD_DIR / Path(audio_filename).name
         if not wav_path.exists():
@@ -947,14 +990,26 @@ async def transcribe_audio_async(
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
         target_path = str(file_path)
+        uploaded_here = True
     elif audio_id and audio_id in active_sessions:
         target_path = active_sessions[audio_id]["file_path"]
     else:
         raise HTTPException(status_code=400, detail="Audio file, audio_filename or valid audio_id is required.")
 
+    # Reserve the hours (length measured here with ffprobe) before the background job exists.
+    try:
+        meter = metering.Metered(
+            metering.user_ref(current_user), usage_mod.TRANSCRIBE, await metering.probe_duration_ms(target_path),
+            "/api/transcribe_async", Path(target_path).name,
+        ).reserve()
+    except HTTPException:
+        if uploaded_here:
+            Path(target_path).unlink(missing_ok=True)
+        raise
+
     job_id = uuid.uuid4().hex
     _transcribe_jobs[job_id] = {"stage": "queued", "percent": 0.0, "updated": time.time()}
-    asyncio.create_task(_run_transcribe_job(job_id, target_path, original_path or target_path, language, script, elevenlabs_api_key, needs_extract, cancel_id=request.headers.get("x-job-id")))
+    asyncio.create_task(_run_transcribe_job(job_id, target_path, original_path or target_path, language, script, elevenlabs_api_key, needs_extract, cancel_id=request.headers.get("x-job-id"), meter=meter))
     return {"job_id": job_id}
 
 
@@ -1176,7 +1231,7 @@ async def extract_audio_status_endpoint(job_id: str):
 
 
 @app.post("/api/speakers/refine")
-async def refine_speakers_endpoint(payload: dict):
+async def refine_speakers_endpoint(payload: dict, current_user: User = Depends(get_current_user_from_token)):
     """AI second pass on speaker labels. Returns suggestions only; the editor applies them (and can undo)."""
     from app.speaker_refine import lines_from_segments, suggest_corrections
     segments_raw = [s for s in payload.get("segments", []) if isinstance(s, dict) and "segment_id" in s]
@@ -2039,7 +2094,7 @@ async def discard_media_endpoint(payload: DiscardMediaRequest):
 
 
 @app.post("/api/subtitle/generate")
-async def generate_subtitles_endpoint(request: Request, payload: dict):
+async def generate_subtitles_endpoint(request: Request, payload: dict, current_user: User = Depends(get_current_user_from_token)):
     """Generate Netflix QC compliant subtitles from video using ElevenLabs Scribe v2 and local Netflix engine."""
     video_id = payload.get("video_id")
     language = payload.get("language", "auto")
@@ -2065,7 +2120,12 @@ async def generate_subtitles_endpoint(request: Request, payload: dict):
     log_terminal("SUBTITLE-API", f"===> Direct Subtitle Generation Request: video_id={video_id} ({file_size_mb} MB)")
     log_terminal("SUBTITLE-API", f"     Params -> Language: {language} | Content: {content_type} | SDH: {sdh_mode}")
     log_terminal("SUBTITLE-API", f"     Limits -> CPL: {cpl_limit} | Max CPS: {max_cps} | Min Dur: {min_duration}s | Max Dur: {max_duration}s")
-    
+
+    meter = metering.Metered(
+        metering.user_ref(current_user), usage_mod.TRANSCRIBE, await metering.probe_duration_ms(video_path),
+        "/api/subtitle/generate", video_id,
+    ).reserve()
+    meter.work_started = True  # one provider call; from here on a dropped connection is still charged
     try:
         result = await asyncio.to_thread(
             generate_subtitles,
@@ -2083,8 +2143,12 @@ async def generate_subtitles_endpoint(request: Request, payload: dict):
         )
         active_sessions[video_id]["result"] = result
         log_terminal("SUBTITLE-API", f"[OK] Subtitles generated: {result.get('total_events', 0)} events (Score: {result.get('compliance_score', 0)}%)")
+        meter.finish(True)
         return result
-    except Exception as e:
+    except BaseException as e:
+        meter.on_error(e)
+        if isinstance(e, asyncio.CancelledError):
+            raise
         import traceback
         traceback.print_exc()
         log_terminal("SUBTITLE-API", f"[ERROR] Subtitle generation failed: {str(e)}", level="ERROR")
@@ -2092,7 +2156,7 @@ async def generate_subtitles_endpoint(request: Request, payload: dict):
 
 
 @app.post("/api/subtitle/generate_stream")
-async def generate_subtitles_stream_endpoint(request: Request, payload: dict):
+async def generate_subtitles_stream_endpoint(request: Request, payload: dict, current_user: User = Depends(get_current_user_from_token)):
     """Progressively stream subtitle batches using Server-Sent Events (SSE) with dynamic settings."""
     video_id = payload.get("video_id")
     language = payload.get("language", "auto")
@@ -2166,43 +2230,28 @@ async def generate_subtitles_stream_endpoint(request: Request, payload: dict):
     log_terminal("SUBTITLE-API", f"     Diarization -> Speakers: {num_speakers or 'Auto-Detect'} | Speaker Tags: {include_speaker_tags}")
     log_terminal("SUBTITLE-API", f"     Advanced -> Strict Script: {strict_native_script} | Snap Shot Cuts: {snap_to_shot_changes} | FPS: {custom_frame_rate or 'Auto'}")
 
-    user_id = None
-    auth_header = request.headers.get("authorization")
-    if auth_header and auth_header.startswith("Bearer "):
+    user_id = current_user.id
+    # Video-count quota (older per-account limit) and the AI-optimise switch, from the authenticated account
+    if current_user.max_videos_quota is not None and current_user.max_videos_quota >= 0:
+        from app.auth_module.models import SubtitleGenerationRun
+        from app.auth_module.database import SessionLocal
+        db_s = SessionLocal()
         try:
-            token = auth_header.split(" ")[1].strip()
-            from app.auth_module.models import AuthSession, User, SubtitleGenerationRun
-            from app.auth_module.database import SessionLocal
-            db_s = SessionLocal()
-            sess = db_s.query(AuthSession).filter(AuthSession.session_token == token, AuthSession.is_active == True).first()
-            if sess and sess.user:
-                usr = sess.user
-                user_id = usr.id
-                if usr.is_blocked:
-                    db_s.close()
-                    raise HTTPException(status_code=403, detail="Your account has been suspended by an administrator.")
-                
-                # Check video quota limit
-                if usr.max_videos_quota is not None and usr.max_videos_quota >= 0:
-                    runs = db_s.query(SubtitleGenerationRun.video_id).filter(SubtitleGenerationRun.user_id == user_id).all()
-                    distinct_video_ids = {r[0] for r in runs if r[0]}
-                    if video_id not in distinct_video_ids and len(distinct_video_ids) >= usr.max_videos_quota:
-                        db_s.close()
-                        raise HTTPException(
-                            status_code=403,
-                            detail=f"Video generation quota exceeded: Your account limit is {usr.max_videos_quota} videos. Please contact your administrator."
-                        )
-                # Check AI optimize toggle
-                if not getattr(usr, "can_ai_optimize", True):
-                    gemini_auto_fix = False
+            runs = db_s.query(SubtitleGenerationRun.video_id).filter(SubtitleGenerationRun.user_id == user_id).all()
+        finally:
             db_s.close()
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.debug(f"User quota validation note: {e}")
+        distinct_video_ids = {r[0] for r in runs if r[0]}
+        if video_id not in distinct_video_ids and len(distinct_video_ids) >= current_user.max_videos_quota:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Video generation quota exceeded: Your account limit is {current_user.max_videos_quota} videos. Please contact your administrator."
+            )
 
-    if not user_id and video_id in active_sessions and active_sessions[video_id].get("user_id"):
-        user_id = active_sessions[video_id]["user_id"]
+    # Hours are held before the stream opens (so "out of hours" is a clean 402, not a broken stream).
+    meter = metering.Metered(
+        metering.user_ref(current_user), usage_mod.TRANSCRIBE, await metering.probe_duration_ms(video_path),
+        "/api/subtitle/generate_stream", video_id,
+    ).reserve()
 
     generator = generate_subtitles_stream(
         video_path=video_path,
@@ -2241,20 +2290,31 @@ async def generate_subtitles_stream_endpoint(request: Request, payload: dict):
                         parsed = json.loads(clean_data)
                         p_type = parsed.get("type")
                         if p_type == "progress":
+                            # "transcribe" progress ticks mean the paid call is running; later stages mean it returned
+                            key = parsed.get("stage_key")
+                            if key == "transcribe" and (parsed.get("step_progress") or 0) > 0:
+                                meter.work_started = True
+                            elif key not in (None, "prepare", "transcribe"):
+                                meter.work_started = meter.work_done = True
                             log_terminal("SSE-STREAM", f"[Progress {parsed.get('progress', 0)}%] {parsed.get('stage')}")
                         elif p_type == "complete":
+                            meter.finish(True)
                             log_terminal("SSE-STREAM", f"[Complete] Subtitle stream generated {parsed.get('total_events', 0)} events (Score: {parsed.get('compliance_score', 0)}%)")
                         elif p_type in ("error", "stream_error"):
+                            meter.on_error(RuntimeError(str(parsed.get("message") or "error")))
                             log_terminal("SSE-STREAM", f"[Error] {parsed.get('message') or parsed.get('error')}", level="ERROR")
                     except Exception:
                         pass
                 yield chunk
         except Exception as exc:
+            meter.on_error(exc)
             logger.exception(f"Unhandled exception in sse_stream_wrapper: {exc}")
             log_terminal("SSE-STREAM", f"[FATAL STREAM ERROR] {exc}", level="ERROR")
             err_data = json.dumps({"type": "error", "message": str(exc), "error": str(exc)})
             yield f"data: {err_data}\n\n"
         finally:
+            # Disconnect / cancel: charged if the paid call had started, refunded if it never did. No-op once closed.
+            meter.on_error(GeneratorExit())
             decrement_active_stream()
             log_terminal("SSE-STREAM", f"Client disconnected from SSE stream for video_id={video_id} (Emitted {chunk_count} chunks)")
 
@@ -2271,7 +2331,7 @@ async def generate_subtitles_stream_endpoint(request: Request, payload: dict):
 
 
 @app.post("/api/subtitle/context_autofill")
-async def subtitle_context_autofill(payload: dict):
+async def subtitle_context_autofill(payload: dict, current_user: User = Depends(get_current_user_from_token)):
     """Read the current subtitles and draft the context (type, topic, speakers, key terms, misheard names)."""
     from app import context_polisher
     events = payload.get("events") or []
@@ -2284,7 +2344,7 @@ async def subtitle_context_autofill(payload: dict):
 
 
 @app.post("/api/subtitle/context_polish")
-async def subtitle_context_polish(payload: dict):
+async def subtitle_context_polish(payload: dict, current_user: User = Depends(get_current_user_from_token)):
     """Proofread existing subtitles against the user's context. Timing never changes; only text fixes are returned."""
     from app import context_polisher as cp
     events = payload.get("events") or []
@@ -2405,13 +2465,32 @@ def _resolve_auto_source(body: dict, texts: list, payload: dict) -> None:
 
 
 @app.post("/api/centroid/translate")
-async def centroid_translate(payload: dict):
+async def centroid_translate(payload: dict, current_user: User = Depends(get_current_user_from_token)):
     """Send SRT/events to Centroid and return translated SRT(s) per target language."""
     from app import centroid_client
     if not (payload.get("srt") or payload.get("cues") or payload.get("events")):
         raise HTTPException(status_code=400, detail="Provide 'srt' or 'events'.")
     if not (payload.get("target_langs") or payload.get("target_lang")):
         raise HTTPException(status_code=400, detail="Choose at least one target language.")
+    # Translation hours: subtitle time (floored by text length) x target languages, held before calling out.
+    langs_n = len({str(l) for l in (payload.get("target_langs") or [payload.get("target_lang")]) if l}) or 1
+    meter = metering.Metered(
+        metering.user_ref(current_user), usage_mod.TRANSLATE,
+        metering.translation_ms(payload.get("cues") or payload.get("events") or [], langs_n, payload.get("srt")),
+        "/api/centroid/translate", f"{langs_n} language(s)",
+    ).reserve()
+    meter.work_started = True
+    try:
+        return await _centroid_translate_inner(payload)
+    except BaseException as e:
+        meter.on_error(e)
+        raise
+    finally:
+        meter.finish(True)  # reached only when nothing above closed it: the call succeeded
+
+
+async def _centroid_translate_inner(payload: dict):
+    from app import centroid_client
     body = {k: payload[k] for k in ("srt", "source_lang", "target_langs", "target_lang", "context", "glossary", "constraints", "quality") if payload.get(k)}
     cues = payload.get("cues") or payload.get("events")
     _resolve_auto_source(body, [str(e.get("text", "")) for e in (cues or [])] or [str(payload.get("srt") or "")], payload)
@@ -2467,7 +2546,7 @@ async def _retry_untranslated(data: dict, body: dict) -> None:
 
 
 @app.post("/api/centroid/analyze")
-async def centroid_analyze(payload: dict):
+async def centroid_analyze(payload: dict, current_user: User = Depends(get_current_user_from_token)):
     """Ask Centroid to read the whole script and propose context, characters and a name glossary."""
     from app import centroid_client
     cues = payload.get("cues") or payload.get("events") or []
@@ -2502,7 +2581,7 @@ def _qc_prepare(payload: dict):
 
 
 @app.post("/api/centroid/qc")
-async def centroid_qc(payload: dict):
+async def centroid_qc(payload: dict, current_user: User = Depends(get_current_user_from_token)):
     """
     Subtitle QC for source/target cue pairs: the AI review merged with local rule checks.
 
@@ -2576,7 +2655,7 @@ async def lint_subtitles_endpoint(payload: SubtitleLintRequest):
 
 
 @app.post("/api/subtitle/gemini_fix")
-async def gemini_fix_subtitles_endpoint(payload: dict):
+async def gemini_fix_subtitles_endpoint(payload: dict, current_user: User = Depends(get_current_user_from_token)):
     """Coordinate with Gemini AI to fix QC violations (CPL, CPS, line breaks)."""
     video_id = payload.get("video_id")
     events = payload.get("events", [])
@@ -2612,7 +2691,7 @@ async def gemini_fix_subtitles_endpoint(payload: dict):
 
 
 @app.post("/api/subtitle/acoustic_sync")
-async def acoustic_sync_subtitles_endpoint(request: Request, payload: dict):
+async def acoustic_sync_subtitles_endpoint(request: Request, payload: dict, current_user: User = Depends(get_current_user_from_token)):
     """
     Acoustic synchronization:
     Locks subtitle events to exact speech timestamps using ElevenLabs Scribe v2 word timing and local Netflix engine.
@@ -2664,13 +2743,24 @@ async def acoustic_sync_subtitles_endpoint(request: Request, payload: dict):
                     raise HTTPException(status_code=500, detail=f"Failed to extract audio: {ex}")
 
         from app.elevenlabs_service import transcribe_with_scribe_v2
-        stt_res = await transcribe_with_scribe_v2(
-            audio_path=audio_path,
-            language=language,
-            diarize=True,
-            tag_audio_events=False,
-            api_key=elevenlabs_api_key
-        )
+        # A fresh speech-to-text run costs transcription hours (cached words in the session do not).
+        meter = metering.Metered(
+            metering.user_ref(current_user), usage_mod.TRANSCRIBE, await metering.probe_duration_ms(audio_path),
+            "/api/subtitle/acoustic_sync", video_id,
+        ).reserve()
+        meter.work_started = True
+        try:
+            stt_res = await transcribe_with_scribe_v2(
+                audio_path=audio_path,
+                language=language,
+                diarize=True,
+                tag_audio_events=False,
+                api_key=elevenlabs_api_key
+            )
+        except BaseException as stt_err:
+            meter.on_error(stt_err)
+            raise
+        meter.finish(True)
         words = stt_res.get("words", [])
         if video_id in active_sessions:
             active_sessions[video_id]["scribe_words"] = words

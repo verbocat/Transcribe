@@ -76,3 +76,12 @@ Export as **SRT**, **WebVTT**, **TTML** (Netflix delivery) or plain **TXT**.
 ## Using Transcription Studio
 
 Upload an audio or video file, pick the language and script, and run the transcription. Scribe v2 transcribes the file, the result is split into Karya-compliant segments (20 s maximum, with buffers around speech), speakers are labelled with a gender, and the Karya linter flags punctuation, digit and segment-length issues. Edit segments in the transcript list, then export to Excel, CSV (Karya deliverable columns), Word, SRT, WebVTT, plain text or JSON.
+
+## Accounts and hour limits (admin)
+
+Admins open **/admin → Accounts & Hours** to create accounts on any email domain (public sign-up stays `@verbolabs.com` only), set separate **transcription** and **translation** hour budgets, edit, disable or delete accounts, and read each person's usage history.
+
+* Admins are the addresses in the `ADMIN_EMAILS` environment variable (comma separated, any domain) plus the built-in one. Nothing in the app can promote an account.
+* First admin: set `ADMIN_EMAILS=you@example.com` in the backend environment, restart, then run `cd backend && python -m app.manage_admin you@example.com` (asks for a password; there is no default one).
+* Limits are enforced on the server only: hours are reserved atomically before a job starts (length measured with ffmpeg on the stored file, never taken from the client), then charged or refunded. Translation is billed as subtitle time × target languages. Every step is written to the append-only `usage_ledger` table.
+* Existing accounts keep **unlimited** hours until an admin sets a limit.

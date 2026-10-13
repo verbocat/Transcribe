@@ -10,6 +10,7 @@ import { API_BASE } from '../../config';
 import { useAuth } from '../../auth_views/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
 import ThemeToggle from '../ThemeToggle';
+import AdminAccounts from './AdminAccounts';
 
 export default function AdminDashboard({ onBackToStudio, user: currentUser, onLogout }) {
   const { user: authUser, token } = useAuth();
@@ -493,6 +494,7 @@ export default function AdminDashboard({ onBackToStudio, user: currentUser, onLo
         <div className="flex items-center gap-1 overflow-x-auto py-2">
           {[
             { id: 'overview', label: 'Command Center', icon: Activity },
+            { id: 'accounts', label: 'Accounts & Hours', icon: Clock },
             { id: 'users', label: 'User Production & Intelligence Directory', icon: Users, badge: overview?.users?.total },
             { id: 'hardware', label: 'Server Hardware & Health', icon: Cpu },
           ].map((tab) => {
@@ -713,6 +715,8 @@ export default function AdminDashboard({ onBackToStudio, user: currentUser, onLo
         {/* ============================================================== */}
         {/* TAB 2: USER PRODUCTION DIRECTORY & INTELLIGENCE (MERGED)        */}
         {/* ============================================================== */}
+        {activeTab === 'accounts' && <AdminAccounts />}
+
         {activeTab === 'users' && (() => {
           const activeTeamCount = usersList.filter(u => u.is_verified && !u.is_blocked).length;
           const pendingUsersCount = usersList.filter(u => !u.is_verified && !u.is_blocked).length;

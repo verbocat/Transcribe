@@ -1,0 +1,289 @@
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  UserPlus, Search, Clock, X, Copy, Check, Trash2, KeyRound, Ban, UserCheck, ListOrdered, Pencil, RefreshCw, AlertTriangle,
+} from 'lucide-react';
+import { API_BASE } from '../../config';
+import { useAuth } from '../../auth_views/AuthContext';
+import { useTheme } from '../../context/ThemeContext';
+import { formatHours } from '../UsageBadge';
+
+const api = async (token, path, { method = 'GET', body } = {}) => {
+  const res = await fetch(`${API_BASE}/api/admin${path}`, {
+    method,
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(typeof data.detail === 'string' ? data.detail : 'Request failed');
+  return data;
+};
+
+function Meter({ b, isDark }) {
+  if (b.unlimited) return <span className={isDark ? 'text-slate-300' : 'text-slate-600'}>Unlimited · used {formatHours(b.used_hours)}</span>;
+  const total = b.limit_hours || 0;
+  const pct = total > 0 ? Math.min(100, ((b.used_hours + b.reserved_hours) / total) * 100) : 100;
+  const bar = pct >= 100 ? 'bg-rose-500' : pct >= 80 ? 'bg-amber-500' : 'bg-emerald-500';
+  return (
+    <div className="min-w-[150px]">
+      <div className="flex justify-between font-mono text-[11px] mb-1">
+        <span className={isDark ? 'text-white font-bold' : 'text-slate-900 font-bold'}>{formatHours(b.remaining_hours)} left</span>
+        <span className={isDark ? 'text-slate-400' : 'text-slate-500'}>of {formatHours(b.limit_hours)}</span>
+      </div>
+      <div className={`h-1.5 rounded-full overflow-hidden ${isDark ? 'bg-[var(--kt-s3)]' : 'bg-slate-200'}`}>
+        <div className={`h-full ${bar}`} style={{ width: `${pct}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function HoursField({ label, hours, unlimited, onHours, onUnlimited, isDark }) {
+  const input = isDark ? 'bg-[var(--kt-s2)] border-[var(--kt-s4)] text-white' : 'bg-white border-slate-300 text-slate-900';
+  return (
+    <div>
+      <label className={`block font-semibold mb-1 ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>{label}</label>
+      <div className="flex items-center gap-3">
+        <input
+          type="number" min="0" step="any" inputMode="decimal" disabled={unlimited} value={unlimited ? '' : hours}
+          placeholder={unlimited ? 'Unlimited' : 'Hours, e.g. 10'} onChange={(e) => onHours(e.target.value)}
+          className={`w-32 px-3 py-1.5 rounded-lg border text-xs disabled:opacity-50 ${input}`} aria-label={`${label} (hours)`}
+        />
+        <label className={`flex items-center gap-1.5 cursor-pointer ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
+          <input type="checkbox" checked={unlimited} onChange={(e) => onUnlimited(e.target.checked)} /> Unlimited
+        </label>
+      </div>
+    </div>
+  );
+}
+
+function Modal({ title, onClose, children, isDark }) {
+  return (
+    <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className={`border rounded-2xl max-w-lg w-full max-h-[90vh] overflow-auto shadow-2xl ${isDark ? 'bg-[var(--kt-s1)] border-[var(--kt-s4)]' : 'bg-white border-slate-200'}`}>
+        <div className={`p-4 border-b flex items-center justify-between ${isDark ? 'border-[var(--kt-s3)]' : 'border-slate-200'}`}>
+          <h3 className={`text-sm font-bold ${isDark ? 'text-white' : 'text-slate-900'}`}>{title}</h3>
+          <button type="button" onClick={onClose} className={`p-1 rounded-lg cursor-pointer ${isDark ? 'text-slate-400 hover:text-white hover:bg-[var(--kt-s3)]' : 'text-slate-400 hover:bg-slate-100'}`} aria-label="Close"><X size={16} /></button>
+        </div>
+        <div className="p-5 text-xs space-y-4">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+export default function AdminAccounts() {
+  const { token, user: me } = useAuth();
+  const { isDark } = useTheme();
+  const [users, setUsers] = useState([]);
+  const [search, setSearch] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [dialog, setDialog] = useState(null); // {type:'create'|'hours'|'edit'|'ledger'|'delete'|'secret', user?, ...}
+  const [form, setForm] = useState({});
+  const [copied, setCopied] = useState(false);
+  const [ledger, setLedger] = useState([]);
+
+  const load = useCallback(async () => {
+    try {
+      const data = await api(token, '/users?limit=200');
+      setUsers(data.users || []);
+      setError('');
+    } catch (e) { setError(e.message); }
+  }, [token]);
+  useEffect(() => { load(); }, [load]);
+
+  const shown = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return users.filter((u) => !q || (u.name || '').toLowerCase().includes(q) || (u.email || '').toLowerCase().includes(q));
+  }, [users, search]);
+
+  const hoursBody = (f) => ({
+    ...(f.tUnl ? { transcribe_unlimited: true } : { transcribe_hours: f.tHours === '' ? null : Number(f.tHours) }),
+    ...(f.lUnl ? { translate_unlimited: true } : { translate_hours: f.lHours === '' ? null : Number(f.lHours) }),
+  });
+
+  const run = async (fn) => {
+    setBusy(true); setError('');
+    try { await fn(); await load(); } catch (e) { setError(e.message); } finally { setBusy(false); }
+  };
+
+  const openCreate = () => { setForm({ name: '', email: '', password: '', tHours: '10', lHours: '10', tUnl: false, lUnl: false }); setDialog({ type: 'create' }); setError(''); };
+  const openHours = (u) => {
+    setForm({ tHours: u.usage.transcribe.limit_hours ?? '', lHours: u.usage.translate.limit_hours ?? '', tUnl: u.usage.transcribe.unlimited, lUnl: u.usage.translate.unlimited });
+    setDialog({ type: 'hours', user: u }); setError('');
+  };
+  const openEdit = (u) => { setForm({ name: u.name, email: u.email, newPassword: '' }); setDialog({ type: 'edit', user: u }); setError(''); };
+  const openLedger = (u) => run(async () => {
+    const data = await api(token, `/users/${u.id}/usage?limit=200`);
+    setLedger(data.ledger || []); setDialog({ type: 'ledger', user: u });
+  });
+
+  const submitCreate = (e) => {
+    e.preventDefault();
+    run(async () => {
+      const data = await api(token, '/users', { method: 'POST', body: { name: form.name, email: form.email, password: form.password || null, ...hoursBody(form) } });
+      setDialog(data.generated_password ? { type: 'secret', user: data.user, password: data.generated_password } : null);
+    });
+  };
+  const submitHours = (e) => {
+    e.preventDefault();
+    run(async () => { await api(token, `/users/${dialog.user.id}/hours`, { method: 'PUT', body: hoursBody(form) }); setDialog(null); });
+  };
+  const submitEdit = (e, reset = false) => {
+    e.preventDefault();
+    run(async () => {
+      const body = { name: form.name, email: form.email, ...(reset ? { reset_password: true } : form.newPassword ? { new_password: form.newPassword } : {}) };
+      const data = await api(token, `/users/${dialog.user.id}/profile`, { method: 'PATCH', body });
+      setDialog(data.generated_password ? { type: 'secret', user: data.user, password: data.generated_password } : null);
+    });
+  };
+  const toggleBlock = (u) => run(() => api(token, `/users/${u.id}/status`, { method: 'PATCH', body: { is_blocked: !u.is_blocked } }));
+  const confirmDelete = () => run(async () => { await api(token, `/users/${dialog.user.id}`, { method: 'DELETE' }); setDialog(null); });
+
+  const card = isDark ? 'bg-[var(--kt-s1)] border-[var(--kt-s3)]' : 'bg-white border-slate-200 shadow-2xs';
+  const input = isDark ? 'bg-[var(--kt-s2)] border-[var(--kt-s4)] text-white placeholder-slate-500' : 'bg-white border-slate-300 text-slate-900 placeholder-slate-400';
+  const btn = isDark ? 'bg-[var(--kt-s2)] hover:bg-[var(--kt-s3)] text-slate-200 border-[var(--kt-s4)]' : 'bg-white hover:bg-slate-100 text-slate-700 border-slate-300';
+  const primary = isDark ? 'bg-[var(--kt-accent)] text-[var(--kt-accent-ink)]' : 'bg-blue-600 text-white';
+  const muted = isDark ? 'text-slate-400' : 'text-slate-500';
+  const strong = isDark ? 'text-white' : 'text-slate-900';
+
+  return (
+    <div className="space-y-4" data-testid="admin-accounts">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div>
+          <h2 className={`text-base font-bold ${strong}`}>Accounts &amp; Hours</h2>
+          <p className={`text-xs ${muted}`}>Create accounts on any email domain and set how many hours each person can transcribe and translate. Limits are enforced on the server.</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <button type="button" onClick={load} className={`p-2 rounded-lg border cursor-pointer ${btn}`} title="Refresh" aria-label="Refresh"><RefreshCw size={14} /></button>
+          <button type="button" onClick={openCreate} className={`px-3 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 cursor-pointer ${primary}`}><UserPlus size={14} /> Create account</button>
+        </div>
+      </div>
+
+      {error && !dialog && (
+        <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-xs text-rose-300 flex items-center gap-2"><AlertTriangle size={14} /> {error}</div>
+      )}
+
+      <div className="relative max-w-md">
+        <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+        <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search by name or email..." className={`w-full pl-9 pr-3 py-1.5 rounded-lg border text-xs ${input}`} />
+      </div>
+
+      <div className={`border rounded-2xl overflow-x-auto ${card}`}>
+        <table className="w-full text-xs">
+          <thead>
+            <tr className={`text-left ${muted} border-b ${isDark ? 'border-[var(--kt-s3)]' : 'border-slate-200'}`}>
+              <th className="p-3 font-semibold">Account</th>
+              <th className="p-3 font-semibold">Transcription</th>
+              <th className="p-3 font-semibold">Translation</th>
+              <th className="p-3 font-semibold text-right">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {shown.map((u) => (
+              <tr key={u.id} className={`border-b last:border-0 ${isDark ? 'border-[var(--kt-s3)]' : 'border-slate-100'}`}>
+                <td className="p-3">
+                  <div className={`font-semibold ${strong}`}>{u.name} {u.is_admin && <span className="ml-1 text-[9px] px-1.5 py-0.5 rounded bg-[var(--kt-accent)]/20 text-[var(--kt-accent)] font-bold">ADMIN</span>} {u.is_blocked && <span className="ml-1 text-[9px] px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-400 font-bold">DISABLED</span>}</div>
+                  <div className={`font-mono ${muted}`}>{u.email}</div>
+                </td>
+                <td className="p-3"><Meter b={u.usage.transcribe} isDark={isDark} /></td>
+                <td className="p-3"><Meter b={u.usage.translate} isDark={isDark} /></td>
+                <td className="p-3">
+                  <div className="flex justify-end gap-1.5">
+                    <button type="button" onClick={() => openHours(u)} className={`px-2 py-1.5 rounded-lg border flex items-center gap-1 cursor-pointer ${btn}`} title="Edit hours"><Clock size={12} /> Hours</button>
+                    <button type="button" onClick={() => openLedger(u)} className={`p-1.5 rounded-lg border cursor-pointer ${btn}`} title="Usage history" aria-label="Usage history"><ListOrdered size={13} /></button>
+                    <button type="button" onClick={() => openEdit(u)} className={`p-1.5 rounded-lg border cursor-pointer ${btn}`} title="Edit account" aria-label="Edit account"><Pencil size={13} /></button>
+                    {!u.is_admin && (
+                      <>
+                        <button type="button" onClick={() => toggleBlock(u)} className={`p-1.5 rounded-lg border cursor-pointer ${btn}`} title={u.is_blocked ? 'Enable account' : 'Disable account'} aria-label={u.is_blocked ? 'Enable account' : 'Disable account'}>{u.is_blocked ? <UserCheck size={13} /> : <Ban size={13} />}</button>
+                        <button type="button" onClick={() => setDialog({ type: 'delete', user: u })} className="p-1.5 rounded-lg border border-rose-500/40 text-rose-400 hover:bg-rose-500/10 cursor-pointer" title="Delete account" aria-label="Delete account"><Trash2 size={13} /></button>
+                      </>
+                    )}
+                  </div>
+                </td>
+              </tr>
+            ))}
+            {shown.length === 0 && <tr><td colSpan={4} className={`p-6 text-center ${muted}`}>No accounts found.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+
+      {dialog?.type === 'create' && (
+        <Modal title="Create account" onClose={() => setDialog(null)} isDark={isDark}>
+          <form onSubmit={submitCreate} className="space-y-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div><label className={`block font-semibold mb-1 ${strong}`}>Name</label><input required minLength={2} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className={`w-full px-3 py-1.5 rounded-lg border ${input}`} /></div>
+              <div><label className={`block font-semibold mb-1 ${strong}`}>Email (any domain)</label><input required type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} className={`w-full px-3 py-1.5 rounded-lg border ${input}`} /></div>
+            </div>
+            <div><label className={`block font-semibold mb-1 ${strong}`}>Password <span className={`font-normal ${muted}`}>(leave empty to generate one)</span></label><input type="text" autoComplete="off" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} className={`w-full px-3 py-1.5 rounded-lg border font-mono ${input}`} placeholder="Generated if empty" /></div>
+            <HoursField label="Transcription hours" hours={form.tHours} unlimited={form.tUnl} onHours={(v) => setForm({ ...form, tHours: v })} onUnlimited={(v) => setForm({ ...form, tUnl: v })} isDark={isDark} />
+            <HoursField label="Translation hours" hours={form.lHours} unlimited={form.lUnl} onHours={(v) => setForm({ ...form, lHours: v })} onUnlimited={(v) => setForm({ ...form, lUnl: v })} isDark={isDark} />
+            {error && <div className="text-rose-400">{error}</div>}
+            <div className="flex justify-end gap-2"><button type="button" onClick={() => setDialog(null)} className={`px-3 py-2 rounded-lg border cursor-pointer ${btn}`}>Cancel</button><button disabled={busy} className={`px-4 py-2 rounded-lg font-bold cursor-pointer disabled:opacity-50 ${primary}`}>Create account</button></div>
+          </form>
+        </Modal>
+      )}
+
+      {dialog?.type === 'hours' && (
+        <Modal title={`Hours · ${dialog.user.email}`} onClose={() => setDialog(null)} isDark={isDark}>
+          <form onSubmit={submitHours} className="space-y-4">
+            <p className={muted}>Used hours cannot be edited, only the limit. Lowering a limit below what is already used stops new jobs immediately.</p>
+            <HoursField label="Transcription hours" hours={form.tHours} unlimited={form.tUnl} onHours={(v) => setForm({ ...form, tHours: v })} onUnlimited={(v) => setForm({ ...form, tUnl: v })} isDark={isDark} />
+            <HoursField label="Translation hours" hours={form.lHours} unlimited={form.lUnl} onHours={(v) => setForm({ ...form, lHours: v })} onUnlimited={(v) => setForm({ ...form, lUnl: v })} isDark={isDark} />
+            {error && <div className="text-rose-400">{error}</div>}
+            <div className="flex justify-end gap-2"><button type="button" onClick={() => setDialog(null)} className={`px-3 py-2 rounded-lg border cursor-pointer ${btn}`}>Cancel</button><button disabled={busy} className={`px-4 py-2 rounded-lg font-bold cursor-pointer disabled:opacity-50 ${primary}`}>Save hours</button></div>
+          </form>
+        </Modal>
+      )}
+
+      {dialog?.type === 'edit' && (
+        <Modal title={`Edit account · ${dialog.user.email}`} onClose={() => setDialog(null)} isDark={isDark}>
+          <form onSubmit={submitEdit} className="space-y-4">
+            <div><label className={`block font-semibold mb-1 ${strong}`}>Name</label><input required minLength={2} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className={`w-full px-3 py-1.5 rounded-lg border ${input}`} /></div>
+            <div><label className={`block font-semibold mb-1 ${strong}`}>Email</label><input required type="email" disabled={dialog.user.is_admin} value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} className={`w-full px-3 py-1.5 rounded-lg border disabled:opacity-50 ${input}`} /></div>
+            {!(dialog.user.is_admin && dialog.user.id !== me?.id) && (
+              <div><label className={`block font-semibold mb-1 ${strong}`}>New password <span className={`font-normal ${muted}`}>(optional; signs the person out everywhere)</span></label>
+                <div className="flex gap-2"><input type="text" autoComplete="off" value={form.newPassword} onChange={(e) => setForm({ ...form, newPassword: e.target.value })} className={`flex-1 px-3 py-1.5 rounded-lg border font-mono ${input}`} placeholder="Leave empty to keep the current one" />
+                  <button type="button" disabled={busy} onClick={(e) => submitEdit(e, true)} className={`px-3 py-1.5 rounded-lg border flex items-center gap-1 cursor-pointer ${btn}`}><KeyRound size={12} /> Generate</button></div></div>
+            )}
+            {error && <div className="text-rose-400">{error}</div>}
+            <div className="flex justify-end gap-2"><button type="button" onClick={() => setDialog(null)} className={`px-3 py-2 rounded-lg border cursor-pointer ${btn}`}>Cancel</button><button disabled={busy} className={`px-4 py-2 rounded-lg font-bold cursor-pointer disabled:opacity-50 ${primary}`}>Save</button></div>
+          </form>
+        </Modal>
+      )}
+
+      {dialog?.type === 'secret' && (
+        <Modal title="Account ready" onClose={() => setDialog(null)} isDark={isDark}>
+          <p className={strong}>Share this password with <strong>{dialog.user.email}</strong> now. It is shown only once and is not stored anywhere readable.</p>
+          <div className={`flex items-center justify-between gap-2 p-3 rounded-xl border font-mono text-sm ${isDark ? 'bg-[var(--kt-s0)] border-[var(--kt-s3)] text-white' : 'bg-slate-50 border-slate-200 text-slate-900'}`}>
+            <span data-testid="generated-password" className="break-all select-all">{dialog.password}</span>
+            <button type="button" onClick={() => { navigator.clipboard?.writeText(dialog.password); setCopied(true); setTimeout(() => setCopied(false), 1500); }} className={`p-2 rounded-lg border cursor-pointer ${btn}`} aria-label="Copy password">{copied ? <Check size={14} /> : <Copy size={14} />}</button>
+          </div>
+          <div className="flex justify-end"><button type="button" onClick={() => setDialog(null)} className={`px-4 py-2 rounded-lg font-bold cursor-pointer ${primary}`}>Done</button></div>
+        </Modal>
+      )}
+
+      {dialog?.type === 'delete' && (
+        <Modal title="Delete account" onClose={() => setDialog(null)} isDark={isDark}>
+          <p className={strong}>Delete <strong>{dialog.user.email}</strong>? They are signed out and cannot sign in again. Their usage history is kept.</p>
+          {error && <div className="text-rose-400">{error}</div>}
+          <div className="flex justify-end gap-2"><button type="button" onClick={() => setDialog(null)} className={`px-3 py-2 rounded-lg border cursor-pointer ${btn}`}>Cancel</button><button disabled={busy} onClick={confirmDelete} className="px-4 py-2 rounded-lg font-bold bg-rose-600 text-white cursor-pointer disabled:opacity-50">Delete</button></div>
+        </Modal>
+      )}
+
+      {dialog?.type === 'ledger' && (
+        <Modal title={`Usage history · ${dialog.user.email}`} onClose={() => setDialog(null)} isDark={isDark}>
+          {ledger.length === 0 ? <p className={muted}>No usage yet.</p> : (
+            <div className="max-h-[50vh] overflow-auto">
+              <table className="w-full text-[11px]"><thead><tr className={`text-left ${muted}`}><th className="py-1 pr-2">When</th><th className="pr-2">Budget</th><th className="pr-2">Event</th><th className="pr-2">Hours</th><th>What</th></tr></thead>
+                <tbody>{ledger.map((r) => (
+                  <tr key={r.id} className={`border-t ${isDark ? 'border-[var(--kt-s3)] text-slate-300' : 'border-slate-100 text-slate-700'}`}>
+                    <td className="py-1 pr-2 whitespace-nowrap">{r.at ? new Date(r.at + (r.at.endsWith('Z') ? '' : 'Z')).toLocaleString() : ''}</td>
+                    <td className="pr-2">{r.kind === 'transcribe' ? 'Transcription' : 'Translation'}</td><td className="pr-2">{r.event}</td>
+                    <td className="pr-2 font-mono">{r.hours ? formatHours(r.hours) : '-'}</td><td className="truncate max-w-[160px]" title={r.note || r.ref || ''}>{r.note || r.ref || r.route}</td>
+                  </tr>))}</tbody></table>
+            </div>
+          )}
+        </Modal>
+      )}
+    </div>
+  );
+}

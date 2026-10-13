@@ -4,7 +4,7 @@ import logging
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy.orm import Session
 from sqlalchemy import func, desc, distinct
 
@@ -19,6 +19,12 @@ from app.auth_module.models import (
     SystemHardwareSnapshot, AdminAuditLog, AdminNotification
 )
 from app.auth_module.routes import get_current_user_from_token, get_current_admin_user, is_super_admin
+from app.auth_module.security import (
+    validate_verbolabs_email, validate_password, hash_password, generate_token,
+)
+from app.auth_module.usage import (
+    usage_summary, hours_to_ms, record_limit_change, list_ledger, TRANSCRIBE, TRANSLATE,
+)
 from app.config import UPLOAD_DIR
 
 logger = logging.getLogger(__name__)
@@ -292,6 +298,7 @@ def list_users(
             "can_export": getattr(u, "can_export", True) if getattr(u, "can_export", None) is not None else True,
             "can_ai_optimize": getattr(u, "can_ai_optimize", True) if getattr(u, "can_ai_optimize", None) is not None else True,
             "can_audio_peaks": getattr(u, "can_audio_peaks", True) if getattr(u, "can_audio_peaks", None) is not None else True,
+            "usage": usage_summary(u),
             "created_at": u.created_at.isoformat() if u.created_at else None,
             "last_login_at": last_login.login_time.isoformat() if last_login and last_login.login_time else None,
             "last_login_location": last_login.operating_location if last_login else None
@@ -494,6 +501,8 @@ def update_user_status(
 
     if target_user.id == admin.id and payload.is_blocked is True:
         raise HTTPException(status_code=400, detail="Administrators cannot block their own account.")
+    if payload.is_blocked is True and is_super_admin(target_user.email):
+        raise HTTPException(status_code=400, detail="Administrator accounts cannot be disabled here.")
 
     if payload.role is not None:
         new_role = payload.role.strip().lower()
@@ -974,3 +983,227 @@ def mark_all_notifications_read(
     ).update({"is_read": True})
     db.commit()
     return {"success": True, "message": "All notifications marked as read."}
+
+
+# ==============================================================================
+# 9. Account creation, editing, deletion and hour budgets
+# ==============================================================================
+import re
+import secrets
+import threading
+import time
+from collections import defaultdict, deque
+
+_ADMIN_WRITES_PER_MINUTE = 30
+_admin_write_log: Dict[str, deque] = defaultdict(deque)
+_admin_write_lock = threading.Lock()
+
+
+def admin_write_guard(admin: User = Depends(get_current_admin_user)) -> User:
+    """Admin check plus a per-admin rate limit on every state-changing account action."""
+    now = time.monotonic()
+    with _admin_write_lock:
+        window = _admin_write_log[admin.id]
+        while window and now - window[0] > 60:
+            window.popleft()
+        if len(window) >= _ADMIN_WRITES_PER_MINUTE:
+            raise HTTPException(status_code=429, detail="Too many admin actions. Wait a minute and try again.")
+        window.append(now)
+    return admin
+
+
+def _audit(db: Session, admin: User, event_type: str, details: str, request: Request) -> None:
+    """Never put passwords or tokens in `details`."""
+    db.add(AdminAuditLog(
+        user_id=admin.id, event_type=event_type, details=details[:1000],
+        ip_address=request.client.host if request.client else None,
+        user_agent=(request.headers.get("user-agent") or "")[:300],
+    ))
+
+
+def _generate_password() -> str:
+    """16 random characters that satisfy the sign-up password policy."""
+    alphabet = "abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    while True:
+        pwd = "".join(secrets.choice(alphabet) for _ in range(14)) + secrets.choice("!@#$%^&*") + secrets.choice("23456789")
+        ok, _ = validate_password(pwd)
+        if ok:
+            return pwd
+
+
+def _resolve_limit(hours: Optional[float], unlimited: bool, label: str) -> Optional[int]:
+    """Explicit on purpose: either a number of hours, or unlimited=true. Never an accidental 'no limit'."""
+    if unlimited:
+        if hours is not None:
+            raise HTTPException(status_code=400, detail=f"{label}: send either hours or unlimited, not both.")
+        return None
+    if hours is None:
+        raise HTTPException(status_code=400, detail=f"{label}: enter the number of hours, or choose unlimited.")
+    return hours_to_ms(hours)
+
+
+def _user_row(u: User) -> Dict[str, Any]:
+    return {
+        "id": u.id, "name": u.name, "email": u.email, "role": u.role or "editor",
+        "is_admin": is_super_admin(u.email), "is_blocked": bool(u.is_blocked),
+        "is_verified": bool(u.is_verified), "usage": usage_summary(u),
+    }
+
+
+class CreateUserRequest(BaseModel):
+    name: str
+    email: str
+    password: Optional[str] = None  # omit to have the server generate one (returned once)
+    transcribe_hours: Optional[float] = None
+    transcribe_unlimited: bool = False
+    translate_hours: Optional[float] = None
+    translate_unlimited: bool = False
+
+
+@admin_router.post("/users", status_code=201)
+def create_user(payload: CreateUserRequest, request: Request, response: Response, admin: User = Depends(admin_write_guard), db: Session = Depends(get_auth_db)):
+    """Creates a ready-to-use account on any e-mail domain (public sign-up stays @verbolabs.com only)."""
+    name = (payload.name or "").strip()
+    if not (2 <= len(name) <= 100):
+        raise HTTPException(status_code=400, detail="Name must be 2-100 characters.")
+    email = (payload.email or "").strip().lower()
+    ok, err = validate_verbolabs_email(email)
+    if not ok or len(email) > 255:
+        raise HTTPException(status_code=400, detail=err or "Please enter a valid email address.")
+    t_ms = _resolve_limit(payload.transcribe_hours, payload.transcribe_unlimited, "Transcription hours")
+    l_ms = _resolve_limit(payload.translate_hours, payload.translate_unlimited, "Translation hours")
+    if db.query(User).filter(User.email == email).first():
+        raise HTTPException(status_code=409, detail="An account with this email already exists.")
+
+    generated = payload.password is None or not payload.password.strip()
+    password = _generate_password() if generated else payload.password
+    if not generated:
+        ok, errs = validate_password(password)
+        if not ok:
+            raise HTTPException(status_code=400, detail="Password does not satisfy requirements: " + "; ".join(errs))
+    pwd_hash, salt = hash_password(password)
+    user = User(
+        name=name, email=email, password_hash=pwd_hash, salt=salt, is_verified=True, role="editor", is_admin=False,
+        transcribe_limit_ms=t_ms, translate_limit_ms=l_ms,
+    )
+    db.add(user)
+    db.flush()
+    record_limit_change(db, user, TRANSCRIBE, None, t_ms, admin.id)
+    record_limit_change(db, user, TRANSLATE, None, l_ms, admin.id)
+    _audit(db, admin, "user_created", f"{admin.email} created {email}", request)
+    db.commit()
+    out = {"success": True, "user": _user_row(user)}
+    response.headers["Cache-Control"] = "no-store"
+    if generated:
+        out["generated_password"] = password  # shown once; only the hash is stored
+    return out
+
+
+class UpdateUserRequest(BaseModel):
+    name: Optional[str] = None
+    email: Optional[str] = None
+    new_password: Optional[str] = None  # set it, or send reset_password=true for a generated one
+    reset_password: bool = False
+
+
+@admin_router.patch("/users/{user_id}/profile")
+def edit_user(user_id: str, payload: UpdateUserRequest, request: Request, response: Response, admin: User = Depends(admin_write_guard), db: Session = Depends(get_auth_db)):
+    target = db.query(User).filter(User.id == user_id).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found.")
+    protected = is_super_admin(target.email) and target.id != admin.id
+    changed = []
+    if payload.name is not None:
+        name = payload.name.strip()
+        if not (2 <= len(name) <= 100):
+            raise HTTPException(status_code=400, detail="Name must be 2-100 characters.")
+        target.name = name
+        changed.append("name")
+    if payload.email is not None:
+        new_email = payload.email.strip().lower()
+        ok, err = validate_verbolabs_email(new_email)
+        if not ok or len(new_email) > 255:
+            raise HTTPException(status_code=400, detail=err or "Please enter a valid email address.")
+        if new_email != target.email:
+            if is_super_admin(target.email) or is_super_admin(new_email):
+                raise HTTPException(status_code=400, detail="Administrator e-mail addresses are set in the server configuration.")
+            if db.query(User).filter(User.email == new_email, User.id != target.id).first():
+                raise HTTPException(status_code=409, detail="Another account already uses this email.")
+            target.email = new_email
+            changed.append("email")
+    new_password = None
+    if payload.reset_password or payload.new_password:
+        if protected:
+            raise HTTPException(status_code=403, detail="Another administrator's password cannot be changed from here.")
+        if payload.new_password:
+            ok, errs = validate_password(payload.new_password)
+            if not ok:
+                raise HTTPException(status_code=400, detail="Password does not satisfy requirements: " + "; ".join(errs))
+            new_password = payload.new_password
+        else:
+            new_password = _generate_password()
+        target.password_hash, target.salt = hash_password(new_password)
+        db.query(AuthSession).filter(AuthSession.user_id == target.id).update({"is_active": False})
+        changed.append("password")
+    _audit(db, admin, "user_edited", f"{admin.email} edited {target.email}: {', '.join(changed) or 'nothing'}", request)
+    db.commit()
+    out = {"success": True, "user": _user_row(target)}
+    response.headers["Cache-Control"] = "no-store"
+    if new_password and not payload.new_password:
+        out["generated_password"] = new_password
+    return out
+
+
+class HoursRequest(BaseModel):
+    transcribe_hours: Optional[float] = None
+    transcribe_unlimited: Optional[bool] = None
+    translate_hours: Optional[float] = None
+    translate_unlimited: Optional[bool] = None
+
+
+@admin_router.put("/users/{user_id}/hours")
+def set_user_hours(user_id: str, payload: HoursRequest, request: Request, admin: User = Depends(admin_write_guard), db: Session = Depends(get_auth_db)):
+    """Sets the hour budgets. Only the budgets you send change. Used hours can never be edited, only the limit."""
+    target = db.query(User).filter(User.id == user_id).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found.")
+    sent = False
+    for kind, hours, unlimited, col, label in (
+        (TRANSCRIBE, payload.transcribe_hours, payload.transcribe_unlimited, "transcribe_limit_ms", "Transcription hours"),
+        (TRANSLATE, payload.translate_hours, payload.translate_unlimited, "translate_limit_ms", "Translation hours"),
+    ):
+        if hours is None and not unlimited:
+            continue
+        new_ms = _resolve_limit(hours, bool(unlimited), label)
+        old_ms = getattr(target, col)
+        setattr(target, col, new_ms)
+        record_limit_change(db, target, kind, old_ms, new_ms, admin.id)
+        sent = True
+    if not sent:
+        raise HTTPException(status_code=400, detail="Send transcribe_hours and/or translate_hours (or the matching *_unlimited flag).")
+    _audit(db, admin, "user_hours_updated", f"{admin.email} changed hour limits of {target.email}", request)
+    db.commit()
+    return {"success": True, "user": _user_row(target)}
+
+
+@admin_router.delete("/users/{user_id}")
+def delete_user(user_id: str, request: Request, admin: User = Depends(admin_write_guard), db: Session = Depends(get_auth_db)):
+    target = db.query(User).filter(User.id == user_id).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found.")
+    if target.id == admin.id or is_super_admin(target.email):
+        raise HTTPException(status_code=400, detail="Administrator accounts cannot be deleted here.")
+    email = target.email
+    _audit(db, admin, "user_deleted", f"{admin.email} deleted {email}", request)
+    db.delete(target)  # sessions, uploads, runs cascade; the usage ledger deliberately stays
+    db.commit()
+    return {"success": True, "message": f"Deleted {email}."}
+
+
+@admin_router.get("/users/{user_id}/usage")
+def get_user_usage(user_id: str, limit: int = Query(200, ge=1, le=1000), offset: int = Query(0, ge=0),
+                   admin: User = Depends(get_current_admin_user), db: Session = Depends(get_auth_db)):
+    target = db.query(User).filter(User.id == user_id).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found.")
+    return {"success": True, "user": _user_row(target), "ledger": list_ledger(db, target.id, limit, offset)}

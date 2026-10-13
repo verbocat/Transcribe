@@ -30,14 +30,15 @@ from .security import (
     verify_otp_hash,
     get_otp_secret
 )
+from .usage import usage_summary
 from .brevo_service import send_verification_email, send_password_reset_email, send_mfa_login_otp_email
 
-SUPER_ADMIN_EMAILS = {"arpit.purohit@verbolabs.com", "arpit.purohit@verbolab.com"}
+from .admin_config import is_admin_email, BUILTIN_ADMIN_EMAILS as SUPER_ADMIN_EMAILS
+
 
 def is_super_admin(email: Optional[str]) -> bool:
-    if not email:
-        return False
-    return email.strip().lower() in SUPER_ADMIN_EMAILS
+    """True for the built-in admin and any address listed in the ADMIN_EMAILS env var."""
+    return is_admin_email(email)
 
 auth_router = APIRouter()
 
@@ -467,7 +468,7 @@ def _complete_login(db: Session, user: User, request: Request) -> dict:
             "name": user.name,
             "email": user.email,
             "role": user.role or "editor",
-            "is_admin": bool(user.is_admin or (user.role and user.role.lower() == "admin"))
+            "is_admin": is_super_admin(user.email)
         }
     }
 
@@ -983,9 +984,16 @@ def get_current_user_profile(
             "can_ai_optimize": getattr(user, "can_ai_optimize", True) if getattr(user, "can_ai_optimize", None) is not None else True,
             "can_audio_peaks": getattr(user, "can_audio_peaks", True) if getattr(user, "can_audio_peaks", None) is not None else True,
             "is_verified": user.is_verified,
+            "usage": usage_summary(user),
             "created_at": user.created_at.isoformat() if user.created_at else None
         }
     }
+
+
+@auth_router.get("/me/usage")
+def get_my_usage(current_user: User = Depends(get_current_user_from_token)):
+    """Remaining transcription / translation hours for the signed-in account (read-only)."""
+    return {"success": True, "usage": usage_summary(current_user)}
 
 
 @auth_router.post("/logout")

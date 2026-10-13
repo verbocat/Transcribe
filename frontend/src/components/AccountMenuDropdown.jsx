@@ -4,6 +4,7 @@ import {
   Sparkles, Settings, BookOpen, UserCog
 } from 'lucide-react';
 import UserProfileModal from './UserProfileModal';
+import UsageBadge, { useUsage, formatHours } from './UsageBadge';
 
 /**
  * Floating Account Menu & Status Dropdown.
@@ -39,6 +40,8 @@ export default function AccountMenuDropdown({ user, onOpenLogoutModal, compact =
     };
   }, [isOpen]);
 
+  const usage = useUsage(Boolean(user) && isOpen);
+
   if (!user) return null;
 
   const initial = user.name ? user.name.charAt(0).toUpperCase() : (user.email ? user.email.charAt(0).toUpperCase() : 'U');
@@ -51,6 +54,7 @@ export default function AccountMenuDropdown({ user, onOpenLogoutModal, compact =
 
   return (
     <>
+      {!compact && <UsageBadge className="mr-2" />}
       <div className="relative shrink-0" ref={dropdownRef}>
         {/* Trigger Button */}
         <button
@@ -107,6 +111,22 @@ export default function AccountMenuDropdown({ user, onOpenLogoutModal, compact =
               </div>
             </div>
 
+            {/* Hours left */}
+            {usage && (
+              <div className="mb-2 p-2.5 rounded-xl bg-[var(--kt-s0)] border border-[var(--kt-s3)] text-[11px] space-y-1" data-testid="usage-menu">
+                <div className="text-slate-400 font-medium">Hours left on your account</div>
+                {[['Transcription', usage.transcribe], ['Translation', usage.translate]].map(([label, b]) => (
+                  <div key={label} className="flex items-center justify-between">
+                    <span className="text-slate-300">{label}</span>
+                    <span className="font-mono font-bold text-white">
+                      {formatHours(b.remaining_hours)}
+                      {!b.unlimited && <span className="text-slate-500 font-normal"> of {formatHours(b.limit_hours)}</span>}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+
             {/* Standard Profile Navigation Items */}
             <div className="space-y-0.5 py-1">
               <button
@@ -138,12 +158,7 @@ export default function AccountMenuDropdown({ user, onOpenLogoutModal, compact =
             </div>
 
             {/* Admin Command Center Link - STRICTLY RESERVED FOR SUPER ADMIN */}
-            {Boolean(
-              user?.is_admin &&
-              user?.email &&
-              (user.email.toLowerCase() === 'arpit.purohit@verbolabs.com' ||
-               user.email.toLowerCase() === 'arpit.purohit@verbolab.com')
-            ) && (
+            {Boolean(user?.is_admin) && (
               <div className="pt-1.5 pb-1 border-t border-[var(--kt-s3)] mt-1">
                 <button
                   type="button"

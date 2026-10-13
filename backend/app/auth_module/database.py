@@ -70,23 +70,45 @@ def init_auth_db():
             if "is_blocked" not in existing_user_cols:
                 conn.execute(text("ALTER TABLE auth_users ADD COLUMN is_blocked BOOLEAN DEFAULT 0"))
 
-            # Lock admin role strictly to arpit.purohit@verbolabs.com / arpit.purohit@verbolab.com
-            conn.execute(text("""
-                UPDATE auth_users 
-                SET is_admin = 0, role = 'editor' 
-                WHERE lower(email) NOT IN ('arpit.purohit@verbolabs.com', 'arpit.purohit@verbolab.com') AND is_admin = 1
-            """))
-            conn.execute(text("""
-                UPDATE auth_users 
-                SET is_admin = 1, role = 'admin' 
-                WHERE lower(email) IN ('arpit.purohit@verbolabs.com', 'arpit.purohit@verbolab.com')
-            """))
+            # Admin status follows the configured admin e-mails only (see admin_config.py).
+            from .admin_config import admin_emails
+            emails = sorted(admin_emails())
+            marks = ", ".join(f":e{i}" for i in range(len(emails)))
+            params = {f"e{i}": e for i, e in enumerate(emails)}
+            conn.execute(text(f"UPDATE auth_users SET is_admin = 0, role = 'editor' WHERE lower(email) NOT IN ({marks}) AND is_admin = 1"), params)
+            conn.execute(text(f"UPDATE auth_users SET is_admin = 1, role = 'admin' WHERE lower(email) IN ({marks})"), params)
             conn.commit()
             logger.info("Migrated auth_users table: verified schema columns and enforced super-admin exclusivity.")
         except Exception as e:
             logger.debug(f"Table inspection/migration note: {e}")
 
+    _migrate_usage_schema()
     logger.info(f"Auth SQLite DB initialized at: {db_file_path}")
+
+def _migrate_usage_schema():
+    """Additive and idempotent: adds the hour-budget columns and the append-only triggers.
+    Existing accounts get NULL limits (unlimited) and zero usage, so nothing changes for them
+    until an admin sets a limit."""
+    from sqlalchemy import text
+    int_cols = {
+        "transcribe_limit_ms": "INTEGER",
+        "translate_limit_ms": "INTEGER",
+        "transcribe_used_ms": "INTEGER NOT NULL DEFAULT 0",
+        "translate_used_ms": "INTEGER NOT NULL DEFAULT 0",
+        "transcribe_reserved_ms": "INTEGER NOT NULL DEFAULT 0",
+        "translate_reserved_ms": "INTEGER NOT NULL DEFAULT 0",
+    }
+    with engine.begin() as conn:
+        existing = {row[1] for row in conn.execute(text("PRAGMA table_info(auth_users)")).fetchall()}
+        for name, ddl in int_cols.items():
+            if name not in existing:
+                conn.execute(text(f"ALTER TABLE auth_users ADD COLUMN {name} {ddl}"))
+        for op in ("UPDATE", "DELETE"):
+            conn.execute(text(
+                f"CREATE TRIGGER IF NOT EXISTS usage_ledger_no_{op.lower()} BEFORE {op} ON usage_ledger "
+                f"BEGIN SELECT RAISE(ABORT, 'usage_ledger is append-only'); END"
+            ))
+
 
 def get_auth_db():
     """FastAPI dependency for obtaining a database session."""

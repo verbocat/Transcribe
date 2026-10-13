@@ -21,6 +21,15 @@ class User(AuthBase):
     can_export = Column(Boolean, default=True, nullable=False)
     can_ai_optimize = Column(Boolean, default=True, nullable=False)
     can_audio_peaks = Column(Boolean, default=True, nullable=False)
+    # Hour budgets, stored as whole milliseconds so reserve/settle/refund arithmetic is exact.
+    # *_limit_ms NULL means unlimited. used = finished work, reserved = jobs in flight; the
+    # server only lets a job start when used + reserved + job <= limit (see usage.py).
+    transcribe_limit_ms = Column(Integer, nullable=True)
+    translate_limit_ms = Column(Integer, nullable=True)
+    transcribe_used_ms = Column(Integer, default=0, nullable=False)
+    translate_used_ms = Column(Integer, default=0, nullable=False)
+    transcribe_reserved_ms = Column(Integer, default=0, nullable=False)
+    translate_reserved_ms = Column(Integer, default=0, nullable=False)
     is_blocked = Column(Boolean, default=False, nullable=False)
     is_verified = Column(Boolean, default=False, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
@@ -245,3 +254,37 @@ class UserPreference(AuthBase):
     key = Column(String(64), primary_key=True)
     value = Column(Text, nullable=False)  # JSON
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+
+
+class UsageReservation(AuthBase):
+    """One metered job. Hours are reserved before the job starts and settled (charged) or refunded after."""
+    __tablename__ = "usage_reservations"
+
+    id = Column(String(64), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(String(64), nullable=False, index=True)  # no FK: survives deleting the user
+    kind = Column(String(16), nullable=False)  # "transcribe" | "translate"
+    ms = Column(Integer, nullable=False)
+    status = Column(String(16), default="reserved", nullable=False, index=True)  # reserved | settled | refunded
+    route = Column(String(96), nullable=False)
+    ref = Column(String(255), nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    closed_at = Column(DateTime, nullable=True)
+
+
+class UsageLedger(AuthBase):
+    """Append-only usage history (who, when, what, how long). Rows are never updated or deleted:
+    SQLite triggers and ORM hooks in usage.py both refuse it."""
+    __tablename__ = "usage_ledger"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String(64), nullable=False, index=True)
+    user_email = Column(String(255), nullable=True)  # snapshot, so the row still reads after the user is deleted
+    kind = Column(String(16), nullable=False)
+    event = Column(String(24), nullable=False)  # reserve | settle | refund | limit_change
+    ms = Column(Integer, default=0, nullable=False)
+    reservation_id = Column(String(64), nullable=True, index=True)
+    route = Column(String(96), nullable=True)
+    ref = Column(String(255), nullable=True)
+    note = Column(Text, nullable=True)
+    actor_id = Column(String(64), nullable=True)  # admin who made a limit_change
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
