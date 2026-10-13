@@ -210,7 +210,7 @@ def get_current_user_from_token(
 def get_current_admin_user(
     current_user: User = Depends(get_current_user_from_token)
 ) -> User:
-    """Dependency ensuring caller is strictly the Super Administrator (Arpit Purohit)."""
+    """Dependency ensuring caller is strictly the Super Administrator (Divyanshu Singh Chouhan)."""
     if not is_super_admin(current_user.email):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

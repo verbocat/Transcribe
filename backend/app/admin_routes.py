@@ -109,12 +109,12 @@ def claim_initial_admin(
     db: Session = Depends(get_auth_db)
 ):
     """
-    Bootstrap helper: Strictly restricted to Arpit Purohit.
+    Bootstrap helper: Strictly restricted to Divyanshu Singh Chouhan.
     """
     if not is_super_admin(current_user.email):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access forbidden: Super Administrator role is strictly reserved for Arpit Purohit."
+            detail="Access forbidden: Super Administrator role is strictly reserved for Divyanshu Singh Chouhan."
         )
 
     current_user.is_admin = True
@@ -509,7 +509,7 @@ def update_user_status(
         if new_role == "admin" and not is_super_admin(target_user.email):
             raise HTTPException(
                 status_code=400,
-                detail="Super Administrator status is strictly reserved for Arpit Purohit."
+                detail="Super Administrator status is strictly reserved for Divyanshu Singh Chouhan."
             )
         target_user.role = new_role
         target_user.is_admin = is_super_admin(target_user.email) and (new_role == "admin")
@@ -518,7 +518,7 @@ def update_user_status(
         if payload.is_admin and not is_super_admin(target_user.email):
             raise HTTPException(
                 status_code=400,
-                detail="Super Administrator status is strictly reserved for Arpit Purohit."
+                detail="Super Administrator status is strictly reserved for Divyanshu Singh Chouhan."
             )
         target_user.is_admin = bool(payload.is_admin and is_super_admin(target_user.email))
         if target_user.is_admin:

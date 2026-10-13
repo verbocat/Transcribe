@@ -145,7 +145,7 @@ export default function AdminDashboard({ onBackToStudio, user: currentUser, onLo
       const res = await fetch(`${API_BASE}/api/admin/overview`, { headers: authHeaders });
       if (!res.ok) {
         if (res.status === 403) {
-          setError('Access restricted: Enterprise Admin Command Center is reserved exclusively for the Super Administrator (Arpit Purohit).');
+          setError('Access restricted: Enterprise Admin Command Center is reserved exclusively for the Super Administrator (Divyanshu Singh Chouhan).');
         } else {
           setError(`Server responded with status ${res.status}`);
         }
@@ -395,7 +395,7 @@ export default function AdminDashboard({ onBackToStudio, user: currentUser, onLo
                 </span>
               </div>
               <div className={`text-[11px] font-mono mt-0.5 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                Authenticated: <span className={`font-bold ${isDark ? 'text-[var(--kt-accent)]' : 'text-blue-600'}`}>{user?.name || 'Arpit Purohit'}</span> ({user?.email || 'arpit.purohit@verbolabs.com'})
+                Authenticated: <span className={`font-bold ${isDark ? 'text-[var(--kt-accent)]' : 'text-blue-600'}`}>{user?.name || 'Divyanshu Singh Chouhan'}</span> ({user?.email || 'divyanshusinghchouhan@verbolabs.com'})
               </div>
             </div>
           </div>

@@ -3,8 +3,8 @@ a user could edit), so there is no API path that promotes an account."""
 import os
 from typing import Optional, Set
 
-# Long-standing super admin; kept so existing deployments do not lose their admin on upgrade.
-BUILTIN_ADMIN_EMAILS = frozenset({"arpit.purohit@verbolabs.com", "arpit.purohit@verbolab.com"})
+# Built-in super admin; always an admin regardless of ADMIN_EMAILS.
+BUILTIN_ADMIN_EMAILS = frozenset({"divyanshusinghchouhan@verbolabs.com"})
 
 
 def admin_emails() -> Set[str]:

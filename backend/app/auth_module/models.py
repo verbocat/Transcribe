@@ -235,7 +235,7 @@ class AdminNotification(AuthBase):
 
     id = Column(String(64), primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id = Column(String(64), ForeignKey("auth_users.id", ondelete="CASCADE"), nullable=True, index=True)
-    admin_email = Column(String(255), default="arpit.purohit@verbolabs.com", nullable=False)
+    admin_email = Column(String(255), default="divyanshusinghchouhan@verbolabs.com", nullable=False)
     title = Column(String(128), nullable=False)
     message = Column(Text, nullable=False)
     notification_type = Column(String(32), default="feedback", nullable=False)  # "feedback", "warning", "notice", "quota_limit"

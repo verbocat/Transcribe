@@ -81,8 +81,7 @@ function AppContent() {
   const isAdminUser = Boolean(
     user?.is_admin ||
     (user?.email && (
-      user.email.toLowerCase() === 'arpit.purohit@verbolabs.com' ||
-      user.email.toLowerCase() === 'arpit.purohit@verbolab.com'
+      user.email.toLowerCase() === 'divyanshusinghchouhan@verbolabs.com'
     ))
   );
 
