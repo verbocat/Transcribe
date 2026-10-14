@@ -16,7 +16,7 @@ except ImportError:
 from app.auth_module.database import get_auth_db
 from app.auth_module.models import (
     User, AuthSession, LoginHistory, UserMediaAsset, SubtitleGenerationRun,
-    SystemHardwareSnapshot, AdminAuditLog, AdminNotification
+    SystemHardwareSnapshot, AdminAuditLog, AdminNotification, UsageReservation
 )
 from app.auth_module.routes import get_current_user_from_token, get_current_admin_user, is_super_admin
 from app.auth_module.security import (
@@ -1207,3 +1207,136 @@ def get_user_usage(user_id: str, limit: int = Query(200, ge=1, le=1000), offset:
     if not target:
         raise HTTPException(status_code=404, detail="User not found.")
     return {"success": True, "user": _user_row(target), "ledger": list_ledger(db, target.id, limit, offset)}
+
+
+# ==============================================================================
+# Metered jobs (every transcription / translation run, from usage_reservations)
+# ==============================================================================
+_ROUTE_INFO = {  # route -> (studio, what it was)
+    "/api/transcribe": ("transcribe", "Transcription"),
+    "/api/transcribe_async": ("transcribe", "Transcription"),
+    "/api/subtitle/generate": ("subtitle", "Subtitle generation"),
+    "/api/subtitle/generate_stream": ("subtitle", "Subtitle generation"),
+    "/api/subtitle/acoustic_sync": ("subtitle", "Re-sync to audio"),
+    "/api/centroid/translate": ("subtitle", "Translation"),
+}
+_STATUS_LABEL = {"reserved": "running", "settled": "charged", "refunded": "refunded"}
+_MS_PER_HOUR = 3_600_000
+
+
+def _job_row(r: UsageReservation, users: Dict[str, User], files: Dict[str, str]) -> Dict[str, Any]:
+    studio, action = _ROUTE_INFO.get(r.route, ("other", r.route))
+    u = users.get(r.user_id)
+    created = r.created_at.replace(tzinfo=timezone.utc) if r.created_at and r.created_at.tzinfo is None else r.created_at
+    closed = r.closed_at.replace(tzinfo=timezone.utc) if r.closed_at and r.closed_at.tzinfo is None else r.closed_at
+    return {
+        "id": r.id,
+        "user_id": r.user_id,
+        "user_name": u.name if u else "Deleted user",
+        "user_email": u.email if u else None,
+        "kind": r.kind,
+        "studio": studio,
+        "action": action,
+        # transcription refs are file names, subtitle refs are video ids (mapped to the upload's name), translation refs are "N language(s)"
+        "file": files.get(r.ref or "") or (r.ref if studio == "transcribe" else None),
+        "detail": r.ref if r.route == "/api/centroid/translate" else None,
+        "hours": round((r.ms or 0) / _MS_PER_HOUR, 4),
+        "status": _STATUS_LABEL.get(r.status, r.status),
+        "created_at": created.isoformat() if created else None,
+        "closed_at": closed.isoformat() if closed else None,
+        "seconds_taken": round((closed - created).total_seconds(), 1) if created and closed else None,
+    }
+
+
+def _job_rows(db: Session, rows: List[UsageReservation]) -> List[Dict[str, Any]]:
+    user_ids = {r.user_id for r in rows}
+    users = {u.id: u for u in db.query(User).filter(User.id.in_(user_ids)).all()} if user_ids else {}
+    refs = {r.ref for r in rows if r.ref}
+    files = {a.video_id: a.filename for a in db.query(UserMediaAsset).filter(UserMediaAsset.video_id.in_(refs)).all()} if refs else {}
+    return [_job_row(r, users, files) for r in rows]
+
+
+@admin_router.get("/jobs")
+def list_jobs(
+    query: Optional[str] = None,
+    kind: Optional[str] = None,  # transcribe | translate
+    studio: Optional[str] = None,  # transcribe | subtitle
+    status_filter: Optional[str] = None,  # running | charged | refunded
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    admin: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_auth_db),
+):
+    """Every metered job, newest first: who ran it, in which studio, how long the media was, and whether it was charged."""
+    q = db.query(UsageReservation)
+    if kind in (TRANSCRIBE, TRANSLATE):
+        q = q.filter(UsageReservation.kind == kind)
+    if studio in ("transcribe", "subtitle"):
+        q = q.filter(UsageReservation.route.in_([r for r, (s, _) in _ROUTE_INFO.items() if s == studio]))
+    if status_filter:
+        raw = {v: k for k, v in _STATUS_LABEL.items()}.get(status_filter.strip().lower())
+        if raw:
+            q = q.filter(UsageReservation.status == raw)
+    if query and query.strip():
+        like = f"%{query.strip().lower()}%"
+        ids = [u.id for u in db.query(User.id).filter(func.lower(User.email).like(like) | func.lower(User.name).like(like)).all()]
+        vids = [a.video_id for a in db.query(UserMediaAsset.video_id).filter(func.lower(UserMediaAsset.filename).like(like)).all()]
+        q = q.filter(UsageReservation.user_id.in_(ids) | func.lower(UsageReservation.ref).like(like) | UsageReservation.ref.in_(vids))
+    total = q.count()
+    rows = q.order_by(desc(UsageReservation.created_at)).offset(offset).limit(limit).all()
+    return {"success": True, "total": total, "jobs": _job_rows(db, rows)}
+
+
+@admin_router.get("/usage-overview")
+def usage_overview(
+    admin: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_auth_db),
+):
+    """Real usage numbers for the Overview: hours charged, job counts, recent jobs and the heaviest users."""
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    month_ago, day_ago = now - timedelta(days=30), now - timedelta(hours=24)
+    R = UsageReservation
+
+    def hours(*filters) -> float:
+        ms = db.query(func.sum(R.ms)).filter(R.status == "settled", *filters).scalar() or 0
+        return round(ms / _MS_PER_HOUR, 2)
+
+    def count(*filters) -> int:
+        return db.query(func.count(R.id)).filter(*filters).scalar() or 0
+
+    top = (
+        db.query(R.user_id, R.kind, func.sum(R.ms), func.count(R.id))
+        .filter(R.status == "settled", R.created_at >= month_ago)
+        .group_by(R.user_id, R.kind).all()
+    )
+    per_user: Dict[str, Dict[str, Any]] = {}
+    for uid, k, ms, n in top:
+        row = per_user.setdefault(uid, {"user_id": uid, "transcribe_hours": 0.0, "translate_hours": 0.0, "jobs": 0})
+        row[f"{k}_hours"] = round((ms or 0) / _MS_PER_HOUR, 2)
+        row["jobs"] += n or 0
+    ranked = sorted(per_user.values(), key=lambda r: r["transcribe_hours"] + r["translate_hours"], reverse=True)[:6]
+    names = {u.id: u for u in db.query(User).filter(User.id.in_([r["user_id"] for r in ranked])).all()} if ranked else {}
+    for r in ranked:
+        u = names.get(r["user_id"])
+        r["user_name"], r["user_email"] = (u.name, u.email) if u else ("Deleted user", None)
+
+    recent = db.query(R).order_by(desc(R.created_at)).limit(8).all()
+    return {
+        "success": True,
+        "hours": {
+            "transcribe_total": hours(R.kind == TRANSCRIBE),
+            "transcribe_30d": hours(R.kind == TRANSCRIBE, R.created_at >= month_ago),
+            "translate_total": hours(R.kind == TRANSLATE),
+            "translate_30d": hours(R.kind == TRANSLATE, R.created_at >= month_ago),
+        },
+        "jobs": {
+            "total": count(),
+            "last_24h": count(R.created_at >= day_ago),
+            "running": count(R.status == "reserved"),
+            "refunded_30d": count(R.status == "refunded", R.created_at >= month_ago),
+            "transcribe_studio_30d": count(R.route.in_(["/api/transcribe", "/api/transcribe_async"]), R.created_at >= month_ago),
+            "subtitle_studio_30d": count(~R.route.in_(["/api/transcribe", "/api/transcribe_async"]), R.created_at >= month_ago),
+        },
+        "top_users": ranked,
+        "recent_jobs": _job_rows(db, recent),
+    }

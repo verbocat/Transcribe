@@ -498,6 +498,7 @@ function AppContent() {
       <>
         <AdminDashboard
           onBackToStudio={() => handleSelectTool('subtitle')}
+          onOpenStudio={(tool) => handleSelectTool(tool)}
           user={user}
           onLogout={() => setShowLogoutModal(true)}
         />

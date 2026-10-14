@@ -4,15 +4,19 @@ import {
   Search, Shield, ShieldAlert, ShieldCheck, CheckCircle2, XCircle, AlertTriangle,
   Clock, ArrowLeft, ArrowUpRight, Ban, UserCheck, LogOut, Terminal, Eye, Layers, Sparkles,
   Sliders, MessageSquare, Send, Volume2, FileDown, Settings, Check, Mail, Bell, X,
-  ChevronLeft, ChevronRight, ArrowUpDown, ChevronDown, Filter
+  ChevronLeft, ChevronRight, ArrowUpDown, ChevronDown, Filter, AudioLines, Captions
 } from 'lucide-react';
 import { API_BASE } from '../../config';
 import { useAuth } from '../../auth_views/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
 import ThemeToggle from '../ThemeToggle';
 import AdminAccounts from './AdminAccounts';
+import AdminOverview from './AdminOverview';
+import AdminJobs from './AdminJobs';
+import AdminMedia from './AdminMedia';
+import BrandLogo from '../BrandLogo';
 
-export default function AdminDashboard({ onBackToStudio, user: currentUser, onLogout }) {
+export default function AdminDashboard({ onBackToStudio, onOpenStudio, user: currentUser, onLogout }) {
   const { user: authUser, token } = useAuth();
   const { isDark } = useTheme();
   const user = currentUser || authUser;
@@ -69,6 +73,7 @@ export default function AdminDashboard({ onBackToStudio, user: currentUser, onLo
   // Auto-refresh timer
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [lastRefreshedAt, setLastRefreshedAt] = useState(new Date());
+  const [refreshKey, setRefreshKey] = useState(0); // bumps on every refresh so the tab components reload too
 
   const authHeaders = {
     'Content-Type': 'application/json',
@@ -215,6 +220,7 @@ export default function AdminDashboard({ onBackToStudio, user: currentUser, onLo
   // Master refresh based on current tab
   const refreshCurrentView = useCallback(() => {
     fetchOverview();
+    setRefreshKey((k) => k + 1);
     if (activeTab === 'users') fetchUsers();
     else if (activeTab === 'uploads') fetchUploads();
     else if (activeTab === 'generations') fetchRuns();
@@ -364,172 +370,78 @@ export default function AdminDashboard({ onBackToStudio, user: currentUser, onLo
     }
   };
 
+  const TABS = [
+    { id: 'overview', label: 'Overview', icon: Activity },
+    { id: 'accounts', label: 'Accounts & Hours', icon: Clock },
+    { id: 'users', label: 'Users', icon: Users, badge: overview?.users?.total },
+    { id: 'jobs', label: 'Jobs', icon: Layers },
+    { id: 'media', label: 'Media', icon: Film },
+    { id: 'hardware', label: 'Server', icon: Cpu },
+  ];
+  const ghostBtn = 'h-8 px-3 rounded-lg inline-flex items-center gap-1.5 text-[12.5px] font-medium text-[var(--kt-muted)] hover:text-[var(--kt-text)] hover:bg-[var(--kt-s2)] transition-colors cursor-pointer';
+  const studioBtn = 'h-8 px-3 rounded-lg inline-flex items-center gap-1.5 text-[12.5px] font-medium border border-[var(--kt-s4)] text-[var(--kt-text)] hover:bg-[var(--kt-s2)] hover:border-[var(--kt-s5)] transition-colors cursor-pointer';
+  const openStudio = (tool) => (onOpenStudio ? onOpenStudio(tool) : onBackToStudio && onBackToStudio());
+
   return (
-    <div className={`min-h-screen flex flex-col font-sans select-none transition-colors ${
-      isDark ? 'bg-[var(--kt-s0)] text-slate-100' : 'bg-[#f8fafc] text-slate-900'
-    }`} style={{ fontFamily: "'Segoe UI', 'Inter', -apple-system, BlinkMacSystemFont, Roboto, 'Google Sans', sans-serif" }}>
-      {/* ── Top Bar ── */}
-      <header className={`h-16 border-b px-5 flex items-center justify-between sticky top-0 z-40 backdrop-blur transition-colors ${
-        isDark ? 'border-[var(--kt-s3)] bg-[var(--kt-s1)]/95 text-white' : 'border-slate-200 bg-white/95 text-slate-900 shadow-2xs'
-      }`}>
-        <div className="flex items-center gap-4">
-          <div className="flex items-center gap-3">
-            <div className={`w-9 h-9 rounded-xl flex items-center justify-center font-black shrink-0 ${
-              isDark 
-                ? 'bg-gradient-to-tr from-[var(--kt-accent)] via-[var(--kt-info)] to-[#6366f1] text-black shadow-[0_0_20px_rgba(var(--kt-accent-rgb),0.35)]' 
-                : 'bg-gradient-to-tr from-blue-600 to-indigo-600 text-white shadow-sm'
-            }`}>
-              <Shield size={18} />
+    <div className="min-h-screen flex flex-col select-none bg-[var(--kt-s0)] text-[var(--kt-text)]" style={{ fontFamily: 'var(--kt-font-ui)' }}>
+      {/* ── Top bar ── */}
+      <header className="sticky top-0 z-40 border-b border-[var(--kt-s3)] bg-[var(--kt-s0)]/90 backdrop-blur">
+        <div className="max-w-7xl mx-auto px-5 h-14 flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3 min-w-0">
+            <BrandLogo size={26} />
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="text-[14px] font-semibold tracking-tight">Lower Third</span>
+              <span className="text-[11px] font-medium px-1.5 py-0.5 rounded-md bg-[var(--kt-s2)] border border-[var(--kt-s3)] text-[var(--kt-muted)]">Admin</span>
             </div>
-            <div>
-              <div className={`text-xs font-black tracking-wider flex items-center gap-2 ${
-                isDark ? 'text-white' : 'text-slate-900'
-              }`}>
-                VERBOLABS ENTERPRISE
-                <span className={`px-2 py-0.5 rounded text-[9px] font-mono font-bold ${
-                  isDark 
-                    ? 'bg-[var(--kt-accent)]/15 text-[var(--kt-accent)] border border-[var(--kt-accent)]/30 shadow-xs' 
-                    : 'bg-blue-50 text-blue-700 border border-blue-200 shadow-2xs'
-                }`}>
-                  SUPER ADMIN COMMAND CENTER
+          </div>
+
+          <div className="flex items-center gap-1.5">
+            <button type="button" onClick={() => openStudio('transcribe')} className={studioBtn} title="Open Transcribe Studio">
+              <AudioLines size={14} /> <span className="hidden md:inline">Transcribe Studio</span>
+            </button>
+            <button type="button" onClick={() => openStudio('subtitle')} className={studioBtn} title="Open Subtitle Studio">
+              <Captions size={14} /> <span className="hidden md:inline">Subtitle Studio</span>
+            </button>
+            <span className="w-px h-5 bg-[var(--kt-s3)] mx-1.5" aria-hidden="true" />
+            <button type="button" onClick={refreshCurrentView} className={ghostBtn} title={`Refresh · last updated ${lastRefreshedAt.toLocaleTimeString()}`} aria-label="Refresh">
+              <RefreshCw size={14} className={isLoading ? 'animate-spin' : ''} />
+            </button>
+            <ThemeToggle />
+            {onLogout && (
+              <button type="button" onClick={onLogout} className={ghostBtn} title={`Sign out ${user?.email || ''}`}>
+                <span className="w-6 h-6 rounded-full bg-[var(--kt-accent)] text-[var(--kt-accent-ink)] text-[11px] font-semibold flex items-center justify-center">
+                  {(user?.name || user?.email || '?').trim().charAt(0).toUpperCase()}
                 </span>
-              </div>
-              <div className={`text-[11px] font-mono mt-0.5 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                Authenticated: <span className={`font-bold ${isDark ? 'text-[var(--kt-accent)]' : 'text-blue-600'}`}>{user?.name || 'Divyanshu Singh Chouhan'}</span> ({user?.email || 'divyanshusinghchouhan@verbolabs.com'})
-              </div>
-            </div>
+                <LogOut size={14} />
+              </button>
+            )}
           </div>
         </div>
 
-        {/* Live Hardware Status Pills & Controls in Header */}
-        <div className="flex items-center gap-2.5">
-          {hardwareLive && (
-            <div className="hidden lg:flex items-center gap-2 text-[11px] font-mono">
-              {/* Active SSE streams */}
-              <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md border ${
-                isDark ? 'bg-[var(--kt-s2)] border-[var(--kt-s4)] text-slate-300' : 'bg-slate-100 border-slate-200 text-slate-700'
-              }`}>
-                <span className={`w-2 h-2 rounded-full ${hardwareLive.active_sse_streams > 0 ? (isDark ? 'bg-emerald-400 animate-pulse' : 'bg-emerald-500 animate-pulse') : 'bg-slate-400'}`} />
-                <span>Active Streams:</span>
-                <span className={`font-bold ${isDark ? 'text-white' : 'text-slate-900'}`}>{hardwareLive.active_sse_streams}</span>
-              </div>
-
-              {/* CPU */}
-              <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md border ${
-                isDark ? 'bg-[var(--kt-s2)] border-[var(--kt-s4)] text-slate-300' : 'bg-slate-100 border-slate-200 text-slate-700'
-              }`}>
-                <Cpu size={12} className={isDark ? "text-[var(--kt-accent)]" : "text-blue-600"} />
-                <span>CPU:</span>
-                <span className={`font-bold ${hardwareLive.cpu_percent > 80 ? 'text-rose-500' : (isDark ? 'text-slate-100' : 'text-slate-900')}`}>
-                  {hardwareLive.cpu_percent}%
-                </span>
-              </div>
-
-              {/* RAM */}
-              <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md border ${
-                isDark ? 'bg-[var(--kt-s2)] border-[var(--kt-s4)] text-slate-300' : 'bg-slate-100 border-slate-200 text-slate-700'
-              }`}>
-                <HardDrive size={12} className={isDark ? "text-[#0088ff]" : "text-indigo-600"} />
-                <span>RAM:</span>
-                <span className={`font-bold ${hardwareLive.memory_percent > 85 ? 'text-amber-500' : (isDark ? 'text-slate-100' : 'text-slate-900')}`}>
-                  {hardwareLive.memory_percent}%
-                </span>
-              </div>
-            </div>
-          )}
-
-          {/* Quick Studio Switcher Button */}
-          <button
-            onClick={onBackToStudio}
-            className={`p-1.5 px-3 rounded-lg flex items-center gap-1.5 text-xs font-bold transition-all cursor-pointer active:scale-95 ${
-              isDark 
-                ? 'bg-[var(--kt-accent)]/15 hover:bg-[var(--kt-accent)]/25 text-[var(--kt-accent)] border border-[var(--kt-accent)]/40 shadow-[0_0_12px_rgba(var(--kt-accent-rgb),0.15)]' 
-                : 'bg-blue-600 hover:bg-blue-700 text-white shadow-xs'
-            }`}
-            title="Launch Subtitle Studio workspace to test subtitle pipelines"
-          >
-            <Film size={14} />
-            <span>Launch Subtitle Studio</span>
-          </button>
-
-          {/* Theme Toggle Button */}
-          <ThemeToggle />
-
-          {/* Refresh Controls */}
-          <button
-            onClick={refreshCurrentView}
-            className={`p-1.5 px-2.5 rounded-lg flex items-center gap-1.5 text-xs font-semibold border transition-all cursor-pointer shadow-xs ${
-              isDark 
-                ? 'bg-[var(--kt-s2)] hover:bg-[var(--kt-s4)] text-slate-300 hover:text-white border-[var(--kt-s4)]' 
-                : 'bg-white hover:bg-slate-100 text-slate-700 hover:text-slate-900 border-slate-200'
-            }`}
-            title="Refresh Data"
-          >
-            <RefreshCw size={13} className={isLoading ? (isDark ? 'animate-spin text-[var(--kt-accent)]' : 'animate-spin text-blue-600') : ''} />
-            <span className="hidden sm:inline">Refresh</span>
-          </button>
-
-          {/* Logout button */}
-          {onLogout && (
-            <button
-              onClick={onLogout}
-              className={`p-1.5 px-2.5 rounded-lg border flex items-center gap-1.5 text-xs font-semibold transition-all cursor-pointer ${
-                isDark 
-                  ? 'bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border-rose-500/30' 
-                  : 'bg-rose-50 hover:bg-rose-100 text-rose-700 border-rose-200'
-              }`}
-              title="Sign Out"
-            >
-              <LogOut size={13} />
-              <span className="hidden sm:inline">Sign Out</span>
-            </button>
-          )}
-        </div>
-      </header>
-
-      {/* ── Sub-Nav Tabs ── */}
-      <div className={`border-b px-4 flex items-center justify-between transition-colors ${
-        isDark ? 'border-[var(--kt-s3)] bg-[var(--kt-s1)]' : 'border-slate-200 bg-white shadow-2xs'
-      }`}>
-        <div className="flex items-center gap-1 overflow-x-auto py-2">
-          {[
-            { id: 'overview', label: 'Command Center', icon: Activity },
-            { id: 'accounts', label: 'Accounts & Hours', icon: Clock },
-            { id: 'users', label: 'User Production & Intelligence Directory', icon: Users, badge: overview?.users?.total },
-            { id: 'hardware', label: 'Server Hardware & Health', icon: Cpu },
-          ].map((tab) => {
+        {/* ── Tabs ── */}
+        <nav className="max-w-7xl mx-auto px-5 flex items-center gap-1 overflow-x-auto" aria-label="Admin sections">
+          {TABS.map((tab) => {
             const Icon = tab.icon;
             const isActive = activeTab === tab.id;
             return (
               <button
                 key={tab.id}
-                onClick={() => { setActiveTab(tab.id); }}
-                className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-                  isActive
-                    ? (isDark ? 'bg-[var(--kt-accent)]/15 text-[var(--kt-accent)] border border-[var(--kt-accent)]/30 shadow-xs' : 'bg-blue-50 text-blue-700 border border-blue-200 shadow-2xs font-bold')
-                    : (isDark ? 'text-slate-400 hover:text-slate-200 hover:bg-[var(--kt-s2)] border border-transparent' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100 border border-transparent')
+                type="button"
+                onClick={() => setActiveTab(tab.id)}
+                aria-current={isActive ? 'page' : undefined}
+                className={`relative h-10 px-3 inline-flex items-center gap-2 text-[13px] whitespace-nowrap cursor-pointer transition-colors ${
+                  isActive ? 'text-[var(--kt-text)] font-medium' : 'text-[var(--kt-muted)] hover:text-[var(--kt-text)]'
                 }`}
               >
-                <Icon size={14} />
-                <span>{tab.label}</span>
-                {tab.badge !== undefined && (
-                  <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono ${
-                    isActive 
-                      ? (isDark ? 'bg-[var(--kt-accent)]/20 text-[var(--kt-accent)]' : 'bg-blue-100 text-blue-700 font-bold') 
-                      : (isDark ? 'bg-[var(--kt-s3)] text-slate-400' : 'bg-slate-100 text-slate-600')
-                  }`}>
-                    {tab.badge}
-                  </span>
-                )}
+                <Icon size={14} strokeWidth={1.75} />
+                {tab.label}
+                {tab.badge != null && <span className="text-[11px] tabular-nums px-1.5 rounded-full bg-[var(--kt-s2)] text-[var(--kt-muted)]">{tab.badge}</span>}
+                {isActive && <span aria-hidden="true" className="absolute left-2 right-2 -bottom-px h-0.5 rounded-full bg-[var(--kt-accent)]" />}
               </button>
             );
           })}
-        </div>
-
-        <div className={`text-[10px] font-mono hidden sm:block ${isDark ? 'text-slate-500' : 'text-slate-500'}`}>
-          Last sync: {lastRefreshedAt.toLocaleTimeString()}
-        </div>
-      </div>
+        </nav>
+      </header>
 
       {/* ── Error Banner (e.g. Forbidden) ── */}
       {error && (
@@ -555,162 +467,9 @@ export default function AdminDashboard({ onBackToStudio, user: currentUser, onLo
         {/* ============================================================== */}
         {/* TAB 1: COMMAND CENTER OVERVIEW                                  */}
         {/* ============================================================== */}
-        {activeTab === 'overview' && overview && (
-          <div className="space-y-6">
-            {/* Top KPI Cards Row */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
-              {/* Active Users */}
-              <div className={`p-4 rounded-xl border transition-colors ${
-                isDark ? 'bg-[var(--kt-s1)] border-[var(--kt-s3)] shadow-xs' : 'bg-white border-slate-200 shadow-sm'
-              }`}>
-                <div className={`flex items-center justify-between text-xs mb-2 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                  <span>Users & Active Seats</span>
-                  <Users size={16} className={isDark ? "text-[var(--kt-accent)]" : "text-blue-600"} />
-                </div>
-                <div className={`text-2xl font-black font-mono flex items-baseline gap-2 ${isDark ? 'text-white' : 'text-slate-900'}`}>
-                  {overview.users.total}
-                  <span className="text-xs font-semibold text-emerald-500 flex items-center gap-1 font-sans">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                    {overview.users.active_now} online now
-                  </span>
-                </div>
-                <div className={`text-[11px] mt-1 ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>Total registered accounts</div>
-              </div>
-
-              {/* Video Media Processed */}
-              <div className={`p-4 rounded-xl border transition-colors ${
-                isDark ? 'bg-[var(--kt-s1)] border-[var(--kt-s3)] shadow-xs' : 'bg-white border-slate-200 shadow-sm'
-              }`}>
-                <div className={`flex items-center justify-between text-xs mb-2 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                  <span>Media Uploads</span>
-                  <Film size={16} className={isDark ? "text-[#0088ff]" : "text-indigo-600"} />
-                </div>
-                <div className={`text-2xl font-black font-mono flex items-baseline gap-2 ${isDark ? 'text-white' : 'text-slate-900'}`}>
-                  {overview.media.total_uploads}
-                  <span className={`text-xs font-medium font-sans ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                    {overview.media.total_duration_hours} hrs
-                  </span>
-                </div>
-                <div className={`text-[11px] mt-1 ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>Across all users & projects</div>
-              </div>
-
-              {/* Generation Runs & Re-runs */}
-              <div className={`p-4 rounded-xl border transition-colors ${
-                isDark ? 'bg-[var(--kt-s1)] border-[var(--kt-s3)] shadow-xs' : 'bg-white border-slate-200 shadow-sm'
-              }`}>
-                <div className={`flex items-center justify-between text-xs mb-2 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                  <span>Subtitle Jobs Run</span>
-                  <PlayCircle size={16} className="text-amber-500" />
-                </div>
-                <div className={`text-2xl font-black font-mono flex items-baseline gap-2 ${isDark ? 'text-white' : 'text-slate-900'}`}>
-                  {overview.generations.total_runs}
-                  <span className="text-xs font-medium text-amber-600 font-sans">
-                    {overview.generations.re_runs_count} re-runs
-                  </span>
-                </div>
-                <div className={`text-[11px] mt-1 ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
-                  Re-run rate: {overview.generations.re_run_rate_percent}%
-                </div>
-              </div>
-
-              {/* API Spend Total */}
-              <div className={`p-4 rounded-xl border transition-colors ${
-                isDark ? 'bg-[var(--kt-s1)] border-[var(--kt-s3)] shadow-xs' : 'bg-white border-slate-200 shadow-sm'
-              }`}>
-                <div className={`flex items-center justify-between text-xs mb-2 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                  <span>Estimated Total API Spend</span>
-                  <DollarSign size={16} className="text-emerald-500" />
-                </div>
-                <div className="text-2xl font-black text-emerald-500 font-mono flex items-baseline gap-2">
-                  ${overview.financials.total_spend_usd}
-                  <span className={`text-xs font-semibold font-sans ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                    (₹{overview.financials.total_spend_inr})
-                  </span>
-                </div>
-                <div className={`text-[11px] mt-1 ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
-                  AI: ${overview.financials.gemini_spend_usd} | Speech: ${overview.financials.whisper_spend_usd}
-                </div>
-              </div>
-            </div>
-
-            {/* Quick Live Health Meter Row */}
-            {hardwareLive && (
-              <div className={`p-5 rounded-2xl border space-y-4 transition-colors ${
-                isDark ? 'bg-[var(--kt-s1)] border-[var(--kt-s3)]' : 'bg-white border-slate-200 shadow-sm'
-              }`}>
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Activity size={16} className={isDark ? "text-[var(--kt-accent)]" : "text-blue-600"} />
-                    <span className={`text-sm font-bold ${isDark ? 'text-white' : 'text-slate-900'}`}>Live Server Infrastructure Health</span>
-                  </div>
-                  <span className={`text-xs font-mono ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                    Uploads directory size: {hardwareLive.upload_folder_mb} MB
-                  </span>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  {/* CPU Meter */}
-                  <div className={`p-3.5 rounded-xl border transition-colors ${
-                    isDark ? 'bg-[var(--kt-s0)] border-[var(--kt-s3)]' : 'bg-slate-50 border-slate-200'
-                  }`}>
-                    <div className="flex justify-between text-xs mb-1.5 font-medium">
-                      <span className={isDark ? "text-slate-400" : "text-slate-600"}>Processor (CPU) Load</span>
-                      <span className={`font-mono font-bold ${isDark ? 'text-white' : 'text-slate-900'}`}>{hardwareLive.cpu_percent}%</span>
-                    </div>
-                    <div className={`w-full h-2 rounded-full overflow-hidden ${isDark ? 'bg-[var(--kt-s3)]' : 'bg-slate-200'}`}>
-                      <div
-                        className={`h-full transition-all duration-500 rounded-full ${
-                          hardwareLive.cpu_percent > 80 ? 'bg-rose-500' : hardwareLive.cpu_percent > 50 ? 'bg-amber-400' : (isDark ? 'bg-[var(--kt-accent)]' : 'bg-blue-600')
-                        }`}
-                        style={{ width: `${Math.min(100, hardwareLive.cpu_percent)}%` }}
-                      />
-                    </div>
-                  </div>
-
-                  {/* RAM Meter */}
-                  <div className={`p-3.5 rounded-xl border transition-colors ${
-                    isDark ? 'bg-[var(--kt-s0)] border-[var(--kt-s3)]' : 'bg-slate-50 border-slate-200'
-                  }`}>
-                    <div className="flex justify-between text-xs mb-1.5 font-medium">
-                      <span className={isDark ? "text-slate-400" : "text-slate-600"}>Memory (RAM) Usage</span>
-                      <span className={`font-mono font-bold ${isDark ? 'text-white' : 'text-slate-900'}`}>
-                        {hardwareLive.memory_used_mb} / {hardwareLive.memory_total_mb} MB ({hardwareLive.memory_percent}%)
-                      </span>
-                    </div>
-                    <div className={`w-full h-2 rounded-full overflow-hidden ${isDark ? 'bg-[var(--kt-s3)]' : 'bg-slate-200'}`}>
-                      <div
-                        className={`h-full transition-all duration-500 rounded-full ${
-                          hardwareLive.memory_percent > 85 ? 'bg-rose-500' : hardwareLive.memory_percent > 65 ? 'bg-amber-400' : (isDark ? 'bg-[#0088ff]' : 'bg-indigo-600')
-                        }`}
-                        style={{ width: `${Math.min(100, hardwareLive.memory_percent)}%` }}
-                      />
-                    </div>
-                  </div>
-
-                  {/* Disk Meter */}
-                  <div className={`p-3.5 rounded-xl border transition-colors ${
-                    isDark ? 'bg-[var(--kt-s0)] border-[var(--kt-s3)]' : 'bg-slate-50 border-slate-200'
-                  }`}>
-                    <div className="flex justify-between text-xs mb-1.5 font-medium">
-                      <span className={isDark ? "text-slate-400" : "text-slate-600"}>Disk Space</span>
-                      <span className={`font-mono font-bold ${isDark ? 'text-white' : 'text-slate-900'}`}>
-                        {hardwareLive.disk_used_gb} / {hardwareLive.disk_total_gb} GB ({hardwareLive.disk_percent}%)
-                      </span>
-                    </div>
-                    <div className={`w-full h-2 rounded-full overflow-hidden ${isDark ? 'bg-[var(--kt-s3)]' : 'bg-slate-200'}`}>
-                      <div
-                        className={`h-full transition-all duration-500 rounded-full ${
-                          hardwareLive.disk_percent > 85 ? 'bg-rose-500' : 'bg-emerald-500'
-                        }`}
-                        style={{ width: `${Math.min(100, hardwareLive.disk_percent)}%` }}
-                      />
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
+        {activeTab === 'overview' && <AdminOverview overview={overview} hardware={hardwareLive} onOpenTab={setActiveTab} refreshKey={refreshKey} />}
+        {activeTab === 'jobs' && <AdminJobs refreshKey={refreshKey} />}
+        {activeTab === 'media' && <AdminMedia refreshKey={refreshKey} />}
 
         {/* ============================================================== */}
         {/* TAB 2: USER PRODUCTION DIRECTORY & INTELLIGENCE (MERGED)        */}
