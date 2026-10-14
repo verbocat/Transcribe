@@ -309,10 +309,9 @@ def test_non_admin_cannot_use_admin_routes_or_change_own_limits(main_app, admin_
     calls = [
         ("get", "/api/admin/users", None),
         ("post", "/api/admin/users", {"name": "Eve", "email": "eve@example.com", "transcribe_unlimited": True, "translate_unlimited": True}),
-        ("put", f"/api/admin/users/{uid}/hours", {"transcribe_unlimited": True}),
+        ("put", f"/api/admin/users/{uid}/access", {"transcribe_unlimited": True}),
         ("patch", f"/api/admin/users/{uid}/profile", {"name": "Hacker"}),
         ("patch", f"/api/admin/users/{uid}/status", {"role": "admin", "is_admin": True}),
-        ("post", f"/api/admin/users/{uid}/limits", {"max_videos_quota": -1}),
         ("delete", f"/api/admin/users/{uid}", None),
         ("get", f"/api/admin/users/{uid}/usage", None),
     ]
@@ -356,7 +355,7 @@ def test_admin_creates_user_on_any_domain_sets_hours_and_user_sees_them(main_app
     assert r.status_code == 402
     # admin edits hours; ledger records the change; delete keeps the ledger
     uid = body["user"]["id"]
-    assert client.put(f"/api/admin/users/{uid}/hours", headers=admin, json={"translate_hours": 3}).json()["user"]["usage"]["translate"]["limit_hours"] == 3
+    assert client.put(f"/api/admin/users/{uid}/access", headers=admin, json={"translate_hours": 3}).json()["user"]["usage"]["translate"]["limit_hours"] == 3
     led = client.get(f"/api/admin/users/{uid}/usage", headers=admin).json()["ledger"]
     assert any(r["event"] == "limit_change" for r in led)
     assert client.delete(f"/api/admin/users/{uid}", headers=admin).status_code == 200
@@ -397,3 +396,21 @@ def test_duration_comes_from_the_decoded_audio(tmp_path):
     with pytest.raises(HTTPException) as e:
         metering.probe_duration_ms_sync(str(junk))
     assert e.value.status_code == 422  # unmeasurable media is refused, never run for free
+
+
+def test_fix_purpose_cannot_discount_a_whole_track(main_app, monkeypatch):
+    from app import centroid_client
+    client = TestClient(main_app.app)
+    uid, email = _make_user(translate_h=1)
+    headers = _login(client, email)
+
+    async def ok(path, b):
+        return {"results": {}}
+    monkeypatch.setattr(centroid_client, "post", ok)
+    few = {"events": _cues(3, each=2.0), "source_lang": "hi", "target_langs": ["en"], "purpose": "fix"}
+    many = {"events": [{"start_time": i * 5, "end_time": i * 5 + 0.5, "text": "hi"} for i in range(100)],
+            "source_lang": "hi", "target_langs": ["en"], "purpose": "fix"}
+    assert client.post("/api/centroid/translate", json=few, headers=headers).status_code == 200
+    assert _state(uid)["translate_used_ms"] == 6_000          # only the three lines' time
+    assert client.post("/api/centroid/translate", json=many, headers=headers).status_code == 200
+    assert _state(uid)["translate_used_ms"] >= 6_000 + 495_000  # a 100-line "fix" is billed up to the last subtitle's end

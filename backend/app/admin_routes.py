@@ -628,76 +628,6 @@ def approve_user_workflow(
     }
 
 
-class UserLimitsRequest(BaseModel):
-    max_videos_quota: Optional[int] = None
-    monthly_budget_usd: Optional[float] = None
-    can_export: Optional[bool] = None
-    can_ai_optimize: Optional[bool] = None
-    can_audio_peaks: Optional[bool] = None
-
-@admin_router.post("/users/{user_id}/limits")
-def update_user_limits(
-    user_id: str,
-    payload: UserLimitsRequest,
-    admin: User = Depends(get_current_admin_user),
-    db: Session = Depends(get_auth_db)
-):
-    """Allows Super-Admin to configure per-user video generation quotas and feature access toggles."""
-    target = db.query(User).filter(User.id == user_id).first()
-    if not target:
-        raise HTTPException(status_code=404, detail="User not found.")
-
-    if payload.max_videos_quota is not None:
-        target.max_videos_quota = int(payload.max_videos_quota)
-    if payload.monthly_budget_usd is not None:
-        target.monthly_budget_usd = max(0.0, float(payload.monthly_budget_usd))
-    if payload.can_export is not None:
-        target.can_export = bool(payload.can_export)
-    if payload.can_ai_optimize is not None:
-        target.can_ai_optimize = bool(payload.can_ai_optimize)
-    if payload.can_audio_peaks is not None:
-        target.can_audio_peaks = bool(payload.can_audio_peaks)
-
-    audit = AdminAuditLog(
-        user_id=admin.id,
-        event_type="user_limits_updated",
-        details=f"Updated limits for {target.email}: quota={target.max_videos_quota}, export={target.can_export}, ai={target.can_ai_optimize}, peaks={target.can_audio_peaks}"
-    )
-    db.add(audit)
-
-    # Automatically notify user in their in-app studio bell
-    quota_desc = f"{target.max_videos_quota} videos" if target.max_videos_quota >= 0 else "Unlimited"
-    features_list = []
-    if target.can_export: features_list.append("Subtitle Export")
-    if target.can_ai_optimize: features_list.append("AI Optimization")
-    if target.can_audio_peaks: features_list.append("Audio Waveforms")
-    allowed_str = ", ".join(features_list) if features_list else "None"
-
-    limits_notif = AdminNotification(
-        user_id=target.id,
-        admin_email=admin.email,
-        title="Account Production Quota & Feature Permissions Updated",
-        message=f"Administrator has updated your account quotas and permissions:\n• Video Generation Quota: {quota_desc}\n• Monthly Budget Cap: ${target.monthly_budget_usd:.2f}\n• Active Features: {allowed_str}",
-        notification_type="quota_limit"
-    )
-    db.add(limits_notif)
-    db.commit()
-
-    return {
-        "success": True,
-        "message": f"Updated limits and feature flags for {target.email}.",
-        "user": {
-            "id": target.id,
-            "email": target.email,
-            "max_videos_quota": target.max_videos_quota,
-            "monthly_budget_usd": target.monthly_budget_usd,
-            "can_export": target.can_export,
-            "can_ai_optimize": target.can_ai_optimize,
-            "can_audio_peaks": target.can_audio_peaks
-        }
-    }
-
-
 class SendFeedbackRequest(BaseModel):
     title: str
     message: str
@@ -824,65 +754,6 @@ def list_uploaded_media(
 
 # ==============================================================================
 # 4. Subtitle Generation Runs & Observability
-# ==============================================================================
-@admin_router.get("/generations")
-def list_generation_runs(
-    status_filter: Optional[str] = None,
-    user_email: Optional[str] = None,
-    limit: int = Query(50, ge=1, le=200),
-    offset: int = Query(0, ge=0),
-    admin: User = Depends(get_current_admin_user),
-    db: Session = Depends(get_auth_db)
-):
-    """Detailed log of all subtitle generation runs including re-runs and token costs."""
-    q = db.query(SubtitleGenerationRun).join(User, SubtitleGenerationRun.user_id == User.id)
-
-    if status_filter:
-        q = q.filter(SubtitleGenerationRun.status == status_filter.strip().lower())
-    if user_email:
-        q = q.filter(func.lower(User.email).like(f"%{user_email.strip().lower()}%"))
-
-    total_count = q.count()
-    runs = q.order_by(desc(SubtitleGenerationRun.started_at)).offset(offset).limit(limit).all()
-
-    result = []
-    for r in runs:
-        result.append({
-            "id": r.id,
-            "video_id": r.video_id,
-            "user_name": r.user.name if r.user else "Unknown",
-            "user_email": r.user.email if r.user else "Unknown",
-            "run_index": r.run_index_for_video,
-            "is_rerun": r.run_index_for_video > 1,
-            "target_language": r.target_language,
-            "mode": r.mode,
-            "status": r.status,
-            "batches_completed": r.batches_completed,
-            "total_batches": r.total_batches,
-            "gemini_input_tokens": r.gemini_input_tokens,
-            "gemini_output_tokens": r.gemini_output_tokens,
-            "total_tokens": r.gemini_input_tokens + r.gemini_output_tokens,
-            "scribe_audio_seconds": round(r.whisper_audio_seconds, 1),
-            "whisper_audio_seconds": round(r.whisper_audio_seconds, 1),
-            "total_duration_seconds": round(r.total_duration_seconds, 1),
-            "gemini_cost_usd": round(r.gemini_cost_usd, 4),
-            "scribe_cost_usd": round(r.whisper_cost_usd, 4),
-            "whisper_cost_usd": round(r.whisper_cost_usd, 4),
-            "total_run_cost_usd": round(r.total_run_cost_usd, 4),
-            "error_message": r.error_message,
-            "started_at": r.started_at.isoformat() if r.started_at else None,
-            "completed_at": r.completed_at.isoformat() if r.completed_at else None
-        })
-
-    return {
-        "success": True,
-        "total": total_count,
-        "runs": result
-    }
-
-
-# ==============================================================================
-# 5. Live Server Hardware & Infrastructure
 # ==============================================================================
 @admin_router.get("/hardware/live")
 def get_live_hardware(
@@ -1161,31 +1032,6 @@ class HoursRequest(BaseModel):
     transcribe_unlimited: Optional[bool] = None
     translate_hours: Optional[float] = None
     translate_unlimited: Optional[bool] = None
-
-
-@admin_router.put("/users/{user_id}/hours")
-def set_user_hours(user_id: str, payload: HoursRequest, request: Request, admin: User = Depends(admin_write_guard), db: Session = Depends(get_auth_db)):
-    """Sets the hour budgets. Only the budgets you send change. Used hours can never be edited, only the limit."""
-    target = db.query(User).filter(User.id == user_id).first()
-    if not target:
-        raise HTTPException(status_code=404, detail="User not found.")
-    sent = False
-    for kind, hours, unlimited, col, label in (
-        (TRANSCRIBE, payload.transcribe_hours, payload.transcribe_unlimited, "transcribe_limit_ms", "Transcription hours"),
-        (TRANSLATE, payload.translate_hours, payload.translate_unlimited, "translate_limit_ms", "Translation hours"),
-    ):
-        if hours is None and not unlimited:
-            continue
-        new_ms = _resolve_limit(hours, bool(unlimited), label)
-        old_ms = getattr(target, col)
-        setattr(target, col, new_ms)
-        record_limit_change(db, target, kind, old_ms, new_ms, admin.id)
-        sent = True
-    if not sent:
-        raise HTTPException(status_code=400, detail="Send transcribe_hours and/or translate_hours (or the matching *_unlimited flag).")
-    _audit(db, admin, "user_hours_updated", f"{admin.email} changed hour limits of {target.email}", request)
-    db.commit()
-    return {"success": True, "user": _user_row(target)}
 
 
 class AccessRequest(HoursRequest):

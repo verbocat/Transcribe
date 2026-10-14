@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  UserPlus, Search, SlidersHorizontal, X, Copy, Check, Trash2, KeyRound, Ban, UserCheck, ListOrdered, Pencil, RefreshCw, AlertTriangle,
+  UserPlus, Search, Eye, SlidersHorizontal, X, Copy, Check, Trash2, KeyRound, Ban, UserCheck, ListOrdered, Pencil, RefreshCw, AlertTriangle,
 } from 'lucide-react';
 import { API_BASE } from '../../config';
 import { useAuth } from '../../auth_views/AuthContext';
@@ -110,7 +110,7 @@ function ledgerRows(ledger) {
     });
 }
 
-export default function AdminAccounts() {
+export default function AdminAccounts({ refreshKey = 0, onOpenDossier }) {
   const { token, user: me } = useAuth();
   const { isDark } = useTheme();
   const [users, setUsers] = useState([]);
@@ -130,7 +130,7 @@ export default function AdminAccounts() {
       setError('');
     } catch (e) { setError(e.message); }
   }, [token]);
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { load(); }, [load, refreshKey]);
 
   const shown = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -224,6 +224,7 @@ export default function AdminAccounts() {
                 <td className="p-3">
                   <div className="flex justify-end gap-1.5">
                     <button type="button" onClick={() => setLimitsFor(u.id)} className={`px-2 py-1.5 rounded-lg border flex items-center gap-1 cursor-pointer ${btn}`} title="Usage time, job limits, feature access and end date"><SlidersHorizontal size={12} /> Limits</button>
+                    {onOpenDossier && <button type="button" onClick={() => onOpenDossier(u.id)} className={`p-1.5 rounded-lg border cursor-pointer ${btn}`} title="Details: sessions, logins, productions, send a notice" aria-label="Details"><Eye size={13} /></button>}
                     <button type="button" onClick={() => openLedger(u)} className={`p-1.5 rounded-lg border cursor-pointer ${btn}`} title="Usage history" aria-label="Usage history"><ListOrdered size={13} /></button>
                     <button type="button" onClick={() => openEdit(u)} className={`p-1.5 rounded-lg border cursor-pointer ${btn}`} title="Edit account" aria-label="Edit account"><Pencil size={13} /></button>
                     {!u.is_admin && (

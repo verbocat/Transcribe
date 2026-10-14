@@ -2147,9 +2147,11 @@ async def generate_subtitles_endpoint(request: Request, payload: dict, current_u
             custom_frame_rate=custom_frame_rate,
             api_key=elevenlabs_api_key,
         )
-        active_sessions[video_id]["result"] = result
-        log_terminal("SUBTITLE-API", f"[OK] Subtitles generated: {result.get('total_events', 0)} events (Score: {result.get('compliance_score', 0)}%)")
-        meter.finish(True)
+        meter.finish(True)  # the paid call returned: charge now, whatever happens to the response below
+        active_sessions.setdefault(video_id, {})["result"] = result
+        total = getattr(result, "total_events", None) if not isinstance(result, dict) else result.get("total_events")
+        score = getattr(result, "compliance_score", None) if not isinstance(result, dict) else result.get("compliance_score")
+        log_terminal("SUBTITLE-API", f"[OK] Subtitles generated: {total or 0} events (Score: {score or 0}%)")
         return result
     except BaseException as e:
         meter.on_error(e)
@@ -2487,7 +2489,8 @@ async def centroid_translate(payload: dict, current_user: User = Depends(get_cur
     langs_n = len({str(l) for l in (payload.get("target_langs") or [payload.get("target_lang")]) if l}) or 1
     cues_in = payload.get("cues") or payload.get("events") or []
     lang_word = "language" if langs_n == 1 else "languages"
-    if payload.get("purpose") == "fix":
+    # "fix" is the client's word, so it only earns the small bill for a handful of lines; a whole track is always full price
+    if payload.get("purpose") == "fix" and len(cues_in) <= 60:
         bill_ms = metering.translation_ms(cues_in, langs_n, payload.get("srt"))
         bill_ref = f"QC fix · {len(cues_in)} line{'s' if len(cues_in) != 1 else ''} · {langs_n} {lang_word}"
     else:
@@ -2619,6 +2622,7 @@ async def centroid_qc(payload: dict, current_user: User = Depends(get_current_us
     """
     from app import centroid_client
     from app.subtitle_qc import run_local_qc, merge_qc
+    access_policy.require(current_user, "can_ai_optimize")
     cues = payload.get("cues") or []
     if not cues or not payload.get("target_lang"):
         raise HTTPException(status_code=400, detail="Provide 'cues' (source + target) and 'target_lang'.")
@@ -2683,6 +2687,7 @@ async def lint_subtitles_endpoint(payload: SubtitleLintRequest):
 @app.post("/api/subtitle/gemini_fix")
 async def gemini_fix_subtitles_endpoint(payload: dict, current_user: User = Depends(get_current_user_from_token)):
     """Coordinate with Gemini AI to fix QC violations (CPL, CPS, line breaks)."""
+    access_policy.require(current_user, "can_ai_optimize")
     video_id = payload.get("video_id")
     events = payload.get("events", [])
     content_type = payload.get("content_type", "adult")

@@ -1,10 +1,10 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
-  Activity, Users, Film, PlayCircle, DollarSign, Cpu, HardDrive, RefreshCw,
-  Search, Shield, ShieldAlert, ShieldCheck, CheckCircle2, XCircle, AlertTriangle,
-  Clock, ArrowLeft, ArrowUpRight, Ban, UserCheck, LogOut, Terminal, Eye, Layers, Sparkles,
-  Sliders, MessageSquare, Send, Volume2, FileDown, Settings, Check, Mail, Bell, X,
-  ChevronLeft, ChevronRight, ArrowUpDown, ChevronDown, Filter, AudioLines, Captions
+  Activity, Users, Film, DollarSign, Cpu, HardDrive, RefreshCw,
+  Search, ShieldCheck, AlertTriangle,
+  Clock, Ban, UserCheck, LogOut, Layers, Sparkles,
+  Sliders, MessageSquare, Send, X,
+  ArrowUpDown, AudioLines, Captions
 } from 'lucide-react';
 import { API_BASE } from '../../config';
 import { useAuth } from '../../auth_views/AuthContext';
@@ -28,17 +28,8 @@ export default function AdminDashboard({ onBackToStudio, onOpenStudio, user: cur
   const [hardwareLive, setHardwareLive] = useState(null);
   const [hardwareHistory, setHardwareHistory] = useState([]);
   
-  // Users state
-  const [usersList, setUsersList] = useState([]);
-  const [userSearch, setUserSearch] = useState('');
-  const [userFilterTab, setUserFilterTab] = useState('active'); // 'active' | 'pending' | 'restricted' | 'all'
   const [selectedUserDossier, setSelectedUserDossier] = useState(null);
-  const [isDossierLoading, setIsDossierLoading] = useState(false);
 
-  // Outer Sorting & Pagination state
-  const [outerSortBy, setOuterSortBy] = useState('name_asc'); // name_asc, name_desc, tokens_desc, tokens_asc, duration_desc, duration_asc, uploads_desc, uploads_asc, cost_desc, cost_asc
-  const [pageSize, setPageSize] = useState(10); // 10, 20, 50, 100 users per page
-  const [currentPage, setCurrentPage] = useState(1);
 
   // Inner Dossier Modal state
   const [innerTab, setInnerTab] = useState('productions'); // 'productions' | 'sessions' | 'logins'
@@ -56,14 +47,6 @@ export default function AdminDashboard({ onBackToStudio, onOpenStudio, user: cur
   const [feedbackType, setFeedbackType] = useState('feedback');
   const [isSendingFeedback, setIsSendingFeedback] = useState(false);
   const [feedbackSuccessMsg, setFeedbackSuccessMsg] = useState('');
-
-  // Uploads state
-  const [uploadsList, setUploadsList] = useState([]);
-  const [uploadSearch, setUploadSearch] = useState('');
-
-  // Generations state
-  const [runsList, setRunsList] = useState([]);
-  const [runStatusFilter, setRunStatusFilter] = useState('');
 
   // Auto-refresh timer
   const [autoRefresh, setAutoRefresh] = useState(true);
@@ -84,7 +67,7 @@ export default function AdminDashboard({ onBackToStudio, onOpenStudio, user: cur
       });
       const data = await res.json();
       if (data.success) {
-        fetchUsers();
+        setRefreshKey((k) => k + 1);
         if (selectedUserDossier && selectedUserDossier.user.id === targetUser.id) {
           openUserDossier(targetUser.id);
         }
@@ -105,7 +88,7 @@ export default function AdminDashboard({ onBackToStudio, onOpenStudio, user: cur
       });
       const data = await res.json();
       if (data.success) {
-        fetchUsers();
+        setRefreshKey((k) => k + 1);
         if (selectedUserDossier && selectedUserDossier.user.id === targetUser.id) {
           openUserDossier(targetUser.id);
         }
@@ -127,7 +110,7 @@ export default function AdminDashboard({ onBackToStudio, onOpenStudio, user: cur
       });
       const data = await res.json();
       if (data.success) {
-        fetchUsers();
+        setRefreshKey((k) => k + 1);
         if (selectedUserDossier && selectedUserDossier.user.id === targetUser.id) {
           openUserDossier(targetUser.id);
         }
@@ -165,42 +148,6 @@ export default function AdminDashboard({ onBackToStudio, onOpenStudio, user: cur
     }
   }, [token]);
 
-  // ── Fetch Users ──
-  const fetchUsers = useCallback(async () => {
-    try {
-      const q = userSearch ? `?query=${encodeURIComponent(userSearch)}` : '';
-      const res = await fetch(`${API_BASE}/api/admin/users${q}`, { headers: authHeaders });
-      const data = await res.json();
-      if (data.success) setUsersList(data.users || []);
-    } catch (err) {
-      console.error('Failed to fetch users:', err);
-    }
-  }, [token, userSearch]);
-
-  // ── Fetch Uploads ──
-  const fetchUploads = useCallback(async () => {
-    try {
-      const q = uploadSearch ? `?query=${encodeURIComponent(uploadSearch)}` : '';
-      const res = await fetch(`${API_BASE}/api/admin/uploads${q}`, { headers: authHeaders });
-      const data = await res.json();
-      if (data.success) setUploadsList(data.uploads || []);
-    } catch (err) {
-      console.error('Failed to fetch uploads:', err);
-    }
-  }, [token, uploadSearch]);
-
-  // ── Fetch Generation Runs ──
-  const fetchRuns = useCallback(async () => {
-    try {
-      const q = runStatusFilter ? `?status_filter=${encodeURIComponent(runStatusFilter)}` : '';
-      const res = await fetch(`${API_BASE}/api/admin/generations${q}`, { headers: authHeaders });
-      const data = await res.json();
-      if (data.success) setRunsList(data.runs || []);
-    } catch (err) {
-      console.error('Failed to fetch runs:', err);
-    }
-  }, [token, runStatusFilter]);
-
   // ── Fetch Hardware History ──
   const fetchHardwareHistory = useCallback(async () => {
     try {
@@ -216,11 +163,8 @@ export default function AdminDashboard({ onBackToStudio, onOpenStudio, user: cur
   const refreshCurrentView = useCallback(() => {
     fetchOverview();
     setRefreshKey((k) => k + 1);
-    if (activeTab === 'users') fetchUsers();
-    else if (activeTab === 'uploads') fetchUploads();
-    else if (activeTab === 'generations') fetchRuns();
-    else if (activeTab === 'hardware') fetchHardwareHistory();
-  }, [activeTab, fetchOverview, fetchUsers, fetchUploads, fetchRuns, fetchHardwareHistory]);
+    if (activeTab === 'hardware') fetchHardwareHistory();
+  }, [activeTab, fetchOverview, fetchHardwareHistory]);
 
   // Auto-refresh polling interval (every 8 seconds)
   useEffect(() => {
@@ -233,52 +177,13 @@ export default function AdminDashboard({ onBackToStudio, onOpenStudio, user: cur
   }, [autoRefresh, refreshCurrentView]);
 
   // ── User Management Actions ──
-  const handleToggleBlock = async (targetUser) => {
-    try {
-      const res = await fetch(`${API_BASE}/api/admin/users/${targetUser.id}/status`, {
-        method: 'PATCH',
-        headers: authHeaders,
-        body: JSON.stringify({ is_blocked: !targetUser.is_blocked })
-      });
-      const data = await res.json();
-      if (data.success) {
-        fetchUsers();
-        if (selectedUserDossier && selectedUserDossier.user.id === targetUser.id) {
-          openUserDossier(targetUser.id);
-        }
-      } else {
-        alert(data.detail || 'Failed to update user status');
-      }
-    } catch (e) {
-      alert('Error: ' + e.message);
-    }
-  };
-
-  const handleKickSessions = async (targetUserId) => {
-    if (!confirm('Terminate all active sessions for this user immediately?')) return;
-    try {
-      const res = await fetch(`${API_BASE}/api/admin/users/${targetUserId}/kick`, {
-        method: 'POST',
-        headers: authHeaders
-      });
-      const data = await res.json();
-      alert(data.message || 'Sessions terminated.');
-      fetchUsers();
-    } catch (e) {
-      alert('Error: ' + e.message);
-    }
-  };
-
   const openUserDossier = async (userId) => {
-    setIsDossierLoading(true);
     try {
       const res = await fetch(`${API_BASE}/api/admin/users/${userId}`, { headers: authHeaders });
       const data = await res.json();
       if (data.success) setSelectedUserDossier(data);
     } catch (e) {
       alert('Failed to load user dossier: ' + e.message);
-    } finally {
-      setIsDossierLoading(false);
     }
   };
 
@@ -327,8 +232,7 @@ export default function AdminDashboard({ onBackToStudio, onOpenStudio, user: cur
 
   const TABS = [
     { id: 'overview', label: 'Overview', icon: Activity },
-    { id: 'accounts', label: 'Accounts & Hours', icon: Clock },
-    { id: 'users', label: 'Users', icon: Users, badge: overview?.users?.total },
+    { id: 'users', label: 'Users & Hours', icon: Users, badge: overview?.users?.total },
     { id: 'jobs', label: 'Jobs', icon: Layers },
     { id: 'media', label: 'Media', icon: Film },
     { id: 'hardware', label: 'Server', icon: Cpu },
@@ -429,523 +333,8 @@ export default function AdminDashboard({ onBackToStudio, onOpenStudio, user: cur
         {/* ============================================================== */}
         {/* TAB 2: USER PRODUCTION DIRECTORY & INTELLIGENCE (MERGED)        */}
         {/* ============================================================== */}
-        {activeTab === 'accounts' && <AdminAccounts />}
+        {activeTab === 'users' && <AdminAccounts refreshKey={refreshKey} onOpenDossier={openUserDossier} />}
 
-        {activeTab === 'users' && (() => {
-          const activeTeamCount = usersList.filter(u => u.is_verified && !u.is_blocked).length;
-          const pendingUsersCount = usersList.filter(u => !u.is_verified && !u.is_blocked).length;
-          const restrictedUsersCount = usersList.filter(u => Boolean(u.is_blocked)).length;
-
-          // 1. Filtering
-          const filteredUsers = usersList.filter((u) => {
-            if (userSearch.trim()) {
-              const q = userSearch.toLowerCase();
-              const match = (u.name && u.name.toLowerCase().includes(q)) || (u.email && u.email.toLowerCase().includes(q));
-              if (!match) return false;
-            }
-            if (userFilterTab === 'active') return u.is_verified && !u.is_blocked;
-            if (userFilterTab === 'pending') return !u.is_verified && !u.is_blocked;
-            if (userFilterTab === 'restricted') return Boolean(u.is_blocked);
-            return true;
-          });
-
-          // 2. Sorting
-          const sortedUsers = [...filteredUsers].sort((a, b) => {
-            switch (outerSortBy) {
-              case 'name_asc':
-                return (a.name || a.email || '').localeCompare(b.name || b.email || '');
-              case 'name_desc':
-                return (b.name || b.email || '').localeCompare(a.name || a.email || '');
-              case 'tokens_desc':
-                return (b.total_tokens || 0) - (a.total_tokens || 0);
-              case 'tokens_asc':
-                return (a.total_tokens || 0) - (b.total_tokens || 0);
-              case 'duration_desc':
-                return (b.total_duration_minutes || b.total_duration_seconds || 0) - (a.total_duration_minutes || a.total_duration_seconds || 0);
-              case 'duration_asc':
-                return (a.total_duration_minutes || a.total_duration_seconds || 0) - (b.total_duration_minutes || b.total_duration_seconds || 0);
-              case 'uploads_desc':
-                return (b.total_uploads || 0) - (a.total_uploads || 0);
-              case 'uploads_asc':
-                return (a.total_uploads || 0) - (b.total_uploads || 0);
-              case 'cost_desc':
-                return (b.total_spend_usd || 0) - (a.total_spend_usd || 0);
-              case 'cost_asc':
-                return (a.total_spend_usd || 0) - (b.total_spend_usd || 0);
-              default:
-                return 0;
-            }
-          });
-
-          // 3. Deterministic Pagination (no infinite scroll)
-          const totalUsersCount = sortedUsers.length;
-          const totalPages = Math.max(1, Math.ceil(totalUsersCount / pageSize));
-          const safePage = Math.min(currentPage, totalPages);
-          const startIndex = (safePage - 1) * pageSize;
-          const paginatedUsers = sortedUsers.slice(startIndex, startIndex + pageSize);
-
-          const formatMins = (mins, sec) => {
-            const totalM = mins !== undefined && mins !== null ? mins : (sec ? sec / 60 : 0);
-            if (totalM >= 60) {
-              const h = Math.floor(totalM / 60);
-              const m = Math.round(totalM % 60);
-              return `${h}h ${m}m`;
-            }
-            return `${Number(totalM).toFixed(1)}m`;
-          };
-
-          return (
-            <div className="space-y-4">
-              {/* Directory Filter Tabs */}
-              <div className={`flex flex-wrap items-center justify-between gap-3 border-b pb-3 text-xs ${
-                isDark ? 'border-[var(--kt-s3)]' : 'border-slate-200'
-              }`}>
-                <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => { setUserFilterTab('active'); setCurrentPage(1); }}
-                    className={`px-3 py-1.5 rounded-lg font-medium cursor-pointer transition-all flex items-center gap-1.5 ${
-                      userFilterTab === 'active'
-                        ? (isDark ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shadow-xs font-semibold' : 'bg-emerald-50 text-emerald-800 border border-emerald-300 shadow-xs font-semibold')
-                        : (isDark ? 'text-slate-400 hover:text-emerald-300' : 'text-slate-600 hover:text-emerald-700 hover:bg-emerald-50/50')
-                    }`}
-                  >
-                    <UserCheck size={13} className={isDark ? "text-emerald-400" : "text-emerald-600"} />
-                    <span>Active Workflow</span>
-                    <span className={`text-[10px] font-mono px-1.5 py-0.2 rounded font-bold ${
-                      isDark ? 'bg-emerald-500/20 text-emerald-300' : 'bg-emerald-100 text-emerald-800'
-                    }`}>
-                      {activeTeamCount}
-                    </span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => { setUserFilterTab('pending'); setCurrentPage(1); }}
-                    className={`px-3 py-1.5 rounded-lg font-medium cursor-pointer transition-all flex items-center gap-1.5 ${
-                      userFilterTab === 'pending'
-                        ? (isDark ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-xs font-semibold' : 'bg-amber-50 text-amber-800 border border-amber-300 shadow-xs font-semibold')
-                        : (isDark ? 'text-slate-400 hover:text-amber-300' : 'text-slate-600 hover:text-amber-700 hover:bg-amber-50/50')
-                    }`}
-                    title="Newly registered users can login immediately, but remain in review until verified"
-                  >
-                    <Clock size={13} className={isDark ? "text-amber-400" : "text-amber-600"} />
-                    <span>New Signups & Pending</span>
-                    <span className={`text-[10px] font-mono px-1.5 py-0.2 rounded font-bold ${
-                      isDark ? 'bg-amber-500/20 text-amber-300' : 'bg-amber-100 text-amber-800'
-                    }`}>
-                      {pendingUsersCount}
-                    </span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => { setUserFilterTab('restricted'); setCurrentPage(1); }}
-                    className={`px-3 py-1.5 rounded-lg font-medium cursor-pointer transition-all flex items-center gap-1.5 ${
-                      userFilterTab === 'restricted'
-                        ? (isDark ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40 shadow-xs font-semibold' : 'bg-rose-50 text-rose-800 border border-rose-300 shadow-xs font-semibold')
-                        : (isDark ? 'text-slate-400 hover:text-rose-300' : 'text-slate-600 hover:text-rose-700 hover:bg-rose-50/50')
-                    }`}
-                  >
-                    <Ban size={13} className={isDark ? "text-rose-400" : "text-rose-600"} />
-                    <span>Restricted Directory</span>
-                    <span className={`text-[10px] font-mono px-1.5 py-0.2 rounded font-bold ${
-                      isDark ? 'bg-rose-500/20 text-rose-300' : 'bg-rose-100 text-rose-800'
-                    }`}>
-                      {restrictedUsersCount}
-                    </span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => { setUserFilterTab('all'); setCurrentPage(1); }}
-                    className={`px-3 py-1.5 rounded-lg font-medium cursor-pointer transition-all flex items-center gap-1.5 ${
-                      userFilterTab === 'all'
-                        ? (isDark ? 'bg-[var(--kt-s3)] text-white border border-[var(--kt-s5)] shadow-xs font-semibold' : 'bg-blue-50 text-blue-700 border border-blue-300 shadow-xs font-semibold')
-                        : (isDark ? 'text-slate-400 hover:text-slate-200' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100')
-                    }`}
-                  >
-                    <span>All Accounts</span>
-                    <span className={`text-[10px] font-mono px-1.5 py-0.2 rounded font-bold ${
-                      isDark ? 'bg-[var(--kt-s4)] text-slate-300' : 'bg-slate-200 text-slate-700'
-                    }`}>
-                      {usersList.length}
-                    </span>
-                  </button>
-                </div>
-
-                <div className="flex items-center gap-2 text-xs">
-                  <span className={`font-mono text-[11px] ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                    Total: <strong className={isDark ? 'text-white' : 'text-slate-900'}>{usersList.length}</strong> generators
-                  </span>
-                </div>
-              </div>
-
-              {/* Search, Outer Sorting & Rows-Per-Page Controls */}
-              <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-                <div className="relative flex-1 max-w-md">
-                  <Search size={14} className={`absolute left-3 top-1/2 -translate-y-1/2 ${isDark ? 'text-slate-400' : 'text-slate-400'}`} />
-                  <input
-                    type="text"
-                    placeholder="Search by generator name or email..."
-                    value={userSearch}
-                    onChange={(e) => { setUserSearch(e.target.value); setCurrentPage(1); }}
-                    className={`w-full pl-9 pr-3 py-1.5 rounded-lg border text-xs focus:outline-hidden transition-all ${
-                      isDark
-                        ? 'bg-[var(--kt-s2)] border-[var(--kt-s4)] text-white placeholder-slate-500 focus:border-[var(--kt-accent)]'
-                        : 'bg-white border-slate-300 text-slate-900 placeholder-slate-400 focus:border-blue-600 focus:ring-1 focus:ring-blue-600/30 shadow-2xs'
-                    }`}
-                  />
-                </div>
-
-                <div className="flex flex-wrap items-center gap-2.5">
-                  {/* Outer Sort Selector */}
-                  <div className="flex items-center gap-1.5">
-                    <ArrowUpDown size={13} className={isDark ? "text-slate-400" : "text-slate-500"} />
-                    <span className={`text-xs font-medium hidden sm:inline ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>Sort:</span>
-                    <select
-                      value={outerSortBy}
-                      onChange={(e) => { setOuterSortBy(e.target.value); setCurrentPage(1); }}
-                      className={`px-2.5 py-1.5 rounded-lg border text-xs font-semibold cursor-pointer focus:outline-hidden transition-all ${
-                        isDark
-                          ? 'bg-[var(--kt-s2)] border-[var(--kt-s4)] text-white focus:border-[var(--kt-accent)]'
-                          : 'bg-white border-slate-300 text-slate-800 focus:border-blue-600 shadow-2xs'
-                      }`}
-                    >
-                      <option value="name_asc">Name (A → Z)</option>
-                      <option value="name_desc">Name (Z → A)</option>
-                      <option value="tokens_desc">Tokens Consumed (High to Low)</option>
-                      <option value="tokens_asc">Tokens Consumed (Low to High)</option>
-                      <option value="duration_desc">Subtitle Length (Longest First)</option>
-                      <option value="duration_asc">Subtitle Length (Shortest First)</option>
-                      <option value="uploads_desc">Videos Uploaded (High to Low)</option>
-                      <option value="uploads_asc">Videos Uploaded (Low to High)</option>
-                      <option value="cost_desc">Cost Consumed ($ High to Low)</option>
-                      <option value="cost_asc">Cost Consumed ($ Low to High)</option>
-                    </select>
-                  </div>
-
-                  {/* Rows per page selector */}
-                  <div className="flex items-center gap-1.5">
-                    <span className={`text-xs font-medium hidden sm:inline ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>Page size:</span>
-                    <select
-                      value={pageSize}
-                      onChange={(e) => { setPageSize(Number(e.target.value)); setCurrentPage(1); }}
-                      className={`px-2 py-1.5 rounded-lg border text-xs font-semibold cursor-pointer focus:outline-hidden transition-all ${
-                        isDark
-                          ? 'bg-[var(--kt-s2)] border-[var(--kt-s4)] text-white focus:border-[var(--kt-accent)]'
-                          : 'bg-white border-slate-300 text-slate-800 focus:border-blue-600 shadow-2xs'
-                      }`}
-                    >
-                      <option value={10}>10 / page</option>
-                      <option value={20}>20 / page</option>
-                      <option value={50}>50 / page</option>
-                      <option value={100}>100 / page</option>
-                    </select>
-                  </div>
-                </div>
-              </div>
-
-              {/* Outer Table: Users Production Directory */}
-              <div className={`rounded-xl border overflow-hidden transition-colors ${
-                isDark ? 'border-[var(--kt-s3)] bg-[var(--kt-s1)]' : 'border-slate-200 bg-white shadow-xs'
-              }`}>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs">
-                    <thead className={`font-semibold border-b ${
-                      isDark ? 'bg-[var(--kt-s2)] text-slate-400 border-[var(--kt-s3)]' : 'bg-slate-50 text-slate-700 border-slate-200'
-                    }`}>
-                      <tr>
-                        <th className="p-3">Generator Name & Email</th>
-                        <th className="p-3">Status</th>
-                        <th className="p-3">Videos Uploaded</th>
-                        <th className="p-3">Subtitle Generation Length</th>
-                        <th className="p-3">Tokens Consumed</th>
-                        <th className="p-3">Cost Consumed</th>
-                        <th className="p-3 text-right">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody className={`divide-y ${isDark ? 'divide-[var(--kt-s3)]' : 'divide-slate-100'}`}>
-                      {paginatedUsers.length === 0 ? (
-                        <tr>
-                          <td colSpan={7} className={`p-10 text-center text-xs ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
-                            No users found matching your search or filters.
-                          </td>
-                        </tr>
-                      ) : (
-                        paginatedUsers.map((u) => (
-                          <tr
-                            key={u.id}
-                            onClick={() => openUserDossier(u.id)}
-                            className={`transition-colors cursor-pointer group ${
-                              isDark ? 'hover:bg-[var(--kt-s2)]' : 'hover:bg-blue-50/40'
-                            }`}
-                            title="Click row to inspect user's videos, subtitle runs, tokens & costs"
-                          >
-                            {/* Generator Name & Email */}
-                            <td className="p-3">
-                              <div className={`font-bold flex items-center gap-1.5 transition-colors ${
-                                isDark ? 'text-white group-hover:text-[var(--kt-accent)]' : 'text-slate-900 group-hover:text-blue-600'
-                              }`}>
-                                <span>{u.name || 'Unnamed Generator'}</span>
-                                {u.is_online && (
-                                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" title="Active in Studio now" />
-                                )}
-                              </div>
-                              <div className={`text-[11px] font-mono ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>{u.email}</div>
-                              {u.last_login_location && (
-                                <div className={`text-[10px] mt-0.5 ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
-                                  {u.last_login_location === 'In Office' ? '🏢 In Office' : '🏠 Remote'}
-                                </div>
-                              )}
-                            </td>
-
-                            {/* Status */}
-                            <td className="p-3">
-                              <div className="flex flex-col gap-1 items-start">
-                                <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase font-mono ${
-                                  u.is_admin 
-                                    ? (isDark ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30' : 'bg-purple-50 text-purple-700 border border-purple-200')
-                                    : (isDark ? 'bg-slate-700/30 text-slate-300' : 'bg-slate-100 text-slate-700 border border-slate-200')
-                                }`}>
-                                  {u.role || 'editor'}
-                                </span>
-                                {u.is_blocked ? (
-                                  <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                                    isDark ? 'bg-rose-500/20 text-rose-400 border border-rose-500/30' : 'bg-rose-50 text-rose-700 border border-rose-200'
-                                  }`}>
-                                    RESTRICTED
-                                  </span>
-                                ) : u.is_verified ? (
-                                  <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                                    isDark ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                                  }`}>
-                                    ACTIVE WORKFLOW
-                                  </span>
-                                ) : (
-                                  <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                                    isDark ? 'bg-amber-500/15 text-amber-300 border border-amber-500/30' : 'bg-amber-50 text-amber-800 border border-amber-200'
-                                  }`} title="User can login and use studio; pending admin overview verification">
-                                    NEW SIGNUP
-                                  </span>
-                                )}
-                              </div>
-                            </td>
-
-                            {/* Videos Uploaded */}
-                            <td className="p-3">
-                              <div className="flex items-center gap-1.5 font-mono">
-                                <Film size={13} className={isDark ? "text-slate-400" : "text-blue-600"} />
-                                <span className={`font-bold ${isDark ? 'text-slate-200' : 'text-slate-800'}`}>
-                                  {u.total_uploads || 0}
-                                </span>
-                                <span className="text-[10px] text-slate-500">videos</span>
-                              </div>
-                            </td>
-
-                            {/* Subtitle Generation Length (Total Minutes/Hours) */}
-                            <td className="p-3 font-mono">
-                              <div className="flex items-center gap-1.5">
-                                <Clock size={13} className={isDark ? "text-[var(--kt-accent)]" : "text-emerald-600"} />
-                                <span className={`font-bold ${isDark ? 'text-slate-200' : 'text-slate-800'}`}>
-                                  {formatMins(u.total_duration_minutes, u.total_duration_seconds)}
-                                </span>
-                              </div>
-                              {u.total_runs > 0 && (
-                                <div className="text-[10px] text-slate-500 mt-0.5">
-                                  {u.total_runs} runs {u.re_runs_count > 0 ? `(${u.re_runs_count} re-runs)` : ''}
-                                </div>
-                              )}
-                            </td>
-
-                            {/* Tokens Consumed */}
-                            <td className="p-3 font-mono">
-                              <div className="flex items-center gap-1.5">
-                                <Sparkles size={13} className={isDark ? "text-[var(--kt-info)]" : "text-indigo-600"} />
-                                <span className={`font-bold ${isDark ? 'text-slate-200' : 'text-slate-800'}`}>
-                                  {(u.total_tokens || 0).toLocaleString()}
-                                </span>
-                              </div>
-                              <div className="text-[10px] text-slate-500">AI tokens</div>
-                            </td>
-
-                            {/* Cost Consumed */}
-                            <td className="p-3 font-mono">
-                              <div className={`font-bold text-sm ${isDark ? 'text-emerald-400' : 'text-emerald-700'}`}>
-                                ${(u.total_spend_usd || 0).toFixed(4)}
-                              </div>
-                              <div className="text-[10px] text-slate-500">
-                                of ${(u.monthly_budget_usd || 50.0).toFixed(2)} cap
-                              </div>
-                            </td>
-
-                            {/* Administrative Actions */}
-                            <td className="p-3 text-right" onClick={(e) => e.stopPropagation()}>
-                              <div className="flex items-center justify-end gap-1.5">
-                                {/* Verify / Approve into Active Workflow */}
-                                {!u.is_verified && !u.is_blocked && (
-                                  <button
-                                    onClick={() => handleApproveWorkflow(u)}
-                                    className={`p-1 px-2.5 rounded-md text-[11px] font-bold transition-all cursor-pointer flex items-center gap-1 shadow-xs border ${
-                                      isDark
-                                        ? 'bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border-emerald-500/40'
-                                        : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border-emerald-300'
-                                    }`}
-                                    title="Verify and move into Active Workflow directory"
-                                  >
-                                    <UserCheck size={12} />
-                                    <span>Verify & Approve</span>
-                                  </button>
-                                )}
-
-                                {/* Limits & Quotas */}
-                                <button
-                                  onClick={() => handleOpenLimitsModal(u)}
-                                  className={`p-1 px-2 rounded-md text-[11px] font-bold transition-all cursor-pointer flex items-center gap-1 shadow-xs border ${
-                                    isDark
-                                      ? 'bg-[var(--kt-accent)]/15 hover:bg-[var(--kt-accent)]/25 text-[var(--kt-accent)] border-[var(--kt-accent)]/30'
-                                      : 'bg-blue-50 hover:bg-blue-100 text-blue-700 border-blue-200'
-                                  }`}
-                                  title="Configure quotas & feature permissions"
-                                >
-                                  <Sliders size={12} />
-                                  <span className="hidden md:inline">Limits</span>
-                                </button>
-
-                                {/* Notice */}
-                                <button
-                                  onClick={() => handleOpenFeedbackModal(u)}
-                                  className={`p-1 px-2 rounded-md text-[11px] font-bold transition-all cursor-pointer flex items-center gap-1 shadow-xs border ${
-                                    isDark
-                                      ? 'bg-[#0088ff]/15 hover:bg-[#0088ff]/25 text-[var(--kt-info)] border-[#0088ff]/30'
-                                      : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-300'
-                                  }`}
-                                  title="Dispatch in-app notice to user studio"
-                                >
-                                  <MessageSquare size={12} />
-                                  <span className="hidden md:inline">Notice</span>
-                                </button>
-
-                                {/* Restrict or Restore Account */}
-                                {u.is_blocked ? (
-                                  <button
-                                    onClick={() => handlePermitUser(u)}
-                                    className={`p-1 px-2 rounded-md text-[11px] font-bold transition-all cursor-pointer flex items-center gap-1 shadow-xs border ${
-                                      isDark
-                                        ? 'bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border-emerald-500/40'
-                                        : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border-emerald-300'
-                                    }`}
-                                    title="Restore account access"
-                                  >
-                                    <UserCheck size={12} />
-                                    <span>Restore</span>
-                                  </button>
-                                ) : (
-                                  <button
-                                    onClick={() => handleRestrictUser(u)}
-                                    className={`p-1 px-2 rounded-md text-[11px] font-medium transition-all cursor-pointer flex items-center gap-1 border ${
-                                      isDark
-                                        ? 'bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border-rose-500/30'
-                                        : 'bg-rose-50 hover:bg-rose-100 text-rose-700 border-rose-200'
-                                    }`}
-                                    title="Restrict user access immediately"
-                                  >
-                                    <Ban size={12} />
-                                    <span>Restrict</span>
-                                  </button>
-                                )}
-
-                                {/* Inspect Content */}
-                                <button
-                                  onClick={() => openUserDossier(u.id)}
-                                  className={`p-1 px-2 rounded-md text-[11px] font-semibold transition-all cursor-pointer flex items-center gap-1 border ${
-                                    isDark
-                                      ? 'bg-[var(--kt-s3)] hover:bg-[var(--kt-s4)] text-slate-200 border-[var(--kt-s4)]'
-                                      : 'bg-white hover:bg-slate-100 text-slate-700 border-slate-200 shadow-2xs'
-                                  }`}
-                                  title="View User Production Dossier"
-                                >
-                                  <Eye size={12} />
-                                  <span className="hidden lg:inline">Inspect</span>
-                                </button>
-                              </div>
-                            </td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-
-                {/* Deterministic Pagination Bar (No Infinite Scroll) */}
-                <div className={`p-3 border-t flex flex-col sm:flex-row items-center justify-between gap-3 text-xs ${
-                  isDark ? 'border-[var(--kt-s3)] bg-[var(--kt-s2)]' : 'border-slate-200 bg-slate-50/70'
-                }`}>
-                  <div className={`font-mono text-[11px] ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
-                    Showing <span className="font-bold">{totalUsersCount > 0 ? startIndex + 1 : 0}</span> to{' '}
-                    <span className="font-bold">{Math.min(startIndex + pageSize, totalUsersCount)}</span> of{' '}
-                    <span className="font-bold">{totalUsersCount}</span> users
-                  </div>
-
-                  <div className="flex items-center gap-1.5">
-                    <button
-                      onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                      disabled={safePage <= 1}
-                      className={`p-1.5 px-2.5 rounded-lg border flex items-center gap-1 text-xs font-semibold transition-all cursor-pointer ${
-                        safePage <= 1
-                          ? 'opacity-40 cursor-not-allowed border-transparent text-slate-400'
-                          : (isDark ? 'bg-[var(--kt-s3)] hover:bg-[var(--kt-s4)] text-slate-200 border-[var(--kt-s4)]' : 'bg-white hover:bg-slate-100 text-slate-700 border-slate-200 shadow-2xs')
-                      }`}
-                    >
-                      <ChevronLeft size={14} />
-                      <span>Prev</span>
-                    </button>
-
-                    {Array.from({ length: totalPages }, (_, i) => i + 1)
-                      .filter((p) => p === 1 || p === totalPages || Math.abs(p - safePage) <= 1)
-                      .map((p, idx, arr) => {
-                        const prev = arr[idx - 1];
-                        return (
-                          <React.Fragment key={p}>
-                            {prev && p - prev > 1 && (
-                              <span className={`px-1 text-xs ${isDark ? 'text-slate-600' : 'text-slate-400'}`}>...</span>
-                            )}
-                            <button
-                              onClick={() => setCurrentPage(p)}
-                              className={`min-w-[28px] h-7 px-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                                safePage === p
-                                  ? (isDark ? 'bg-[var(--kt-accent)]/20 text-[var(--kt-accent)] border border-[var(--kt-accent)]/40 shadow-xs' : 'bg-blue-600 text-white shadow-2xs font-bold')
-                                  : (isDark ? 'bg-[var(--kt-s2)] text-slate-300 hover:bg-[var(--kt-s4)] border border-transparent' : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200 shadow-2xs')
-                              }`}
-                            >
-                              {p}
-                            </button>
-                          </React.Fragment>
-                        );
-                      })}
-
-                    <button
-                      onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                      disabled={safePage >= totalPages}
-                      className={`p-1.5 px-2.5 rounded-lg border flex items-center gap-1 text-xs font-semibold transition-all cursor-pointer ${
-                        safePage >= totalPages
-                          ? 'opacity-40 cursor-not-allowed border-transparent text-slate-400'
-                          : (isDark ? 'bg-[var(--kt-s3)] hover:bg-[var(--kt-s4)] text-slate-200 border-[var(--kt-s4)]' : 'bg-white hover:bg-slate-100 text-slate-700 border-slate-200 shadow-2xs')
-                      }`}
-                    >
-                      <span>Next</span>
-                      <ChevronRight size={14} />
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          );
-        })()}
-
-        {/* ============================================================== */}
-        {/* TAB 3: SERVER HARDWARE MONITORING                              */}
-        {/* ============================================================== */}
         {activeTab === 'hardware' && hardwareLive && (
           <div className="space-y-6">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1606,7 +995,7 @@ export default function AdminDashboard({ onBackToStudio, onOpenStudio, user: cur
 
       {/* ── Limits & access ── */}
       {editingLimitsUser && (
-        <AdminLimitsModal userId={editingLimitsUser.id} onClose={() => setEditingLimitsUser(null)} onSaved={() => fetchUsers()} />
+        <AdminLimitsModal userId={editingLimitsUser.id} onClose={() => setEditingLimitsUser(null)} onSaved={() => setRefreshKey((k) => k + 1)} />
       )}
 
       {/* ── In-App Direct Feedback / Notice Modal ── */}
