@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  UserPlus, Search, Clock, X, Copy, Check, Trash2, KeyRound, Ban, UserCheck, ListOrdered, Pencil, RefreshCw, AlertTriangle,
+  UserPlus, Search, SlidersHorizontal, X, Copy, Check, Trash2, KeyRound, Ban, UserCheck, ListOrdered, Pencil, RefreshCw, AlertTriangle,
 } from 'lucide-react';
 import { API_BASE } from '../../config';
 import { useAuth } from '../../auth_views/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
 import { formatHours } from '../UsageBadge';
+import AdminLimitsModal from './AdminLimitsModal';
 
 const api = async (token, path, { method = 'GET', body } = {}) => {
   const res = await fetch(`${API_BASE}/api/admin${path}`, {
@@ -69,10 +70,35 @@ function Modal({ title, onClose, children, isDark }) {
   );
 }
 
+const OFF_LABELS = {
+  can_transcribe_studio: 'No Transcribe Studio', can_subtitle_studio: 'No Subtitle Studio', can_translate: 'No translation',
+  can_ai_optimize: 'No AI assistance', can_export: 'No exports', can_audio_peaks: 'No waveform',
+};
+
+/** Small chips under the account name for every limit or switched-off feature, so restrictions are visible at a glance. */
+function AccessBadges({ a }) {
+  if (!a) return null;
+  const chips = [];
+  if (a.expired) chips.push(['Access ended', true]);
+  else if (a.access_until) chips.push([`Until ${new Date(`${a.access_until}T00:00:00`).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}`, false]);
+  if (a.max_file_minutes) chips.push([`Files ≤ ${a.max_file_minutes} min`, false]);
+  if (a.max_jobs_per_day != null) chips.push([`${a.max_jobs_per_day} jobs/day`, false]);
+  Object.entries(OFF_LABELS).forEach(([k, l]) => { if (a[k] === false) chips.push([l, true]); });
+  if (!chips.length) return null;
+  return (
+    <div className="mt-1.5 flex flex-wrap gap-1">
+      {chips.map(([label, warn]) => (
+        <span key={label} className={`text-[10.5px] px-1.5 py-0.5 rounded-md ${warn ? 'bg-[var(--kt-danger)]/12 text-[var(--kt-danger)]' : 'bg-[var(--kt-s3)] text-[var(--kt-muted)]'}`}>{label}</span>
+      ))}
+    </div>
+  );
+}
+
 export default function AdminAccounts() {
   const { token, user: me } = useAuth();
   const { isDark } = useTheme();
   const [users, setUsers] = useState([]);
+  const [limitsFor, setLimitsFor] = useState(null);
   const [search, setSearch] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -106,10 +132,6 @@ export default function AdminAccounts() {
   };
 
   const openCreate = () => { setForm({ name: '', email: '', password: '', tHours: '10', lHours: '10', tUnl: false, lUnl: false }); setDialog({ type: 'create' }); setError(''); };
-  const openHours = (u) => {
-    setForm({ tHours: u.usage.transcribe.limit_hours ?? '', lHours: u.usage.translate.limit_hours ?? '', tUnl: u.usage.transcribe.unlimited, lUnl: u.usage.translate.unlimited });
-    setDialog({ type: 'hours', user: u }); setError('');
-  };
   const openEdit = (u) => { setForm({ name: u.name, email: u.email, newPassword: '' }); setDialog({ type: 'edit', user: u }); setError(''); };
   const openLedger = (u) => run(async () => {
     const data = await api(token, `/users/${u.id}/usage?limit=200`);
@@ -122,10 +144,6 @@ export default function AdminAccounts() {
       const data = await api(token, '/users', { method: 'POST', body: { name: form.name, email: form.email, password: form.password || null, ...hoursBody(form) } });
       setDialog(data.generated_password ? { type: 'secret', user: data.user, password: data.generated_password } : null);
     });
-  };
-  const submitHours = (e) => {
-    e.preventDefault();
-    run(async () => { await api(token, `/users/${dialog.user.id}/hours`, { method: 'PUT', body: hoursBody(form) }); setDialog(null); });
   };
   const submitEdit = (e, reset = false) => {
     e.preventDefault();
@@ -182,13 +200,14 @@ export default function AdminAccounts() {
               <tr key={u.id} className={`border-b last:border-0 ${isDark ? 'border-[var(--kt-s3)]' : 'border-slate-100'}`}>
                 <td className="p-3">
                   <div className={`font-semibold ${strong}`}>{u.name} {u.is_admin && <span className="ml-1 text-[9px] px-1.5 py-0.5 rounded bg-[var(--kt-accent)]/20 text-[var(--kt-accent)] font-bold">ADMIN</span>} {u.is_blocked && <span className="ml-1 text-[9px] px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-400 font-bold">DISABLED</span>}</div>
+                  <AccessBadges a={u.access} />
                   <div className={`font-mono ${muted}`}>{u.email}</div>
                 </td>
                 <td className="p-3"><Meter b={u.usage.transcribe} isDark={isDark} /></td>
                 <td className="p-3"><Meter b={u.usage.translate} isDark={isDark} /></td>
                 <td className="p-3">
                   <div className="flex justify-end gap-1.5">
-                    <button type="button" onClick={() => openHours(u)} className={`px-2 py-1.5 rounded-lg border flex items-center gap-1 cursor-pointer ${btn}`} title="Edit hours"><Clock size={12} /> Hours</button>
+                    <button type="button" onClick={() => setLimitsFor(u.id)} className={`px-2 py-1.5 rounded-lg border flex items-center gap-1 cursor-pointer ${btn}`} title="Usage time, job limits, feature access and end date"><SlidersHorizontal size={12} /> Limits</button>
                     <button type="button" onClick={() => openLedger(u)} className={`p-1.5 rounded-lg border cursor-pointer ${btn}`} title="Usage history" aria-label="Usage history"><ListOrdered size={13} /></button>
                     <button type="button" onClick={() => openEdit(u)} className={`p-1.5 rounded-lg border cursor-pointer ${btn}`} title="Edit account" aria-label="Edit account"><Pencil size={13} /></button>
                     {!u.is_admin && (
@@ -222,17 +241,6 @@ export default function AdminAccounts() {
         </Modal>
       )}
 
-      {dialog?.type === 'hours' && (
-        <Modal title={`Hours · ${dialog.user.email}`} onClose={() => setDialog(null)} isDark={isDark}>
-          <form onSubmit={submitHours} className="space-y-4">
-            <p className={muted}>Used hours cannot be edited, only the limit. Lowering a limit below what is already used stops new jobs immediately.</p>
-            <HoursField label="Transcription hours" hours={form.tHours} unlimited={form.tUnl} onHours={(v) => setForm({ ...form, tHours: v })} onUnlimited={(v) => setForm({ ...form, tUnl: v })} isDark={isDark} />
-            <HoursField label="Translation hours" hours={form.lHours} unlimited={form.lUnl} onHours={(v) => setForm({ ...form, lHours: v })} onUnlimited={(v) => setForm({ ...form, lUnl: v })} isDark={isDark} />
-            {error && <div className="text-rose-400">{error}</div>}
-            <div className="flex justify-end gap-2"><button type="button" onClick={() => setDialog(null)} className={`px-3 py-2 rounded-lg border cursor-pointer ${btn}`}>Cancel</button><button disabled={busy} className={`px-4 py-2 rounded-lg font-bold cursor-pointer disabled:opacity-50 ${primary}`}>Save hours</button></div>
-          </form>
-        </Modal>
-      )}
 
       {dialog?.type === 'edit' && (
         <Modal title={`Edit account · ${dialog.user.email}`} onClose={() => setDialog(null)} isDark={isDark}>
@@ -284,6 +292,8 @@ export default function AdminAccounts() {
           )}
         </Modal>
       )}
+
+      {limitsFor && <AdminLimitsModal userId={limitsFor} onClose={() => setLimitsFor(null)} onSaved={() => load()} />}
     </div>
   );
 }

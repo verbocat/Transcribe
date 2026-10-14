@@ -102,8 +102,11 @@ export function AuthProvider({ children }) {
         console.warn('Session verification note:', err);
         if (isMounted) {
           // Only invalidate local session if the backend explicitly tells us the token is invalid/unauthorized
-          if (err.status === 401 || err.status === 403) {
+          if (err.status === 401) {
             logout('Your session has expired. Please log in again.');
+          } else if (err.status === 403) {
+            // suspended, or the access period set by an administrator has ended: show the server's reason
+            logout(err.message || 'Your account access has been restricted. Please contact your administrator.');
           } else {
             // Transient network error, 404 due to temporarily wrong URL, or server restarting: keep existing session
             console.warn('Backend verification skipped due to transient or network issue:', err.message);

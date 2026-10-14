@@ -26,6 +26,7 @@ from app.auth_module.usage import (
     usage_summary, hours_to_ms, record_limit_change, list_ledger, TRANSCRIBE, TRANSLATE,
 )
 from app.config import UPLOAD_DIR
+from app.auth_module import policy
 
 logger = logging.getLogger(__name__)
 
@@ -299,6 +300,7 @@ def list_users(
             "can_ai_optimize": getattr(u, "can_ai_optimize", True) if getattr(u, "can_ai_optimize", None) is not None else True,
             "can_audio_peaks": getattr(u, "can_audio_peaks", True) if getattr(u, "can_audio_peaks", None) is not None else True,
             "usage": usage_summary(u),
+            "access": policy.summary(u),
             "created_at": u.created_at.isoformat() if u.created_at else None,
             "last_login_at": last_login.login_time.isoformat() if last_login and last_login.login_time else None,
             "last_login_location": last_login.operating_location if last_login else None
@@ -1046,7 +1048,7 @@ def _user_row(u: User) -> Dict[str, Any]:
     return {
         "id": u.id, "name": u.name, "email": u.email, "role": u.role or "editor",
         "is_admin": is_super_admin(u.email), "is_blocked": bool(u.is_blocked),
-        "is_verified": bool(u.is_verified), "usage": usage_summary(u),
+        "is_verified": bool(u.is_verified), "usage": usage_summary(u), "access": policy.summary(u),
     }
 
 
@@ -1184,6 +1186,91 @@ def set_user_hours(user_id: str, payload: HoursRequest, request: Request, admin:
     _audit(db, admin, "user_hours_updated", f"{admin.email} changed hour limits of {target.email}", request)
     db.commit()
     return {"success": True, "user": _user_row(target)}
+
+
+class AccessRequest(HoursRequest):
+    """Everything on the Limits & access dialog. Only the fields you send change; send null to clear a limit."""
+    max_file_minutes: Optional[int] = None
+    max_jobs_per_day: Optional[int] = None
+    access_until: Optional[str] = None  # last day the account works, YYYY-MM-DD; null = never ends
+    can_transcribe_studio: Optional[bool] = None
+    can_subtitle_studio: Optional[bool] = None
+    can_translate: Optional[bool] = None
+    can_ai_optimize: Optional[bool] = None
+    can_export: Optional[bool] = None
+    can_audio_peaks: Optional[bool] = None
+
+
+@admin_router.get("/users/{user_id}/access")
+def get_user_access(user_id: str, admin: User = Depends(get_current_admin_user), db: Session = Depends(get_auth_db)):
+    target = db.query(User).filter(User.id == user_id).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found.")
+    row = _user_row(target)
+    row["access"] = policy.summary(target, db)
+    return {"success": True, "user": row}
+
+
+@admin_router.put("/users/{user_id}/access")
+def set_user_access(user_id: str, payload: AccessRequest, request: Request, admin: User = Depends(admin_write_guard), db: Session = Depends(get_auth_db)):
+    """Saves hour budgets, job limits, studio/feature switches and the access end date in one go."""
+    target = db.query(User).filter(User.id == user_id).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found.")
+    sent = payload.model_fields_set
+    changes: List[str] = []
+
+    for kind, hours, unlimited, col, label in (
+        (TRANSCRIBE, payload.transcribe_hours, payload.transcribe_unlimited, "transcribe_limit_ms", "Transcription time"),
+        (TRANSLATE, payload.translate_hours, payload.translate_unlimited, "translate_limit_ms", "Translation time"),
+    ):
+        if hours is None and not unlimited:
+            continue
+        new_ms, old_ms = _resolve_limit(hours, bool(unlimited), label), getattr(target, col)
+        if new_ms != old_ms:
+            setattr(target, col, new_ms)
+            record_limit_change(db, target, kind, old_ms, new_ms, admin.id)
+            mins = None if new_ms is None else round(new_ms / 60_000)
+            changes.append(f"{label}: " + ("unlimited" if mins is None else f"{mins // 60}h {mins % 60:02d}m"))
+
+    for field, label, unit, top in (("max_file_minutes", "Longest file per job", "min", 24 * 60), ("max_jobs_per_day", "Jobs per day", "", 10_000)):
+        if field in sent:
+            v = getattr(payload, field)
+            if v is not None and not (1 <= v <= top):
+                raise HTTPException(status_code=400, detail=f"{label} must be between 1 and {top}, or empty for no limit.")
+            if v != getattr(target, field):
+                setattr(target, field, v)
+                changes.append(f"{label}: " + ("no limit" if v is None else f"{v} {unit}".strip()))
+
+    protected = is_super_admin(target.email)
+    if "access_until" in sent:
+        new_exp = policy.expiry_from_date(payload.access_until)
+        if new_exp is not None and protected:
+            raise HTTPException(status_code=400, detail="Administrator accounts cannot be given an end date.")
+        target.access_expires_at = new_exp.replace(tzinfo=None) if new_exp else None
+        changes.append(f"Access until: {payload.access_until or 'no end date'}")
+
+    for name, (label, _) in policy.FLAGS.items():
+        if name in sent and getattr(payload, name) is not None:
+            v = bool(getattr(payload, name))
+            if not v and protected:
+                raise HTTPException(status_code=400, detail="Administrator accounts always keep every feature.")
+            if v != policy.flag(target, name):
+                setattr(target, name, v)
+                changes.append(f"{label}: {'on' if v else 'off'}")
+
+    if changes:
+        _audit(db, admin, "user_access_updated", f"{admin.email} changed {target.email}: " + "; ".join(changes), request)
+        db.add(AdminNotification(
+            user_id=target.id, admin_email=admin.email, notification_type="quota_limit",
+            title="Your account limits were updated",
+            message="An administrator updated your account:\n• " + "\n• ".join(changes),
+        ))
+    db.commit()
+    db.refresh(target)
+    row = _user_row(target)
+    row["access"] = policy.summary(target, db)
+    return {"success": True, "changes": changes, "user": row}
 
 
 @admin_router.delete("/users/{user_id}")

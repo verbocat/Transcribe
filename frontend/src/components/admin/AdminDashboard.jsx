@@ -14,6 +14,7 @@ import AdminAccounts from './AdminAccounts';
 import AdminOverview from './AdminOverview';
 import AdminJobs from './AdminJobs';
 import AdminMedia from './AdminMedia';
+import AdminLimitsModal from './AdminLimitsModal';
 import BrandLogo from '../BrandLogo';
 
 export default function AdminDashboard({ onBackToStudio, onOpenStudio, user: currentUser, onLogout }) {
@@ -45,14 +46,8 @@ export default function AdminDashboard({ onBackToStudio, onOpenStudio, user: cur
   const [innerSearch, setInnerSearch] = useState('');
   const [innerStatusFilter, setInnerStatusFilter] = useState('all');
 
-  // Quota & Permissions Modal state
+  // Limits & access dialog
   const [editingLimitsUser, setEditingLimitsUser] = useState(null);
-  const [limitsQuota, setLimitsQuota] = useState(-1);
-  const [limitsBudget, setLimitsBudget] = useState(50.0);
-  const [limitsCanExport, setLimitsCanExport] = useState(true);
-  const [limitsCanAiOptimize, setLimitsCanAiOptimize] = useState(true);
-  const [limitsCanAudioPeaks, setLimitsCanAudioPeaks] = useState(true);
-  const [isSavingLimits, setIsSavingLimits] = useState(false);
 
   // In-App Feedback & Notice Modal state
   const [feedbackUser, setFeedbackUser] = useState(null);
@@ -287,48 +282,8 @@ export default function AdminDashboard({ onBackToStudio, onOpenStudio, user: cur
     }
   };
 
-  // ── Limits & Permissions Modal Handlers ──
-  const handleOpenLimitsModal = (u) => {
-    setEditingLimitsUser(u);
-    setLimitsQuota(u.max_videos_quota !== undefined ? u.max_videos_quota : -1);
-    setLimitsBudget(u.monthly_budget_usd !== undefined ? u.monthly_budget_usd : 50.0);
-    setLimitsCanExport(u.can_export !== false);
-    setLimitsCanAiOptimize(u.can_ai_optimize !== false);
-    setLimitsCanAudioPeaks(u.can_audio_peaks !== false);
-  };
-
-  const handleSaveLimits = async (e) => {
-    e.preventDefault();
-    if (!editingLimitsUser) return;
-    setIsSavingLimits(true);
-    try {
-      const res = await fetch(`${API_BASE}/api/admin/users/${editingLimitsUser.id}/limits`, {
-        method: 'POST',
-        headers: authHeaders,
-        body: JSON.stringify({
-          max_videos_quota: parseInt(limitsQuota, 10),
-          monthly_budget_usd: parseFloat(limitsBudget),
-          can_export: limitsCanExport,
-          can_ai_optimize: limitsCanAiOptimize,
-          can_audio_peaks: limitsCanAudioPeaks
-        })
-      });
-      const data = await res.json();
-      if (data.success) {
-        setEditingLimitsUser(null);
-        fetchUsers();
-        if (selectedUserDossier && selectedUserDossier.user.id === editingLimitsUser.id) {
-          openUserDossier(editingLimitsUser.id);
-        }
-      } else {
-        alert(data.detail || 'Failed to update user limits');
-      }
-    } catch (err) {
-      alert('Error updating user limits: ' + err.message);
-    } finally {
-      setIsSavingLimits(false);
-    }
-  };
+  // ── Limits & access (AdminLimitsModal) ──
+  const handleOpenLimitsModal = (u) => setEditingLimitsUser(u);
 
   // ── Feedback & In-App Notices Modal Handlers ──
   const handleOpenFeedbackModal = (u) => {
@@ -1649,175 +1604,9 @@ export default function AdminDashboard({ onBackToStudio, onOpenStudio, user: cur
         );
       })()}
 
-      {/* ── User Limits & Feature Permissions Modal ── */}
+      {/* ── Limits & access ── */}
       {editingLimitsUser && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className={`border rounded-2xl max-w-lg w-full flex flex-col shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200 ${
-            isDark ? 'bg-[var(--kt-s1)] border-[var(--kt-s4)]' : 'bg-white border-slate-200 shadow-2xl'
-          }`}>
-            <div className={`p-4 border-b flex items-center justify-between ${
-              isDark ? 'border-[var(--kt-s3)]' : 'border-slate-200'
-            }`}>
-              <div className="flex items-center gap-2">
-                <div className={`w-8 h-8 rounded-lg flex items-center justify-center border ${
-                  isDark ? 'bg-[var(--kt-accent)]/10 border-[var(--kt-accent)]/30 text-[var(--kt-accent)]' : 'bg-blue-50 border-blue-200 text-blue-600'
-                }`}>
-                  <Sliders size={16} />
-                </div>
-                <div>
-                  <h3 className={`text-sm font-bold ${isDark ? 'text-white' : 'text-slate-900'}`}>Quotas & Permissions</h3>
-                  <p className={`text-xs font-mono ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>{editingLimitsUser.name} ({editingLimitsUser.email})</p>
-                </div>
-              </div>
-              <button
-                onClick={() => setEditingLimitsUser(null)}
-                className={`p-1 rounded-lg transition-colors cursor-pointer ${
-                  isDark ? 'text-slate-400 hover:text-white hover:bg-[var(--kt-s3)]' : 'text-slate-400 hover:text-slate-700 hover:bg-slate-100'
-                }`}
-              >
-                <X size={16} />
-              </button>
-            </div>
-
-            <form onSubmit={handleSaveLimits} className="p-5 space-y-4 text-xs">
-              {/* Video Generation Quota */}
-              <div>
-                <label className={`block font-semibold mb-1 ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
-                  Video Generation Quota (Max Allowed)
-                </label>
-                <div className="flex items-center gap-2 mb-2">
-                  {[-1, 5, 10, 25, 50, 100].map((preset) => (
-                    <button
-                      key={preset}
-                      type="button"
-                      onClick={() => setLimitsQuota(preset)}
-                      className={`px-2.5 py-1 rounded-md font-mono text-[11px] font-bold cursor-pointer transition-all ${
-                        limitsQuota === preset
-                          ? (isDark ? 'bg-[var(--kt-accent)] text-black shadow-xs' : 'bg-blue-600 text-white shadow-xs font-bold')
-                          : (isDark ? 'bg-[var(--kt-s2)] hover:bg-[var(--kt-s4)] text-slate-300 border border-[var(--kt-s4)]' : 'bg-white hover:bg-slate-100 text-slate-700 border border-slate-300')
-                      }`}
-                    >
-                      {preset === -1 ? 'Unlimited' : `${preset}`}
-                    </button>
-                  ))}
-                </div>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="number"
-                    min="-1"
-                    value={limitsQuota}
-                    onChange={(e) => setLimitsQuota(parseInt(e.target.value, 10) || -1)}
-                    className={`w-full px-3 py-2 rounded-lg border font-mono text-xs focus:outline-hidden transition-all ${
-                      isDark 
-                        ? 'bg-[var(--kt-s2)] border-[var(--kt-s4)] text-white focus:border-[var(--kt-accent)]' 
-                        : 'bg-white border-slate-300 text-slate-900 focus:border-blue-600 focus:ring-1 focus:ring-blue-600/30 font-medium'
-                    }`}
-                    placeholder="-1 for unlimited, or specific number"
-                  />
-                  <span className={`text-[11px] whitespace-nowrap ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>(-1 = unlimited)</span>
-                </div>
-              </div>
-
-              {/* Monthly USD Budget */}
-              <div>
-                <label className={`block font-semibold mb-1 ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
-                  Monthly Budget Cap (USD)
-                </label>
-                <div className="relative">
-                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-mono">$</span>
-                  <input
-                    type="number"
-                    step="0.5"
-                    min="0"
-                    value={limitsBudget}
-                    onChange={(e) => setLimitsBudget(parseFloat(e.target.value) || 0)}
-                    className={`w-full pl-7 pr-3 py-2 rounded-lg border font-mono text-xs focus:outline-hidden transition-all ${
-                      isDark
-                        ? 'bg-[var(--kt-s2)] border-[var(--kt-s4)] text-white focus:border-[var(--kt-accent)]'
-                        : 'bg-white border-slate-300 text-slate-900 focus:border-blue-600 focus:ring-1 focus:ring-blue-600/30 font-medium'
-                    }`}
-                  />
-                </div>
-              </div>
-
-              {/* Feature Toggles */}
-              <div className={`pt-2 border-t space-y-3 ${isDark ? 'border-[var(--kt-s3)]' : 'border-slate-200'}`}>
-                <div className={`font-semibold text-[11px] uppercase tracking-wider ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                  Feature Permissions For This User
-                </div>
-
-                <div className={`flex items-center justify-between p-3 rounded-xl border ${
-                  isDark ? 'bg-[var(--kt-s0)] border-[var(--kt-s3)]' : 'bg-slate-50 border-slate-200'
-                }`}>
-                  <div>
-                    <div className={`font-bold ${isDark ? 'text-slate-200' : 'text-slate-800'}`}>Subtitle Exporting</div>
-                    <div className={`text-[11px] ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>Allow downloading SRT, VTT, and formatted subtitle text</div>
-                  </div>
-                  <input
-                    type="checkbox"
-                    checked={limitsCanExport}
-                    onChange={(e) => setLimitsCanExport(e.target.checked)}
-                    className={`w-4 h-4 rounded cursor-pointer ${isDark ? 'accent-[var(--kt-accent)]' : 'accent-blue-600'}`}
-                  />
-                </div>
-
-                <div className={`flex items-center justify-between p-3 rounded-xl border ${
-                  isDark ? 'bg-[var(--kt-s0)] border-[var(--kt-s3)]' : 'bg-slate-50 border-slate-200'
-                }`}>
-                  <div>
-                    <div className={`font-bold ${isDark ? 'text-slate-200' : 'text-slate-800'}`}>AI Rebreak & Optimize</div>
-                    <div className={`text-[11px] ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>Allow invoking AI sentence break and optimization pipelines</div>
-                  </div>
-                  <input
-                    type="checkbox"
-                    checked={limitsCanAiOptimize}
-                    onChange={(e) => setLimitsCanAiOptimize(e.target.checked)}
-                    className={`w-4 h-4 rounded cursor-pointer ${isDark ? 'accent-[var(--kt-accent)]' : 'accent-blue-600'}`}
-                  />
-                </div>
-
-                <div className={`flex items-center justify-between p-3 rounded-xl border ${
-                  isDark ? 'bg-[var(--kt-s0)] border-[var(--kt-s3)]' : 'bg-slate-50 border-slate-200'
-                }`}>
-                  <div>
-                    <div className={`font-bold ${isDark ? 'text-slate-200' : 'text-slate-800'}`}>Audio Waveform Generation</div>
-                    <div className={`text-[11px] ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>Calculate audio peaks for visual timeline waveforms</div>
-                  </div>
-                  <input
-                    type="checkbox"
-                    checked={limitsCanAudioPeaks}
-                    onChange={(e) => setLimitsCanAudioPeaks(e.target.checked)}
-                    className={`w-4 h-4 rounded cursor-pointer ${isDark ? 'accent-[var(--kt-accent)]' : 'accent-blue-600'}`}
-                  />
-                </div>
-              </div>
-
-              {/* Action buttons */}
-              <div className={`pt-4 flex items-center justify-end gap-2 border-t ${isDark ? 'border-[var(--kt-s3)]' : 'border-slate-200'}`}>
-                <button
-                  type="button"
-                  onClick={() => setEditingLimitsUser(null)}
-                  className={`px-4 py-2 rounded-lg font-medium cursor-pointer transition-colors ${
-                    isDark ? 'bg-[var(--kt-s2)] hover:bg-[var(--kt-s4)] text-slate-300' : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
-                  }`}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={isSavingLimits}
-                  className={`px-4 py-2 rounded-lg font-bold cursor-pointer transition-all shadow-md disabled:opacity-50 ${
-                    isDark 
-                      ? 'bg-[var(--kt-accent)] hover:bg-[var(--kt-accent-strong)] text-black shadow-[var(--kt-accent)]/20' 
-                      : 'bg-blue-600 hover:bg-blue-700 text-white shadow-blue-600/20'
-                  }`}
-                >
-                  {isSavingLimits ? 'Saving...' : 'Save & Enforce Limits'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
+        <AdminLimitsModal userId={editingLimitsUser.id} onClose={() => setEditingLimitsUser(null)} onSaved={() => fetchUsers()} />
       )}
 
       {/* ── In-App Direct Feedback / Notice Modal ── */}

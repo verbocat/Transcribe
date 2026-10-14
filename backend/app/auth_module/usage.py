@@ -101,6 +101,10 @@ def reserve(db: Session, user_id: str, kind: str, ms: int, route: str, ref: Opti
     if ms <= 0:
         raise HTTPException(status_code=422, detail="Could not measure the length of this job.")
     reap_stale(db)
+    account = db.query(User).filter(User.id == user_id).first()
+    if account is not None and not account.is_blocked:
+        from .policy import check_job
+        check_job(db, account, kind, ms, route)  # access window, studio switches, file length, jobs per day
     lim_c, used_c, res_c = _COLS[kind]
     # One statement: the check and the increment cannot be separated by another request.
     done = db.execute(

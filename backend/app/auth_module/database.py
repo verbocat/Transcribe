@@ -97,6 +97,13 @@ def _migrate_usage_schema():
         "translate_used_ms": "INTEGER NOT NULL DEFAULT 0",
         "transcribe_reserved_ms": "INTEGER NOT NULL DEFAULT 0",
         "translate_reserved_ms": "INTEGER NOT NULL DEFAULT 0",
+        # access and job limits (policy.py); existing accounts keep full access and no limits
+        "can_transcribe_studio": "BOOLEAN NOT NULL DEFAULT 1",
+        "can_subtitle_studio": "BOOLEAN NOT NULL DEFAULT 1",
+        "can_translate": "BOOLEAN NOT NULL DEFAULT 1",
+        "max_file_minutes": "INTEGER",
+        "max_jobs_per_day": "INTEGER",
+        "access_expires_at": "DATETIME",
     }
     with engine.begin() as conn:
         existing = {row[1] for row in conn.execute(text("PRAGMA table_info(auth_users)")).fetchall()}

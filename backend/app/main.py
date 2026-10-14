@@ -64,7 +64,8 @@ from app.netflix_engine import (
 )
 from app.export_service import export_netflix_srt, export_netflix_vtt, export_netflix_ttml
 from app.db import DBSubtitleProject, DBSubtitleEvent
-from app.auth_module.routes import get_current_user_from_token
+from app.auth_module.routes import get_current_user_from_token, get_optional_user_from_token
+from app.auth_module import policy as access_policy
 from app.auth_module.models import User
 from app.auth_module import usage as usage_mod
 from app import metering
@@ -1233,6 +1234,7 @@ async def extract_audio_status_endpoint(job_id: str):
 @app.post("/api/speakers/refine")
 async def refine_speakers_endpoint(payload: dict, current_user: User = Depends(get_current_user_from_token)):
     """AI second pass on speaker labels. Returns suggestions only; the editor applies them (and can undo)."""
+    access_policy.require(current_user, "can_ai_optimize")
     from app.speaker_refine import lines_from_segments, suggest_corrections
     segments_raw = [s for s in payload.get("segments", []) if isinstance(s, dict) and "segment_id" in s]
     if len(segments_raw) < 2:
@@ -1411,9 +1413,11 @@ def attachment_disposition(filename: str) -> str:
 @app.post("/api/export")
 async def export_deliverable(
     result_data: dict,
-    format: str = "csv"
+    format: str = "csv",
+    current_user: Optional[User] = Depends(get_optional_user_from_token),
 ):
     """Generate and return deliverable file in requested format."""
+    access_policy.require(current_user, "can_export")
     result = sanitize_transcription_result(result_data)
     base_name = Path(result.filename).stem
 
@@ -1495,8 +1499,9 @@ async def export_deliverable(
 
 
 @app.post("/api/export/dubbing")
-async def export_dubbing_script(payload: dict):
+async def export_dubbing_script(payload: dict, current_user: Optional[User] = Depends(get_optional_user_from_token)):
     """Generate the Dubbing Script workbook, applying optional speaker -> character renames."""
+    access_policy.require(current_user, "can_export")
     result = sanitize_transcription_result(payload.get("result", {}))
     speaker_map = payload.get("speaker_map") or {}
     if not isinstance(speaker_map, dict):
@@ -1513,8 +1518,9 @@ async def export_dubbing_script(payload: dict):
 
 
 @app.post("/api/export/multi")
-async def export_multi_deliverables(payload: dict):
+async def export_multi_deliverables(payload: dict, current_user: Optional[User] = Depends(get_optional_user_from_token)):
     """Generate and return deliverables for multiple selected formats (direct file or ZIP)."""
+    access_policy.require(current_user, "can_export")
     import zipfile
     result_data = payload.get("result", {})
     formats = payload.get("formats", ["csv"])
@@ -2333,6 +2339,7 @@ async def generate_subtitles_stream_endpoint(request: Request, payload: dict, cu
 @app.post("/api/subtitle/context_autofill")
 async def subtitle_context_autofill(payload: dict, current_user: User = Depends(get_current_user_from_token)):
     """Read the current subtitles and draft the context (type, topic, speakers, key terms, misheard names)."""
+    access_policy.require(current_user, "can_ai_optimize")
     from app import context_polisher
     events = payload.get("events") or []
     if not any(str(e.get("text") or "").strip() for e in events):
@@ -2346,6 +2353,7 @@ async def subtitle_context_autofill(payload: dict, current_user: User = Depends(
 @app.post("/api/subtitle/context_polish")
 async def subtitle_context_polish(payload: dict, current_user: User = Depends(get_current_user_from_token)):
     """Proofread existing subtitles against the user's context. Timing never changes; only text fixes are returned."""
+    access_policy.require(current_user, "can_ai_optimize")
     from app import context_polisher as cp
     events = payload.get("events") or []
     ctx = dict(payload.get("context") or {})
@@ -2548,6 +2556,7 @@ async def _retry_untranslated(data: dict, body: dict) -> None:
 @app.post("/api/centroid/analyze")
 async def centroid_analyze(payload: dict, current_user: User = Depends(get_current_user_from_token)):
     """Ask Centroid to read the whole script and propose context, characters and a name glossary."""
+    access_policy.require(current_user, "can_ai_optimize")
     from app import centroid_client
     cues = payload.get("cues") or payload.get("events") or []
     if not cues:

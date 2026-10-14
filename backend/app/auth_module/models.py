@@ -21,6 +21,13 @@ class User(AuthBase):
     can_export = Column(Boolean, default=True, nullable=False)
     can_ai_optimize = Column(Boolean, default=True, nullable=False)
     can_audio_peaks = Column(Boolean, default=True, nullable=False)
+    # Admin-set access and job limits (see policy.py). NULL limits mean "no limit".
+    can_transcribe_studio = Column(Boolean, default=True, nullable=False)
+    can_subtitle_studio = Column(Boolean, default=True, nullable=False)
+    can_translate = Column(Boolean, default=True, nullable=False)
+    max_file_minutes = Column(Integer, nullable=True)
+    max_jobs_per_day = Column(Integer, nullable=True)
+    access_expires_at = Column(DateTime, nullable=True)  # the account stops working at this moment (UTC)
     # Hour budgets, stored as whole milliseconds so reserve/settle/refund arithmetic is exact.
     # *_limit_ms NULL means unlimited. used = finished work, reserved = jobs in flight; the
     # server only lets a job start when used + reserved + job <= limit (see usage.py).

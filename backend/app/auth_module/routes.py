@@ -31,6 +31,7 @@ from .security import (
     get_otp_secret
 )
 from .usage import usage_summary
+from . import policy
 from .brevo_service import send_verification_email, send_password_reset_email, send_mfa_login_otp_email
 
 from .admin_config import is_admin_email, BUILTIN_ADMIN_EMAILS as SUPER_ADMIN_EMAILS
@@ -199,6 +200,7 @@ def get_current_user_from_token(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Account has been suspended by an administrator."
         )
+    policy.ensure_active(session.user)
 
     # Slide 4-hour inactivity window forward on active use
     session.expires_at = now_utc + timedelta(hours=4)
@@ -236,7 +238,7 @@ def get_optional_user_from_token(
             return None
         now_utc = datetime.now(timezone.utc)
         exp = session.expires_at.replace(tzinfo=timezone.utc) if session.expires_at.tzinfo is None else session.expires_at
-        if now_utc > exp or session.user.is_blocked:
+        if now_utc > exp or session.user.is_blocked or policy.is_expired(session.user):
             return None
         return session.user
     except Exception:
@@ -422,6 +424,7 @@ def _lookup_user_for_login(db: Session, email_clean: str, client_ip: str) -> Use
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Your account has been restricted or suspended by an administrator. Please contact support."
         )
+    policy.ensure_active(user)
     return user
 
 
@@ -657,6 +660,7 @@ def verify_login_otp(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Your account has been restricted or suspended by an administrator. Please contact support."
         )
+    policy.ensure_active(user)
 
     return _complete_login(db, user, request)
 
@@ -983,6 +987,7 @@ def get_current_user_profile(
             "can_export": getattr(user, "can_export", True) if getattr(user, "can_export", None) is not None else True,
             "can_ai_optimize": getattr(user, "can_ai_optimize", True) if getattr(user, "can_ai_optimize", None) is not None else True,
             "can_audio_peaks": getattr(user, "can_audio_peaks", True) if getattr(user, "can_audio_peaks", None) is not None else True,
+            "access": policy.summary(user),
             "is_verified": user.is_verified,
             "usage": usage_summary(user),
             "created_at": user.created_at.isoformat() if user.created_at else None
