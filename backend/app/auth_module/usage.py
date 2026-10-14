@@ -193,7 +193,7 @@ def list_ledger(db: Session, user_id: str, limit: int = 200, offset: int = 0) ->
     rows = (db.query(UsageLedger).filter(UsageLedger.user_id == user_id)
             .order_by(UsageLedger.id.desc()).offset(offset).limit(limit).all())
     return [{
-        "id": r.id, "kind": r.kind, "event": r.event, "hours": round(r.ms / MS_PER_HOUR, 4),
+        "id": r.id, "kind": r.kind, "event": r.event, "hours": round(r.ms / MS_PER_HOUR, 4), "ms": r.ms,
         "route": r.route, "ref": r.ref, "note": r.note, "reservation_id": r.reservation_id,
         "at": r.created_at.isoformat() if r.created_at else None,
     } for r in rows]

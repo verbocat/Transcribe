@@ -3537,6 +3537,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
         isOpen={showCentroidModal}
         onClose={() => setShowCentroidModal(false)}
         defaultSourceLang={language}
+        mediaId={currentVideoId}
         spokenSource={spokenVariantCode(spokenLang) || translateCodeForName(engineLanguage(spokenLang))}
         qcHost={showQcDrawer && qcView === 'centroid' ? qcHost : null}
         onOpenQc={() => openQc('centroid')}

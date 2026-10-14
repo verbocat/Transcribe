@@ -2480,12 +2480,29 @@ async def centroid_translate(payload: dict, current_user: User = Depends(get_cur
         raise HTTPException(status_code=400, detail="Provide 'srt' or 'events'.")
     if not (payload.get("target_langs") or payload.get("target_lang")):
         raise HTTPException(status_code=400, detail="Choose at least one target language.")
-    # Translation hours: subtitle time (floored by text length) x target languages, held before calling out.
+    # Translation hours, held before calling out:
+    #  * a full translation costs the media's exact length (measured on the server) x target languages, never less
+    #    than where the last subtitle ends;
+    #  * a QC fix (purpose="fix": a few flagged lines re-translated) costs only those lines' on-screen time.
     langs_n = len({str(l) for l in (payload.get("target_langs") or [payload.get("target_lang")]) if l}) or 1
+    cues_in = payload.get("cues") or payload.get("events") or []
+    lang_word = "language" if langs_n == 1 else "languages"
+    if payload.get("purpose") == "fix":
+        bill_ms = metering.translation_ms(cues_in, langs_n, payload.get("srt"))
+        bill_ref = f"QC fix · {len(cues_in)} line{'s' if len(cues_in) != 1 else ''} · {langs_n} {lang_word}"
+    else:
+        media_id = payload.get("video_id") or payload.get("audio_id")
+        media_path = resolve_active_session_video(media_id) if media_id else None
+        if media_path and not str(Path(media_path).resolve()).startswith(str(UPLOAD_DIR.resolve())) and media_id not in active_sessions:
+            media_path = None  # only files this server stored
+        # floored by the text length, so falsified short timings cannot shrink the bill
+        base_ms = max(await metering.media_ms(media_path), metering.timeline_ms(cues_in, payload.get("srt")),
+                      metering.translation_ms(cues_in, 1, payload.get("srt")))
+        bill_ms = base_ms * langs_n
+        name = (active_sessions.get(media_id, {}) or {}).get("filename") if media_id else None
+        bill_ref = f"{name or (Path(media_path).name if media_path else 'Subtitles')} · {langs_n} {lang_word}"
     meter = metering.Metered(
-        metering.user_ref(current_user), usage_mod.TRANSLATE,
-        metering.translation_ms(payload.get("cues") or payload.get("events") or [], langs_n, payload.get("srt")),
-        "/api/centroid/translate", f"{langs_n} language(s)",
+        metering.user_ref(current_user), usage_mod.TRANSLATE, bill_ms, "/api/centroid/translate", bill_ref,
     ).reserve()
     meter.work_started = True
     try:

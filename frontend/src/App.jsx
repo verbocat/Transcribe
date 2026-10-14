@@ -1691,6 +1691,7 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
       )}
       <TranscribeStudio
         user={user}
+        mediaId={transcriptionResult?.audio_id || null}
         onOpenLogoutModal={onOpenLogoutModal}
         onBackToHome={onBackToHome}
         filename={selectedFile ? selectedFile.name : (transcriptionResult?.filename || null)}

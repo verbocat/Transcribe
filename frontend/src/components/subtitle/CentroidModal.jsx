@@ -184,6 +184,8 @@ export default function CentroidModal({
   isOpen, onClose, events = [], cueUnit = 'cue', glossaryTerms = [], cplLimit = 42, maxLines = 2, cpsLimit = 20,
   fileName = 'subtitles', defaultSourceLang = 'en', spokenSource = null, qcHost = null, onOpenQc, onOpenTranslate,
   activeLang = null, trackLangs = [],
+  // id of the media on the server (video_id / audio_id): a full translation is billed by its exact length
+  mediaId = null,
   // Optional full language lists ([code, name], alphabetical). Without them the original short list is used.
   // `sourceLanguages` may include ['auto', ...]; `sourceHint` is the language the transcript was detected as.
   languages = null, sourceLanguages = null, sourceHint = null, langStoreSuffix = '',
@@ -495,7 +497,7 @@ export default function CentroidModal({
       const data = await api('/api/centroid/translate', {
         events: sourceCues.map((c) => ({ start_time: c.start_time ?? c.start, end_time: c.end_time ?? c.end, text: c.text, ...voiceOf(c) })),
         source_lang: sourceLang, target_langs: targets, context: buildContext(), glossary: buildGlossary(), constraints: buildLimits(), ...hint,
-        quality,
+        quality, ...(mediaId ? { video_id: mediaId } : {}),
       }, job);
       const snap = sourceCues.map((c, i) => ({ id: i + 1, editorId: c.id ?? c.event_id, start_time: c.start_time ?? c.start, end_time: c.end_time ?? c.end, text: c.text, ...voiceOf(c) }));
       const res = data.results || {};
@@ -602,6 +604,7 @@ export default function CentroidModal({
         const data = await api('/api/centroid/translate', {
           events: g.items.map((i) => ({ start_time: i.start, end_time: i.end, text: i.source })),
           source_lang: sourceLang, target_langs: [lang], context: buildContext(), glossary: buildGlossary(), constraints: g.constraints, ...hint, quality,
+          purpose: 'fix', // only these lines are re-translated, so only their time is billed
         });
         const cues = (data.results || {})[lang]?.cues || [];
         g.items.forEach((i, n) => {

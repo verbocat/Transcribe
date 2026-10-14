@@ -18,6 +18,16 @@ export function hrs(h) {
   return h >= 100 ? `${Math.round(h)}h` : `${h.toFixed(1).replace(/\.0$/, '')}h`;
 }
 
+/** Exact duration from milliseconds (or hours): "1h 02m 05s", "3m 12s", "45s". */
+export function exact(ms, { fromHours = false } = {}) {
+  if (ms == null) return '—';
+  const total = Math.max(0, Math.round((fromHours ? ms * 3600000 : ms) / 1000));
+  const h = Math.floor(total / 3600), m = Math.floor((total % 3600) / 60), s = total % 60;
+  if (h) return `${h}h ${String(m).padStart(2, '0')}m ${String(s).padStart(2, '0')}s`;
+  if (m) return `${m}m ${String(s).padStart(2, '0')}s`;
+  return `${s}s`;
+}
+
 export function ago(iso) {
   if (!iso) return '—';
   const t = new Date(iso.endsWith('Z') || /[+-]\d\d:\d\d$/.test(iso) ? iso : `${iso}Z`).getTime();

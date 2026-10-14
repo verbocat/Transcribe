@@ -407,6 +407,7 @@ export default function TranscribeStudio(p) {
         isOpen={showTranslate}
         onClose={() => setShowTranslate(false)}
         defaultSourceLang={detectedCode || AUTO_SOURCE}
+        mediaId={p.mediaId}
         sourceHint={detectedCode}
         languages={TRANSLATE_LANGUAGES}
         sourceLanguages={TRANSLATE_SOURCE_LANGUAGES}

@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Search } from 'lucide-react';
 import { useAuth } from '../../auth_views/AuthContext';
-import { adminApi, hrs, ago, Panel, StatusPill, StudioTag, Segmented, Empty, Pager, th, td, searchInput } from './adminUi';
+import { adminApi, exact, ago, Panel, StatusPill, StudioTag, Segmented, Empty, Pager, th, td, searchInput } from './adminUi';
 
 const LIMIT = 50;
 
@@ -69,7 +69,7 @@ export default function AdminJobs({ refreshKey }) {
                         <div className="text-[12px] text-[var(--kt-muted)]">{j.user_email || ''}</div>
                       </td>
                       <td className={td}><StudioTag studio={j.studio} /></td>
-                      <td className={`${td} tabular-nums`}>{hrs(j.hours)}</td>
+                      <td className={`${td} tabular-nums whitespace-nowrap`}>{exact(j.hours, { fromHours: true })}</td>
                       <td className={td}><StatusPill status={j.status} /></td>
                       <td className={`${td} text-[var(--kt-muted)] whitespace-nowrap`} title={j.created_at || ''}>
                         {ago(j.created_at)}

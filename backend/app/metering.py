@@ -5,6 +5,7 @@ received for translation), never taken from a client-supplied "duration" field.
 """
 import asyncio
 import logging
+import re
 import subprocess
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -96,6 +97,36 @@ def translation_ms(cues: Iterable[Dict[str, Any]], n_langs: int, srt: Optional[s
         chars = len(srt)
     seconds = max(shown, chars / MAX_CHARS_PER_SECOND)
     return max(MIN_CHARGE_MS, int(round(seconds * 1000))) * max(1, int(n_langs))
+
+
+_SRT_TIME = re.compile(r"(\d+):(\d\d):(\d\d)[,.](\d{1,3})")
+
+
+def timeline_ms(cues: Iterable[Dict[str, Any]], srt: Optional[str] = None) -> int:
+    """Where the last subtitle ends (ms from the start of the media). A translation is never billed for less than
+    this, so a request cannot point at a short file while translating a long subtitle track."""
+    end = 0.0
+    for c in cues or []:
+        if isinstance(c, dict):
+            end = max(end, min(_num(c.get("end_time", c.get("end"))), 24 * 3600.0))
+    for h, m, sec, ms in _SRT_TIME.findall(srt or ""):
+        end = max(end, int(h) * 3600 + int(m) * 60 + int(sec) + int(ms.ljust(3, "0")) / 1000.0)
+    return int(round(end * 1000))
+
+
+_media_ms_cache: Dict[str, int] = {}
+
+
+async def media_ms(path: Optional[str]) -> int:
+    """Exact length of a stored media file in ms (0 when unknown), cached per file."""
+    if not path:
+        return 0
+    if path not in _media_ms_cache:
+        try:
+            _media_ms_cache[path] = await probe_duration_ms(path)
+        except HTTPException:
+            return 0
+    return _media_ms_cache[path]
 
 
 class Metered:

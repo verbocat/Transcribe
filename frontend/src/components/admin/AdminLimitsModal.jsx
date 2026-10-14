@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { X, AudioLines, Languages, Timer, CalendarClock, Loader2, Check, ShieldCheck } from 'lucide-react';
 import { API_BASE } from '../../config';
 import { useAuth } from '../../auth_views/AuthContext';
-import { hrs } from './adminUi';
+import { hrs, exact } from './adminUi';
 
 /**
  * Limits & access for one account, all enforced on the server:
@@ -83,8 +83,8 @@ function TimeBudget({ icon, label, usage, value, onChange }) {
       <div className="mt-3">
         {!value.unlimited && <div className="h-1.5 rounded-full bg-[var(--kt-s3)] overflow-hidden mb-1.5"><div className={`h-full rounded-full ${pct >= 100 ? 'bg-[var(--kt-danger)]' : pct >= 80 ? 'bg-[var(--kt-warn)]' : 'bg-[var(--kt-accent)]'}`} style={{ width: `${pct}%` }} /></div>}
         <div className="text-[12px] text-[var(--kt-muted)] tabular-nums">
-          Used {hrs(usage.used_hours)}{usage.reserved_hours > 0 ? ` · ${hrs(usage.reserved_hours)} in progress` : ''}
-          {value.unlimited ? ' · no limit' : ` · ${hrs(Math.max(0, (limit || 0) - used))} left of ${hrs(limit || 0)}`}
+          Used {exact(usage.used_hours, { fromHours: true })}{usage.reserved_hours > 0 ? ` · ${exact(usage.reserved_hours, { fromHours: true })} in progress` : ''}
+          {value.unlimited ? ' · no limit' : ` · ${exact(Math.max(0, (limit || 0) - used), { fromHours: true })} left of ${hrs(limit || 0)}`}
         </div>
       </div>
     </div>

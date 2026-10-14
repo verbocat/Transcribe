@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Users, AudioLines, Languages, Layers, ArrowRight } from 'lucide-react';
 import { useAuth } from '../../auth_views/AuthContext';
-import { adminApi, hrs, ago, Panel, Stat, StatusPill, StudioTag, Empty } from './adminUi';
+import { adminApi, hrs, exact, ago, Panel, Stat, StatusPill, StudioTag, Empty } from './adminUi';
 
 function Meter({ label, value, detail, pct }) {
   const tone = pct > 85 ? 'bg-[var(--kt-danger)]' : pct > 65 ? 'bg-[var(--kt-warn)]' : 'bg-[var(--kt-accent)]';
@@ -71,7 +71,7 @@ export default function AdminOverview({ overview, hardware, onOpenTab, refreshKe
                     </div>
                     <div className="mt-0.5 text-[12px] text-[var(--kt-muted)] truncate">{j.file ? `${j.action} · ` : j.detail ? `${j.detail} · ` : ''}{j.user_name} · {ago(j.created_at)}</div>
                   </div>
-                  <span className="text-[12px] text-[var(--kt-muted)] tabular-nums">{hrs(j.hours)}</span>
+                  <span className="text-[12px] text-[var(--kt-muted)] tabular-nums whitespace-nowrap">{exact(j.hours, { fromHours: true })}</span>
                   <StatusPill status={j.status} />
                 </li>
               ))}

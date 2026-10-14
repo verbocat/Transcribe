@@ -7,6 +7,7 @@ import { useAuth } from '../../auth_views/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
 import { formatHours } from '../UsageBadge';
 import AdminLimitsModal from './AdminLimitsModal';
+import { exact } from './adminUi';
 
 const api = async (token, path, { method = 'GET', body } = {}) => {
   const res = await fetch(`${API_BASE}/api/admin${path}`, {
@@ -92,6 +93,21 @@ function AccessBadges({ a }) {
       ))}
     </div>
   );
+}
+
+const LEDGER_TONE = { Charged: 'text-[var(--kt-success)]', Refunded: 'text-[var(--kt-muted)]', Running: 'text-[var(--kt-accent)]', 'Limit changed': 'text-[var(--kt-warn)]' };
+
+/** The ledger records "reserve" then "settle"/"refund" for every job; show one row per job with its outcome. */
+function ledgerRows(ledger) {
+  const closed = new Map();
+  ledger.forEach((r) => { if ((r.event === 'settle' || r.event === 'refund') && r.reservation_id) closed.set(r.reservation_id, r); });
+  return ledger
+    .filter((r) => r.event !== 'settle' && r.event !== 'refund')
+    .map((r) => {
+      if (r.event === 'limit_change') return { ...r, status: 'Limit changed', what: (r.note || '').replace(/^limit /, '') };
+      const end = closed.get(r.reservation_id);
+      return { ...r, status: !end ? 'Running' : end.event === 'settle' ? 'Charged' : 'Refunded', what: r.ref || r.route || '', at: r.at };
+    });
 }
 
 export default function AdminAccounts() {
@@ -279,15 +295,19 @@ export default function AdminAccounts() {
 
       {dialog?.type === 'ledger' && (
         <Modal title={`Usage history · ${dialog.user.email}`} onClose={() => setDialog(null)} isDark={isDark}>
-          {ledger.length === 0 ? <p className={muted}>No usage yet.</p> : (
-            <div className="max-h-[50vh] overflow-auto">
-              <table className="w-full text-[11px]"><thead><tr className={`text-left ${muted}`}><th className="py-1 pr-2">When</th><th className="pr-2">Budget</th><th className="pr-2">Event</th><th className="pr-2">Hours</th><th>What</th></tr></thead>
-                <tbody>{ledger.map((r) => (
-                  <tr key={r.id} className={`border-t ${isDark ? 'border-[var(--kt-s3)] text-slate-300' : 'border-slate-100 text-slate-700'}`}>
-                    <td className="py-1 pr-2 whitespace-nowrap">{r.at ? new Date(r.at + (r.at.endsWith('Z') ? '' : 'Z')).toLocaleString() : ''}</td>
-                    <td className="pr-2">{r.kind === 'transcribe' ? 'Transcription' : 'Translation'}</td><td className="pr-2">{r.event}</td>
-                    <td className="pr-2 font-mono">{r.hours ? formatHours(r.hours) : '-'}</td><td className="truncate max-w-[160px]" title={r.note || r.ref || ''}>{r.note || r.ref || r.route}</td>
-                  </tr>))}</tbody></table>
+          {ledgerRows(ledger).length === 0 ? <p className={muted}>No usage yet.</p> : (
+            <div className="max-h-[60vh] overflow-auto -mx-1">
+              <table className="w-full text-[12px]">
+                <thead><tr className={`text-left ${muted}`}><th className="py-1.5 px-1 font-medium">When</th><th className="px-1 font-medium">Type</th><th className="px-1 font-medium">Duration</th><th className="px-1 font-medium">Status</th><th className="px-1 font-medium">What</th></tr></thead>
+                <tbody>{ledgerRows(ledger).map((r) => (
+                  <tr key={r.id} className="border-t border-[var(--kt-s3)] text-[var(--kt-text)]">
+                    <td className="py-2 px-1 whitespace-nowrap text-[var(--kt-muted)]">{r.at ? new Date(r.at + (r.at.endsWith('Z') ? '' : 'Z')).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : ''}</td>
+                    <td className="px-1 whitespace-nowrap">{r.kind === 'transcribe' ? 'Transcription' : 'Translation'}</td>
+                    <td className="px-1 font-mono whitespace-nowrap">{r.event === 'limit_change' ? '—' : exact(r.ms)}</td>
+                    <td className="px-1 whitespace-nowrap"><span className={LEDGER_TONE[r.status]}>{r.status}</span></td>
+                    <td className="px-1 max-w-[220px] truncate text-[var(--kt-muted)]" title={r.what}>{r.what}</td>
+                  </tr>))}</tbody>
+              </table>
             </div>
           )}
         </Modal>
