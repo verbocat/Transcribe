@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 # billed time of a translation by sending falsified cue timings.
 MAX_CHARS_PER_SECOND = 25.0
 MIN_CHARGE_MS = 1000
+_media_ms_cache: Dict[str, int] = {}
 MAX_CUE_SECONDS = 600.0  # a single cue longer than 10 min is not subtitle data
 
 
@@ -70,7 +71,9 @@ def probe_duration_ms_sync(path: str) -> int:
 
 
 async def probe_duration_ms(path: str) -> int:
-    return await asyncio.to_thread(probe_duration_ms_sync, path)
+    ms = await asyncio.to_thread(probe_duration_ms_sync, path)
+    _media_ms_cache[str(path)] = ms  # remembered, so a file cleaned up later is still billed at its real length
+    return ms
 
 
 def _num(v: Any) -> float:
@@ -114,19 +117,16 @@ def timeline_ms(cues: Iterable[Dict[str, Any]], srt: Optional[str] = None) -> in
     return int(round(end * 1000))
 
 
-_media_ms_cache: Dict[str, int] = {}
-
-
 async def media_ms(path: Optional[str]) -> int:
     """Exact length of a stored media file in ms (0 when unknown), cached per file."""
     if not path:
         return 0
-    if path not in _media_ms_cache:
+    if str(path) not in _media_ms_cache:
         try:
-            _media_ms_cache[path] = await probe_duration_ms(path)
+            await probe_duration_ms(path)
         except HTTPException:
             return 0
-    return _media_ms_cache[path]
+    return _media_ms_cache.get(str(path), 0)
 
 
 class Metered:

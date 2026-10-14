@@ -70,6 +70,10 @@ from app.auth_module.models import User
 from app.auth_module import usage as usage_mod
 from app import metering
 
+# Lengths (ms) of media already measured, and the media each user last transcribed (used to bill translations)
+_media_len_by_id: dict = {}
+_last_media_by_user: dict = {}
+
 # In-memory storage for active sessions with TTL eviction (BUG-W2)
 active_sessions = {}
 SESSION_TTL_SECONDS = 7200  # 2 hours
@@ -573,6 +577,7 @@ async def transcribe_audio(
             owner, usage_mod.TRANSCRIBE, await metering.probe_duration_ms(target_path),
             "/api/transcribe", Path(target_path).name,
         ).reserve()
+        _last_media_by_user[owner["id"]] = (target_path, time.time())
     except HTTPException:
         if uploaded_here:
             Path(target_path).unlink(missing_ok=True)
@@ -1003,6 +1008,7 @@ async def transcribe_audio_async(
             metering.user_ref(current_user), usage_mod.TRANSCRIBE, await metering.probe_duration_ms(target_path),
             "/api/transcribe_async", Path(target_path).name,
         ).reserve()
+        _last_media_by_user[current_user.id] = (target_path, time.time())
     except HTTPException:
         if uploaded_here:
             Path(target_path).unlink(missing_ok=True)
@@ -2131,6 +2137,7 @@ async def generate_subtitles_endpoint(request: Request, payload: dict, current_u
         metering.user_ref(current_user), usage_mod.TRANSCRIBE, await metering.probe_duration_ms(video_path),
         "/api/subtitle/generate", video_id,
     ).reserve()
+    _last_media_by_user[current_user.id] = (video_path, time.time())
     meter.work_started = True  # one provider call; from here on a dropped connection is still charged
     try:
         result = await asyncio.to_thread(
@@ -2260,6 +2267,7 @@ async def generate_subtitles_stream_endpoint(request: Request, payload: dict, cu
         metering.user_ref(current_user), usage_mod.TRANSCRIBE, await metering.probe_duration_ms(video_path),
         "/api/subtitle/generate_stream", video_id,
     ).reserve()
+    _last_media_by_user[current_user.id] = (video_path, time.time())
 
     generator = generate_subtitles_stream(
         video_path=video_path,
@@ -2498,8 +2506,19 @@ async def centroid_translate(payload: dict, current_user: User = Depends(get_cur
         media_path = resolve_active_session_video(media_id) if media_id else None
         if media_path and not str(Path(media_path).resolve()).startswith(str(UPLOAD_DIR.resolve())) and media_id not in active_sessions:
             media_path = None  # only files this server stored
-        # floored by the text length, so falsified short timings cannot shrink the bill
-        base_ms = max(await metering.media_ms(media_path), metering.timeline_ms(cues_in, payload.get("srt")),
+        media_len = await metering.media_ms(media_path)
+        if media_len:
+            _media_len_by_id[str(media_id)] = media_len
+        elif media_id and str(media_id) in _media_len_by_id:
+            media_len = _media_len_by_id[str(media_id)]  # file already cleaned up: reuse the length measured earlier
+        if not media_len:
+            # No usable media id (or an imported SRT): charge the media this user last transcribed in the session
+            last = _last_media_by_user.get(current_user.id)
+            if last and time.time() - last[1] < 12 * 3600:
+                media_path, media_len = last[0], await metering.media_ms(last[0])
+        # A translation always costs the whole media, never less than where the last subtitle ends, and the
+        # text-length floor stops falsified short timings from shrinking the bill
+        base_ms = max(media_len, metering.timeline_ms(cues_in, payload.get("srt")),
                       metering.translation_ms(cues_in, 1, payload.get("srt")))
         bill_ms = base_ms * langs_n
         name = (active_sessions.get(media_id, {}) or {}).get("filename") if media_id else None

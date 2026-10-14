@@ -70,3 +70,19 @@ def test_qc_fix_bills_only_the_lines_it_redoes(main_app, monkeypatch):
     assert client.post("/api/centroid/translate", json=body, headers=headers).status_code == 200
     assert _state(uid)["translate_used_ms"] == 5_000
     assert _last_ref(uid).startswith("QC fix · 2 lines")
+
+
+def test_missing_media_id_falls_back_to_the_media_the_user_last_transcribed(main_app, tmp_path, monkeypatch):
+    import time
+    _fake_centroid(monkeypatch)
+    client = TestClient(main_app.app)
+    uid, email = _make_user(translate_h=1)
+    headers = _login(client, email)
+    wav = _wav(tmp_path, 40)
+    main_app._last_media_by_user[uid] = (str(wav), time.time())  # set by every metered transcription/generation
+    body = {"events": _cues([(1, 3)]), "source_lang": "hi", "target_langs": ["en"]}  # no video_id, 3 s of subtitles
+    assert client.post("/api/centroid/translate", json=body, headers=headers).status_code == 200
+    assert 39_500 <= _state(uid)["translate_used_ms"] <= 40_500  # the whole 40 s file
+    wav.unlink()  # even after the file is cleaned up, the measured length is remembered
+    assert client.post("/api/centroid/translate", json=body, headers=headers).status_code == 200
+    assert _state(uid)["translate_used_ms"] >= 79_000
