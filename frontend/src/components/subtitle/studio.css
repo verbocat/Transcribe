@@ -138,10 +138,11 @@
   to { background-position: 150% 0; }
 }
 
-/* ── Tool rail: quiet tiles, one primary action ────────────────────────────
-   Context / AI Translate / QC are calm icon + label tiles that lift gently on
-   hover. The open tool gets a soft accent tile and an edge indicator that grows
-   in. Generate is the single filled button: an accent gradient with a faint glow. */
+/* ── Tool rail: flat icon tiles, label underneath, one primary action ─────
+   Vertical rail: each tool is a 40px tile with its name below. Tiles are flat
+   (no borders, gradients or glows). The open tool gets a soft accent tint;
+   Generate is the single solid accent tile. The horizontal dock (top/bottom)
+   keeps compact pill buttons. */
 .rail-btn {
   --rail-a: var(--ss-accent);
   position: relative;
@@ -149,80 +150,97 @@
   background: transparent;
   border: 0;
   outline: none;
-  transition: background 180ms ease, color 180ms ease, box-shadow 180ms ease, transform 180ms cubic-bezier(.2,.8,.2,1);
+  transition: background 160ms ease, color 160ms ease, box-shadow 160ms ease;
 }
-.rail-btn-v { width: 60px; height: 54px; border-radius: 14px; }
-.rail-btn svg { transition: transform 220ms cubic-bezier(.2,.8,.2,1); }
-.rail-btn:not(:disabled):hover {
-  color: var(--ss-text);
-  background: color-mix(in srgb, var(--ss-text) 7%, transparent);
-}
-.rail-btn:not(:disabled):hover svg { transform: translateY(-1px) scale(1.06); }
-.rail-btn:not(:disabled):active { transform: scale(0.96); }
-.rail-btn:focus-visible { box-shadow: 0 0 0 2px var(--ss-bg), 0 0 0 4px var(--rail-a); }
-
-/* open tool */
-.rail-btn[data-on="true"] {
-  color: var(--rail-a);
-  background: color-mix(in srgb, var(--rail-a) 13%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--rail-a) 28%, transparent);
-}
-.rail-btn[data-on="true"]:focus-visible { box-shadow: 0 0 0 2px var(--ss-bg), 0 0 0 4px var(--rail-a); }
-.rail-bar {
-  background: var(--rail-a);
-  box-shadow: 0 0 10px color-mix(in srgb, var(--rail-a) 70%, transparent);
-  animation: rail-bar-in 220ms cubic-bezier(.2,.8,.2,1);
-}
-@keyframes rail-bar-in { from { transform: scaleY(0.2); opacity: 0; } to { transform: scaleY(1); opacity: 1; } }
-
-/* primary: Generate */
-.rail-btn[data-primary="true"] {
-  color: var(--kt-accent-ink, #fff);
-  background: linear-gradient(160deg, var(--rail-a), color-mix(in srgb, var(--rail-a) 55%, var(--kt-accent-2, var(--rail-a))));
-  box-shadow: 0 6px 16px -6px color-mix(in srgb, var(--rail-a) 75%, transparent), inset 0 1px 0 rgb(255 255 255 / 0.28);
-}
-.rail-btn[data-primary="true"]:not(:disabled):hover {
-  color: var(--kt-accent-ink, #fff);
-  filter: brightness(1.08) saturate(1.05);
-  box-shadow: 0 8px 20px -6px color-mix(in srgb, var(--rail-a) 85%, transparent), inset 0 1px 0 rgb(255 255 255 / 0.34);
-}
-.rail-btn[data-primary="true"]:not(:disabled):hover svg { transform: rotate(12deg) scale(1.08); }
-.rail-btn[data-primary="true"]:focus-visible { box-shadow: 0 0 0 2px var(--ss-bg), 0 0 0 4px var(--rail-a); }
-.rail-btn[data-primary="true"][data-busy="true"] { opacity: 1; }
-.rail-btn:disabled { opacity: 1; cursor: not-allowed; color: var(--ss-faint); }
-.rail-btn[data-primary="true"]:disabled {
-  color: var(--ss-faint);
-  background: color-mix(in srgb, var(--ss-text) 6%, transparent);
-  box-shadow: inset 0 0 0 1px var(--ss-line);
-}
-.rail-btn[data-primary="true"][data-busy="true"] {
-  color: var(--kt-accent-ink, #fff);
-  background: linear-gradient(160deg, var(--rail-a), color-mix(in srgb, var(--rail-a) 55%, var(--kt-accent-2, var(--rail-a))));
-  box-shadow: 0 6px 16px -6px color-mix(in srgb, var(--rail-a) 75%, transparent), inset 0 1px 0 rgb(255 255 255 / 0.28);
-}
-.rail-btn svg.animate-spin { animation: rail-working 1s linear infinite; }
+.rail-btn svg { transition: transform 200ms cubic-bezier(.2,.8,.2,1); }
+.rail-btn.animate-spin, .rail-btn svg.animate-spin { animation: rail-working 1s linear infinite; }
 @keyframes rail-working { to { transform: rotate(360deg); } }
 
-.rail-aside { background: color-mix(in srgb, var(--ss-panel) 55%, var(--ss-bg)); }
+/* vertical: tile + label */
+.rail-btn-v { width: 64px; gap: 6px; padding: 0; }
+.rail-tile {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  color: var(--ss-muted);
+  transition: background 160ms ease, color 160ms ease, transform 160ms cubic-bezier(.2,.8,.2,1);
+}
+.rail-label {
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  color: var(--ss-muted);
+  transition: color 160ms ease;
+}
+.rail-btn-v:not(:disabled):hover .rail-tile { color: var(--ss-text); background: color-mix(in srgb, var(--ss-text) 7%, transparent); }
+.rail-btn-v:not(:disabled):hover .rail-label { color: var(--ss-text); }
+.rail-btn-v:not(:disabled):active .rail-tile { transform: scale(0.94); }
+.rail-btn-v:focus-visible .rail-tile { box-shadow: 0 0 0 2px var(--ss-bg), 0 0 0 4px var(--rail-a); }
+
+.rail-btn-v[data-on="true"] .rail-tile { color: var(--rail-a); background: color-mix(in srgb, var(--rail-a) 14%, transparent); }
+.rail-btn-v[data-on="true"]:not(:disabled):hover .rail-tile { color: var(--rail-a); background: color-mix(in srgb, var(--rail-a) 20%, transparent); }
+.rail-btn-v[data-on="true"] .rail-label { color: var(--ss-text); font-weight: 600; }
+
+.rail-btn-v[data-primary="true"] .rail-tile,
+.rail-btn-v[data-primary="true"]:not(:disabled):hover .rail-tile,
+.rail-btn-v[data-primary="true"][data-busy="true"] .rail-tile { color: var(--kt-accent-ink, #fff); background: var(--rail-a); }
+.rail-btn-v[data-primary="true"]:not(:disabled):hover .rail-tile { filter: brightness(1.08); }
+.rail-btn-v[data-primary="true"] .rail-label { color: var(--ss-text); font-weight: 600; }
+.rail-btn-v:disabled .rail-tile { color: var(--ss-faint); background: transparent; }
+.rail-btn-v[data-primary="true"]:disabled:not([data-busy="true"]) .rail-tile { color: var(--ss-faint); background: color-mix(in srgb, var(--ss-text) 5%, transparent); }
+.rail-btn-v:disabled:not([data-busy="true"]) .rail-label { color: var(--ss-faint); font-weight: 500; }
+
+.rail-tile-badge {
+  position: absolute; top: -4px; right: -6px;
+  min-width: 16px; height: 16px; padding: 0 4px; border-radius: 99px;
+  background: var(--ss-warn); color: #000;
+  font-size: 9.5px; font-weight: 700; line-height: 16px; text-align: center;
+  box-shadow: 0 0 0 2px var(--ss-bg);
+}
+.rail-tile-dot {
+  position: absolute; top: 6px; right: 6px;
+  width: 6px; height: 6px; border-radius: 99px;
+  background: var(--rail-a);
+  box-shadow: 0 0 0 2px var(--ss-bg);
+}
+.rail-btn-v[data-on="true"] .rail-tile-dot { box-shadow: none; }
+.rail-sep { display: block; width: 20px; height: 1px; margin: 2px 0; background: var(--ss-line); }
+
+/* horizontal dock: compact pills */
+.rail-btn-h:not(:disabled):hover { color: var(--ss-text); background: color-mix(in srgb, var(--ss-text) 7%, transparent); }
+.rail-btn-h:focus-visible { box-shadow: 0 0 0 2px var(--ss-bg), 0 0 0 4px var(--rail-a); }
+.rail-btn-h[data-on="true"] { color: var(--rail-a); background: color-mix(in srgb, var(--rail-a) 14%, transparent); }
+.rail-btn-h[data-primary="true"],
+.rail-btn-h[data-primary="true"][data-busy="true"] { color: var(--kt-accent-ink, #fff); background: var(--rail-a); }
+.rail-btn-h[data-primary="true"]:not(:disabled):hover { color: var(--kt-accent-ink, #fff); background: var(--rail-a); filter: brightness(1.08); }
+.rail-btn-h:disabled { cursor: not-allowed; color: var(--ss-faint); }
+.rail-btn-h[data-primary="true"]:disabled:not([data-busy="true"]) { color: var(--ss-faint); background: color-mix(in srgb, var(--ss-text) 5%, transparent); }
+
+.rail-aside { background: var(--ss-bg); }
 .rail-tip { z-index: 60; }
 
 /* short windows: tighten, then drop the labels (tooltips still name every tool) */
 @media (max-height: 720px) {
-  .rail-aside { justify-content: flex-start; padding-top: 10px; }
-  .rail-btn-v { height: 48px; }
-  .rail-sep { margin: 6px 0; }
+  .rail-aside { justify-content: flex-start; padding-top: 12px; }
+  .rail-aside > div { gap: 10px; }
 }
 @media (max-height: 560px) {
-  .rail-btn-v { height: 40px; width: 44px; }
+  .rail-tile { width: 36px; height: 36px; border-radius: 10px; }
   .rail-btn-v .rail-label { display: none; }
   .rail-aside { width: 56px; }
 }
 @media (max-width: 900px) {
-  .rail-aside { width: 58px; }
-  .rail-btn-v { width: 48px; }
+  .rail-aside { width: 60px; }
+  .rail-btn-v { width: 56px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .rail-btn, .rail-btn svg, .rail-bar { transition: none !important; animation: none !important; }
+  .rail-btn, .rail-btn svg, .rail-tile, .rail-label { transition: none !important; }
   .rail-btn svg.animate-spin { animation: rail-working 1.6s linear infinite !important; }
 }
