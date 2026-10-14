@@ -3,8 +3,8 @@ import { TRANSLATE_LANGUAGES } from '../../data/languageCatalog';
 /** Languages Centroid can translate between (shared by the Translate drawer and the language tracks bar). */
 export const COMMON_LANGS = [
   ['en', 'English'], ['hi', 'Hindi'], ['bn', 'Bengali'], ['ta', 'Tamil'], ['te', 'Telugu'], ['mr', 'Marathi'],
-  ['gu', 'Gujarati'], ['kn', 'Kannada'], ['ml', 'Malayalam'], ['pa', 'Punjabi'], ['ur', 'Urdu'],
-  ['es', 'Spanish'], ['fr', 'French'], ['de', 'German'], ['ar', 'Arabic'],
+  ['gu', 'Gujarati'], ['kn', 'Kannada'], ['ml', 'Malayalam'], ['pa', 'Punjabi'],
+  ['es', 'Spanish'], ['fr', 'French'], ['de', 'German'],
 ];
 
 // Everything else Centroid is asked to translate into: the same alphabetical list Transcribe Studio offers.

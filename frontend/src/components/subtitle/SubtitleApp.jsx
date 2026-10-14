@@ -477,7 +477,8 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
   const [language, setLanguage] = useState(() => {
     try {
       const saved = localStorage.getItem('karya_sub_language');
-      return (saved && saved !== 'hi') ? saved : 'en';
+      // RTL languages were removed from the tool; a saved one falls back to English
+      return (saved && saved !== 'hi' && !['ar', 'he', 'ur', 'fa', 'ps', 'sd', 'ku'].includes(saved)) ? saved : 'en';
     } catch (_) { return 'en'; }
   });
   // Spoken language of the media, picked next to the file: sent to the transcription engine (Auto-Detect lets it decide)

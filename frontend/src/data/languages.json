@@ -12,12 +12,6 @@
   "native": "አማርኛ"
  },
  {
-  "name": "Arabic",
-  "translate": "ar",
-  "scribe": "ara",
-  "native": "العربية"
- },
- {
   "name": "Armenian",
   "translate": "hy",
   "scribe": "hye",
@@ -210,12 +204,6 @@
   "native": null
  },
  {
-  "name": "Hebrew",
-  "translate": "he",
-  "scribe": "heb",
-  "native": null
- },
- {
   "name": "Hindi",
   "translate": "hi",
   "scribe": "hin",
@@ -303,12 +291,6 @@
   "name": "Korean",
   "translate": "ko",
   "scribe": "kor",
-  "native": null
- },
- {
-  "name": "Kurdish",
-  "translate": "ku",
-  "scribe": "kur",
   "native": null
  },
  {
@@ -426,18 +408,6 @@
   "native": null
  },
  {
-  "name": "Pashto",
-  "translate": "ps",
-  "scribe": "pus",
-  "native": null
- },
- {
-  "name": "Persian",
-  "translate": "fa",
-  "scribe": "fas",
-  "native": null
- },
- {
   "name": "Polish",
   "translate": "pl",
   "scribe": "pol",
@@ -489,12 +459,6 @@
   "name": "Shona",
   "translate": "sn",
   "scribe": "sna",
-  "native": null
- },
- {
-  "name": "Sindhi",
-  "translate": "sd",
-  "scribe": "snd",
   "native": null
  },
  {
@@ -580,12 +544,6 @@
   "translate": null,
   "scribe": "umb",
   "native": null
- },
- {
-  "name": "Urdu",
-  "translate": "ur",
-  "scribe": "urd",
-  "native": "اردو"
  },
  {
   "name": "Uzbek",

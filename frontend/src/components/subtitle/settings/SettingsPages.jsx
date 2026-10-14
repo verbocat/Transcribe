@@ -124,10 +124,10 @@ export function QcPage({ c }) {
 const LANGUAGES = [
   ['auto', 'Auto-detect'], ['en', 'English'], ['hi', 'Hindi (हिंदी)'], ['hinglish', 'Hinglish (Hindi in Latin)'], ['bn', 'Bengali (বাংলা)'],
   ['ta', 'Tamil (தமிழ்)'], ['te', 'Telugu (తెలుగు)'], ['mr', 'Marathi (मराठी)'], ['gu', 'Gujarati (ગુજરાતી)'], ['pa', 'Punjabi (ਪੰਜਾਬੀ)'],
-  ['kn', 'Kannada (ಕನ್ನಡ)'], ['ml', 'Malayalam (മലയാളം)'], ['ur', 'Urdu (اردو)'], ['es', 'Spanish (Español)'], ['fr', 'French (Français)'],
+  ['kn', 'Kannada (ಕನ್ನಡ)'], ['ml', 'Malayalam (മലയാളം)'], ['es', 'Spanish (Español)'], ['fr', 'French (Français)'],
   ['de', 'German (Deutsch)'], ['it', 'Italian (Italiano)'], ['pt', 'Portuguese (Português)'], ['ja', 'Japanese (日本語) · 16 CPL'],
   ['ko', 'Korean (한국어) · 16 CPL'], ['zh', 'Chinese Simplified (中文 简体) · 16 CPL'], ['zht', 'Chinese Traditional (中文 繁體) · 16 CPL'],
-  ['ar', 'Arabic (العربية)'], ['he', 'Hebrew (עברית)'], ['ru', 'Russian (Русский)'], ['uk', 'Ukrainian (Українська)'], ['tr', 'Turkish (Türkçe)'],
+  ['ru', 'Russian (Русский)'], ['uk', 'Ukrainian (Українська)'], ['tr', 'Turkish (Türkçe)'],
   ['th', 'Thai (ไทย) · 35 CPL'], ['vi', 'Vietnamese (Tiếng Việt)'], ['id', 'Indonesian (Bahasa Indonesia)'], ['pl', 'Polish (Polski)'],
   ['nl', 'Dutch (Nederlands)'], ['sv', 'Swedish (Svenska)'],
 ].map(([value, label]) => ({ value, label }));
