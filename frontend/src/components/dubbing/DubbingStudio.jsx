@@ -225,6 +225,11 @@ export default function DubbingStudio({ onBackToHome, user, onOpenLogoutModal })
         {job?.status === 'done' ? (
           <section className="rounded-xl border border-[var(--kt-success)]/40 bg-[var(--kt-s1)] p-4 flex flex-col gap-3">
             <div className="flex items-center gap-2 text-sm font-semibold"><CheckCircle2 size={16} className="text-[var(--kt-success)]" /> Your {job.target_language} dub is ready</div>
+            {job.watermarked ? (
+              <div className="rounded-md border border-[var(--kt-warn)]/40 bg-[var(--kt-warn)]/10 px-3 py-2 text-xs">
+                This dub carries an ElevenLabs watermark because the ElevenLabs account is not on the Starter plan or above. Upgrade it to get dubs without a watermark.
+              </div>
+            ) : null}
             {job.files?.video ? (videoUrl
               ? <video controls src={videoUrl} className="w-full max-h-[460px] rounded-lg bg-black" />
               : <div><Btn icon={Play} onClick={loadVideo} disabled={busy}>Preview the dubbed video</Btn></div>) : null}

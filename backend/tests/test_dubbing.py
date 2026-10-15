@@ -101,3 +101,30 @@ def test_failed_dub_is_refunded_and_message_shown(monkeypatch, tmp_path):
             assert c.get(f"/api/dubbing/jobs/{j['id']}").status_code == 404
     finally:
         app.dependency_overrides.clear()
+
+
+def test_watermark_retry_when_plan_does_not_allow_clean_dub(monkeypatch, tmp_path):
+    marks = []
+
+    def handler(req: httpx.Request):
+        if req.method == "POST":
+            mark = b"true" if b'name="watermark"\r\n\r\ntrue' in req.content else b"false"
+            marks.append(mark)
+            if mark == b"false":
+                return httpx.Response(403, json={"detail": {"status": "watermark_not_allowed", "message": "Starter+ only"}})
+            return httpx.Response(200, json={"dubbing_id": "d1"})
+        if req.method == "DELETE":
+            return httpx.Response(200, json={})
+        if req.url.path.endswith("/audio/en"):
+            return httpx.Response(200, content=b"MP3", headers={"content-type": "audio/mpeg"})
+        return httpx.Response(200, json={"status": "dubbed"})
+
+    wav = _setup(monkeypatch, tmp_path, handler)
+    try:
+        with TestClient(app) as c:
+            r = c.post("/api/dubbing/jobs", files={"file": ("in.wav", wav.read_bytes(), "audio/wav")}, data={"target_language": "English"})
+            j = _wait(c, r.json()["job_id"])
+            assert j["status"] == "done", j["error"]
+            assert marks == [b"false", b"true"] and j["watermarked"] is True
+    finally:
+        app.dependency_overrides.clear()

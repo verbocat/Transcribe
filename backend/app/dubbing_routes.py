@@ -10,6 +10,7 @@ the dub is delivered. A failed dub is refunded.
 import asyncio
 import logging
 import mimetypes
+import os
 import shutil
 import subprocess
 import time
@@ -133,13 +134,21 @@ async def _run(job: Dict[str, Any], meter: "metering.Metered", src_code: str, tg
             job.update(stage="uploading", detail="Sending the file to the dubbing engine")
             media = Path(job["media_path"])
             mime = mimetypes.guess_type(media.name)[0] or "application/octet-stream"
-            with open(media, "rb") as fh:
-                resp = await client.post(
-                    f"{ELEVEN}/v1/dubbing", headers=headers,
-                    data={"target_lang": tgt_code, "source_lang": src_code, "num_speakers": str(num_speakers),
-                          "watermark": "false", "highest_resolution": "true", "mode": "automatic", "name": job["filename"][:80]},
-                    files={"file": (job["filename"], fh, mime)},
-                )
+            mode = os.getenv("DUBBING_WATERMARK", "auto").strip().lower()  # auto | on | off
+            marks = ["true"] if mode in ("on", "true", "1") else ["false"] if mode in ("off", "false", "0") else ["false", "true"]
+            for i, mark in enumerate(marks):
+                with open(media, "rb") as fh:
+                    resp = await client.post(
+                        f"{ELEVEN}/v1/dubbing", headers=headers,
+                        data={"target_lang": tgt_code, "source_lang": src_code, "num_speakers": str(num_speakers),
+                              "watermark": mark, "highest_resolution": "true", "mode": "automatic", "name": job["filename"][:80]},
+                        files={"file": (job["filename"], fh, mime)},
+                    )
+                if resp.status_code >= 400 and mark == "false" and i + 1 < len(marks) and "watermark_not_allowed" in resp.text:
+                    job["detail"] = "Plan without watermark-free dubbing, retrying with a watermark"
+                    continue
+                job["watermarked"] = mark == "true"
+                break
             if resp.status_code >= 400:
                 raise RuntimeError(f"ElevenLabs refused the file ({_eleven_error(resp)})")
             eid = resp.json().get("dubbing_id")
@@ -259,7 +268,7 @@ async def create_job(
         "id": job_id, "owner": current_user.id, "filename": name, "media_path": str(media),
         "is_video": ext in get_supported_video_extensions(), "duration": round(ms / 1000.0, 2),
         "target_language": target_language, "status": "dubbing", "stage": "queued", "detail": "Queued", "error": None,
-        "files": None, "created": time.time(),
+        "files": None, "watermarked": None, "created": time.time(),
     }
     _jobs[job_id] = job
     _save(job)
