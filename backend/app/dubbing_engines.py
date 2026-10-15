@@ -453,12 +453,14 @@ def to_wav(src: str, dst: str, tempo: float = 1.0, pitch: float = 0.0) -> float:
 
 
 def mix_timeline(lines: List[Dict[str, Any]], total_seconds: float, out_wav: str) -> None:
-    """Place each line's wav at its start time. Overlaps add together."""
+    """Place each line's wav at its start time. Overlaps add together. `offset` skips the start of a line's audio
+    (a trimmed clip); `duration` is how much of it plays."""
     end = max([total_seconds] + [l["start"] + l["duration"] for l in lines])
     buf = np.zeros(int(end * SAMPLE_RATE) + 1, dtype="float32")
     for l in lines:
         data, _ = sf.read(l["wav"], dtype="float32")
-        data = data * float(l.get("gain", 1.0))
+        a = int(float(l.get("offset", 0.0)) * SAMPLE_RATE)
+        data = data[a:a + int(round(float(l["duration"]) * SAMPLE_RATE))] * float(l.get("gain", 1.0))
         i = int(l["start"] * SAMPLE_RATE)
         n = max(0, min(len(data), len(buf) - i))
         buf[i:i + n] += data[:n]

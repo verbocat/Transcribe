@@ -23,6 +23,7 @@ export default function DubbingStudio({ onBackToHome, user, onOpenLogoutModal })
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [dragging, setDragging] = useState(false);
+  const [wide, setWide] = useState(false);
   const inputRef = useRef(null);
 
   const load = useCallback(() => call('/projects').then((d) => setProjects(d.projects || [])).catch(() => {}), []);
@@ -65,8 +66,8 @@ export default function DubbingStudio({ onBackToHome, user, onOpenLogoutModal })
         <AccountMenuDropdown user={user} onOpenLogoutModal={onOpenLogoutModal} />
       </header>
 
-      <main className={`flex-1 w-full ${view === 'project' ? 'max-w-6xl' : 'max-w-3xl'} mx-auto px-4 sm:px-6 py-6`}>
-        {view === 'project' ? <ProjectEditor projectId={projectId} onClose={() => setView('home')} /> : null}
+      <main className={`flex-1 w-full ${view === 'project' ? (wide ? 'max-w-none' : 'max-w-6xl') : 'max-w-3xl'} mx-auto ${wide && view === 'project' ? 'px-3 py-3' : 'px-4 sm:px-6 py-6'}`}>
+        {view === 'project' ? <ProjectEditor projectId={projectId} onClose={() => setView('home')} onWide={setWide} /> : null}
         {view === 'quick' ? <QuickDub /> : null}
         {view === 'home' ? (
           <div className="flex flex-col gap-5">

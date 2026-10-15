@@ -4,9 +4,9 @@ import {
 } from 'lucide-react';
 import { api, call, send, GRAD, fmtTime } from './dubApi';
 import VoiceOverTab from './VoiceOverTab';
-import TimelineTab from './TimelineTab';
+import EditorWorkspace from './editor/EditorWorkspace';
 
-const TABS = [['transcript', 'Transcript'], ['speakers', 'Speakers & voices'], ['translation', 'Translation'], ['voiceover', 'Voice-over'], ['timeline', 'Timeline']];
+const TABS = [['transcript', 'Transcript'], ['speakers', 'Speakers & voices'], ['translation', 'Translation'], ['voiceover', 'Voice-over'], ['editor', 'Editor']];
 const BUSY = new Set(['transcribing', 'profiling', 'translating', 'speaking', 'separating', 'rendering']);
 
 function Btn({ children, onClick, disabled, primary, icon: Icon, small, title }) {
@@ -21,7 +21,7 @@ function Btn({ children, onClick, disabled, primary, icon: Icon, small, title })
 const Chip = ({ children }) => <span className="px-2 py-0.5 rounded-md text-[11px] bg-[var(--kt-s3)] text-[var(--kt-muted)] border border-[var(--kt-s4)]">{children}</span>;
 const inputCls = 'rounded-md bg-[var(--kt-s2)] border border-[var(--kt-s5)] px-2 text-sm';
 
-export default function ProjectEditor({ projectId, onClose }) {
+export default function ProjectEditor({ projectId, onClose, onWide }) {
   const [project, setProject] = useState(null);
   const [segs, setSegs] = useState([]);
   const [dirty, setDirty] = useState(false);
@@ -37,6 +37,7 @@ export default function ProjectEditor({ projectId, onClose }) {
   const carets = useRef({});
   const dirtyRef = useRef(false);
   useEffect(() => { dirtyRef.current = dirty; }, [dirty]);
+  useEffect(() => { onWide?.(tab === 'editor'); return () => onWide?.(false); }, [tab, onWide]);
 
   const apply = useCallback((p, force = false) => {
     setProject(p);
@@ -164,7 +165,7 @@ export default function ProjectEditor({ projectId, onClose }) {
         </div>
       ) : null}
 
-      {mediaUrl ? (
+      {mediaUrl && tab !== 'editor' ? (
         <div className="rounded-xl border border-[var(--kt-s4)] bg-black/30 p-2">
           {isVideo
             ? <video ref={player} src={mediaUrl} controls onTimeUpdate={onTime} className="w-full max-h-[260px] rounded-lg bg-black" />
@@ -283,9 +284,9 @@ export default function ProjectEditor({ projectId, onClose }) {
         <VoiceOverTab projectId={projectId} project={project} segs={segs} edit={edit} dirty={dirty} save={save} wrap={wrap}
           refresh={refresh} apply={apply} running={running} busy={busy} />
       ) : null}
-      {tab === 'timeline' ? (
-        <TimelineTab projectId={projectId} project={project} segs={segs} edit={edit} dirty={dirty} save={save} wrap={wrap}
-          refresh={refresh} running={running} busy={busy} player={player} mediaUrl={mediaUrl} />
+      {tab === 'editor' ? (
+        <EditorWorkspace projectId={projectId} project={project} mediaUrl={mediaUrl} dirtySegments={dirty} saveSegments={save}
+          refresh={refresh} running={running} busy={busy} wrap={wrap} />
       ) : null}
     </div>
   );

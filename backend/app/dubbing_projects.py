@@ -19,6 +19,7 @@ import httpx
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
+from app import dubbing_edit as edits
 from app import dubbing_engines as eng
 from app import dubbing_stems as stems
 from app import metering
@@ -39,7 +40,7 @@ TTL_SEC = 14 * 24 * 3600
 
 _projects: Dict[str, Dict[str, Any]] = {}
 _tasks: Dict[str, asyncio.Task] = {}
-_PRIVATE = {"media_path", "owner", "updated", "lines"}
+_PRIVATE = {"media_path", "owner", "updated", "lines", "edit"}
 BUSY = ("transcribing", "profiling", "translating", "speaking", "separating", "rendering")
 
 
@@ -624,16 +625,17 @@ async def mix(pid: str, payload: dict = Body(default={}), current_user: User = D
     pdir = _dir(pid)
     meta_all = _line_meta(p)
     bg_gain = _clamp(payload.get("background_gain"), 0.0, 2.0, 1.0)
+    edit = _edit(p)
     placed = []
-    for s in p["segments"]:
-        m = meta_all.get(str(s["id"]))
-        f = pdir / "lines" / ((m or {}).get("file") or "-")
-        if m and f.exists() and not s.get("mute"):
-            placed.append({"id": s["id"], "speaker": s["speaker"], "start": max(0.0, s["start"] + s.get("shift", 0.0)),
-                           "duration": m["duration"], "wav": str(f), "gain": s.get("gain", 1.0)})
+    for l in edits.line_placements(p, edit, meta_all):
+        f = pdir / "lines" / l.pop("file")
+        if f.exists():
+            placed.append(dict(l, wav=str(f)))
     if not placed:
         raise HTTPException(status_code=400, detail="Generate some speech first.")
     bg = pdir / "stems" / "background.wav"
+    if not edits.audible(edit).get("A2", True):
+        bg = pdir / "stems" / "-"  # the background track is muted (or another track is soloed) in the editor
 
     async def run():
         try:
@@ -677,6 +679,97 @@ async def mix(pid: str, payload: dict = Body(default={}), current_user: User = D
             _save(p)
     _tasks[pid] = asyncio.create_task(run())
     return {"ok": True}
+
+
+# --------------------------------------------------------------------------------------------- editor (edit / sequence)
+def _edit(p: Dict[str, Any]) -> Dict[str, Any]:
+    """The project's edit, brought up to date with its lines and media (seeded on first use)."""
+    return edits.reconcile(p, p["edit"]) if p.get("edit") else edits.seed(p)
+
+
+def _probe_fps(path: str) -> float:
+    """Frame rate of the video (for frame stepping and timecode in the editor); 25 when it cannot be read."""
+    import re
+    r = subprocess.run([eng._ffmpeg(), "-hide_banner", "-i", path], capture_output=True, text=True, errors="replace", timeout=60)
+    m = re.search(r"Video:.*?(\d+(?:\.\d+)?) fps", r.stderr or "")
+    fps = float(m.group(1)) if m else 25.0
+    return fps if 5.0 <= fps <= 120.0 else 25.0
+
+
+@router.get("/{pid}/edit")
+async def get_edit(pid: str, current_user: User = Depends(get_current_user_from_token)):
+    p = _get(pid, current_user)
+    if not p.get("fps"):
+        p["fps"] = await asyncio.to_thread(_probe_fps, p["media_path"]) if p.get("is_video") else 25.0
+        _save(p)
+    return {"edit": _edit(p), "stored": bool(p.get("edit")), "fps": p["fps"]}
+
+
+@router.put("/{pid}/edit")
+async def put_edit(pid: str, payload: dict, current_user: User = Depends(get_current_user_from_token)):
+    """Save the edit from the editor: clip positions and trims, disabled clips, track mute / solo / lock / volume."""
+    p = _get(pid, current_user)
+    lengths = {}
+    for s in p["segments"]:
+        st = line_state(p, s)
+        lengths[s["id"]] = st["duration"] if st.get("ready") else round(s["end"] - s["start"], 3)
+    try:
+        p["edit"] = edits.clean(p, payload.get("edit"), lengths)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    _save(p)
+    return {"edit": p["edit"], "stored": True}
+
+
+@router.delete("/{pid}/edit")
+async def reset_edit(pid: str, current_user: User = Depends(get_current_user_from_token)):
+    """Throw the edit away and start again from the lines at their own times."""
+    p = _get(pid, current_user)
+    p.pop("edit", None)
+    _save(p)
+    return {"edit": _edit(p), "stored": False}
+
+
+@router.get("/{pid}/waveform/lines")
+async def line_waveforms(pid: str, current_user: User = Depends(get_current_user_from_token)):
+    """Loudness envelopes of every generated line (50 points per second), keyed by line id, with the audio revision."""
+    p = _get(pid, current_user)
+    pdir = _dir(pid)
+    cache = pdir / "lines" / "peaks.json"
+    try:
+        old = json.loads(cache.read_text()) if cache.exists() else {}
+    except Exception:
+        old = {}
+    out: Dict[str, Any] = {}
+    for sid, m in _line_meta(p).items():
+        f = pdir / "lines" / (m.get("file") or "-")
+        if not f.exists():
+            continue
+        if (old.get(sid) or {}).get("rev") == m.get("rev"):
+            out[sid] = old[sid]
+            continue
+        try:
+            d = await asyncio.to_thread(_line_peaks, str(f))
+        except Exception:
+            continue
+        out[sid] = dict(d, rev=m.get("rev"))
+    if out != old:
+        try:
+            cache.write_text(json.dumps(out))
+        except OSError:
+            pass
+    return {"lines": out}
+
+
+def _line_peaks(path: str, per_second: int = 50) -> Dict[str, Any]:
+    import numpy as np
+    import soundfile as sf
+    x, sr = sf.read(path, dtype="float32", always_2d=True)
+    x = np.abs(x).max(axis=1)
+    n = max(1, int(len(x) / sr * per_second))
+    edges = np.linspace(0, len(x), n + 1).astype(int)
+    peaks = [round(float(x[a:b].max()) if b > a else 0.0, 3) for a, b in zip(edges[:-1], edges[1:])]
+    return {"peaks": peaks, "duration": round(len(x) / sr, 3)}
 
 
 def _peaks(path: str, duration: float, points: int) -> Dict[str, Any]:
