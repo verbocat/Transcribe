@@ -21,7 +21,7 @@ import asyncio
 import logging
 import unicodedata
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from app.config import (
     GEMINI_API_KEY, GEMINI_MODEL, DEFAULT_LANGUAGE, SPEAKER_AI_REVIEW,
@@ -402,60 +402,6 @@ def _build_segments(runs: List[List[Dict[str, Any]]], audio_path: str, language:
     return segments
 
 
-GAP_FILL_MIN_SEC = 4.0  # a silent stretch this long inside a forced-language run is suspicious
-
-
-def _find_word_gaps(words: List[Dict[str, Any]], duration: float) -> List[Tuple[float, float]]:
-    """Stretches with no recognized word (start/end of file included)."""
-    spoken = sorted((float(w.get("start", 0.0)), float(w.get("end", 0.0))) for w in words if w.get("type") == "word")
-    if not spoken:
-        return [(0.0, duration)] if duration >= GAP_FILL_MIN_SEC else []
-    gaps = []
-    if spoken[0][0] >= GAP_FILL_MIN_SEC:
-        gaps.append((0.0, spoken[0][0]))
-    for (_, prev_end), (nxt_start, _) in zip(spoken, spoken[1:]):
-        if nxt_start - prev_end >= GAP_FILL_MIN_SEC:
-            gaps.append((prev_end, nxt_start))
-    if duration and duration - spoken[-1][1] >= GAP_FILL_MIN_SEC:
-        gaps.append((spoken[-1][1], duration))
-    return gaps
-
-
-def _merge_auto_words_into_gaps(forced: Dict[str, Any], auto: Dict[str, Any], gaps: List[Tuple[float, float]]) -> int:
-    """Copy words the auto-detect run heard inside `gaps` into the forced-language result. Returns words added."""
-    forced_words = forced.get("words") or []
-    auto_words = auto.get("words") or []
-
-    # Map each auto speaker to the forced speaker it overlaps most (diarization ids differ between runs)
-    votes: Dict[str, Dict[str, float]] = {}
-    for aw in auto_words:
-        if aw.get("type") != "word":
-            continue
-        for fw in forced_words:
-            if fw.get("type") != "word":
-                continue
-            ov = min(aw["end"], fw["end"]) - max(aw["start"], fw["start"])
-            if ov > 0:
-                votes.setdefault(str(aw.get("speaker_id")), {}).setdefault(str(fw.get("speaker_id")), 0.0)
-                votes[str(aw.get("speaker_id"))][str(fw.get("speaker_id"))] += ov
-    spk_map = {a: max(v, key=v.get) for a, v in votes.items() if v}
-
-    added = []
-    for aw in auto_words:
-        mid = (aw["start"] + aw["end"]) / 2.0
-        if any(g0 - 0.05 <= mid <= g1 + 0.05 for g0, g1 in gaps):
-            w = dict(aw)
-            w["speaker_id"] = spk_map.get(str(aw.get("speaker_id")), aw.get("speaker_id") or "speaker_0")
-            added.append(w)
-    if not added:
-        return 0
-    forced["words"] = sorted(forced_words + added, key=lambda w: (w["start"], w["end"]))
-    raw = forced.get("raw")
-    if isinstance(raw, dict):
-        raw["words"] = [dict(w) for w in forced["words"]]
-    return sum(1 for w in added if w.get("type") == "word")
-
-
 async def process_audio_file(
     audio_path: str,
     language: str = "Auto-Detect",
@@ -496,7 +442,7 @@ async def process_audio_file(
     log_terminal("ELEVENLABS-STT", f"Transcription tool: dispatching '{filename}' to ElevenLabs Scribe v2 (Lang: {language}, Script: {script})...")
     stt_result = await transcribe_with_scribe_v2(
         audio_path=audio_path,
-        language=None if _is_auto(language) else language,
+        language=None,  # always auto-detect: a forced language makes Scribe skip/garble speech in other languages
         diarize=True,
         tag_audio_events=False,
         num_speakers=KARYA_NUM_SPEAKERS,
@@ -504,22 +450,6 @@ async def process_audio_file(
         progress_cb=lambda st, pct, detail: report(st, pct, detail),
         expected_sec=audio_info.duration,
     )
-
-    # A forced language makes Scribe skip or garble stretches spoken in another language (mid-video switch).
-    # If long stretches came back empty, ask Scribe again with auto-detect and keep what it heard in those gaps.
-    if not _is_auto(language):
-        gaps = _find_word_gaps(stt_result.get("words") or [], float(audio_info.duration or 0.0))
-        if gaps:
-            try:
-                log_terminal("ELEVENLABS-STT", f"{len(gaps)} silent stretch(es) under forced language '{language}'. Re-checking with auto-detect for mixed languages...")
-                auto_result = await transcribe_with_scribe_v2(
-                    audio_path=audio_path, language=None, diarize=True, tag_audio_events=False,
-                    num_speakers=KARYA_NUM_SPEAKERS, api_key=elevenlabs_api_key,
-                )
-                added = _merge_auto_words_into_gaps(stt_result, auto_result, gaps)
-                log_terminal("ELEVENLABS-STT", f"Recovered {added} word(s) spoken in another language.")
-            except Exception as exc:
-                logger.warning(f"[Mixed-language recovery] skipped: {exc}")
 
     resolved_language = _resolve_language_name(language, stt_result.get("language_code"))
     resolved_script = _resolve_script_name(script, resolved_language)
