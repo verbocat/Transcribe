@@ -285,7 +285,7 @@ async def generate_subtitles_async(
     log_terminal("ELEVENLABS-STT", f"Dispatching audio to ElevenLabs Scribe v2 (Lang: {language}, SDH: {sdh_mode}, Speakers: {num_speakers or 'Auto'})...")
     stt_result = await transcribe_with_scribe_v2(
         audio_path=audio_path,
-        language=language,
+        language=None,  # always auto-detect: a forced language makes Scribe skip speech in other languages
         diarize=True,
         tag_audio_events=sdh_mode,
         num_speakers=num_speakers,
@@ -556,7 +556,7 @@ async def stream_generate_subtitles(
         log_terminal("ELEVENLABS-STT", f"Dispatching audio to ElevenLabs Scribe v2 (Lang: {language}, SDH: {sdh_mode}, Speakers: {num_speakers or 'Auto'}, KeyTerms: {len(keyterms)})...")
         task = asyncio.create_task(transcribe_with_scribe_v2(
             audio_path=audio_path,
-            language=language,
+            language=None,  # always auto-detect: a forced language makes Scribe skip speech in other languages
             diarize=True,
             tag_audio_events=sdh_mode,
             num_speakers=num_speakers,
