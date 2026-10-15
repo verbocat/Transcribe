@@ -40,7 +40,7 @@ export default function TimelineTab({ projectId, project, segs, edit, dirty, sav
   const duration = Number(project.duration) || 1;
   const scroller = useRef(null);
   const head = useRef(null);
-  const [pps, setPps] = useState(() => Math.min(40, MAX_CANVAS / duration));
+  const [pps, setPps] = useState(() => Math.max(1, Math.min(120, 900 / duration, MAX_CANVAS / duration)));
   const maxPps = Math.max(2, Math.min(240, MAX_CANVAS / duration));
   const minPps = Math.max(1, Math.min(maxPps, 600 / duration));
   const width = Math.floor(duration * pps);
