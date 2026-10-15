@@ -136,12 +136,13 @@ async def _run(job: Dict[str, Any], meter: "metering.Metered", src_code: str, tg
             mime = mimetypes.guess_type(media.name)[0] or "application/octet-stream"
             mode = os.getenv("DUBBING_WATERMARK", "auto").strip().lower()  # auto | on | off
             marks = ["true"] if mode in ("on", "true", "1") else ["false"] if mode in ("off", "false", "0") else ["false", "true"]
+            hi_res = "true" if os.getenv("DUBBING_HIGHEST_RESOLUTION", "").strip().lower() in ("1", "true", "on", "yes") else "false"  # Creator+ only
             for i, mark in enumerate(marks):
                 with open(media, "rb") as fh:
                     resp = await client.post(
                         f"{ELEVEN}/v1/dubbing", headers=headers,
                         data={"target_lang": tgt_code, "source_lang": src_code, "num_speakers": str(num_speakers),
-                              "watermark": mark, "highest_resolution": "true", "mode": "automatic", "name": job["filename"][:80]},
+                              "watermark": mark, "highest_resolution": hi_res, "mode": "automatic", "name": job["filename"][:80]},
                         files={"file": (job["filename"], fh, mime)},
                     )
                 if resp.status_code >= 400 and mark == "false" and i + 1 < len(marks) and "watermark_not_allowed" in resp.text:
