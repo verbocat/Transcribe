@@ -9,6 +9,7 @@ import asyncio
 import json
 import logging
 import shutil
+import subprocess
 import time
 import uuid
 from pathlib import Path
@@ -676,6 +677,40 @@ async def mix(pid: str, payload: dict = Body(default={}), current_user: User = D
             _save(p)
     _tasks[pid] = asyncio.create_task(run())
     return {"ok": True}
+
+
+def _peaks(path: str, duration: float, points: int) -> Dict[str, Any]:
+    import numpy as np
+    r = subprocess.run([eng._ffmpeg(), "-v", "error", "-i", path, "-vn", "-ac", "1", "-ar", "4000", "-f", "s16le", "-"], capture_output=True, timeout=1800)
+    if r.returncode != 0:
+        raise eng.DubbingError("Could not read the audio for the waveform.")
+    x = np.abs(np.frombuffer(r.stdout, dtype="<i2").astype("float32")) / 32768.0
+    if not len(x):
+        return {"peaks": [], "duration": duration}
+    n = max(1, min(points, len(x)))
+    edges = np.linspace(0, len(x), n + 1).astype(int)
+    peaks = [round(float(x[a:b].max()) if b > a else 0.0, 3) for a, b in zip(edges[:-1], edges[1:])]
+    top = max(peaks) or 1.0
+    return {"peaks": [round(v / top, 3) for v in peaks], "duration": duration}
+
+
+@router.get("/{pid}/waveform/{track}")
+async def waveform(pid: str, track: str, current_user: User = Depends(get_current_user_from_token)):
+    """Loudness envelope of the original recording or the separated background, for the timeline."""
+    p = _get(pid, current_user)
+    pdir = _dir(pid)
+    src = p["media_path"] if track == "original" else str(pdir / "stems" / "background.wav") if track == "background" else None
+    if not src or not Path(src).exists():
+        raise HTTPException(status_code=404, detail="No such track yet.")
+    cache = pdir / f"peaks_{track}.json"
+    if cache.exists() and cache.stat().st_mtime >= Path(src).stat().st_mtime:
+        return json.loads(cache.read_text())
+    try:
+        data = await asyncio.to_thread(_peaks, src, float(p["duration"]), min(12000, max(400, int(p["duration"] * 25))))
+    except eng.DubbingError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+    cache.write_text(json.dumps(data))
+    return data
 
 
 @router.get("/{pid}/download/{kind}")

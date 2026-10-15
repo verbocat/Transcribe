@@ -4,8 +4,9 @@ import {
 } from 'lucide-react';
 import { api, call, send, GRAD, fmtTime } from './dubApi';
 import VoiceOverTab from './VoiceOverTab';
+import TimelineTab from './TimelineTab';
 
-const TABS = [['transcript', 'Transcript'], ['speakers', 'Speakers & voices'], ['translation', 'Translation'], ['voiceover', 'Voice-over']];
+const TABS = [['transcript', 'Transcript'], ['speakers', 'Speakers & voices'], ['translation', 'Translation'], ['voiceover', 'Voice-over'], ['timeline', 'Timeline']];
 const BUSY = new Set(['transcribing', 'profiling', 'translating', 'speaking', 'separating', 'rendering']);
 
 function Btn({ children, onClick, disabled, primary, icon: Icon, small, title }) {
@@ -281,6 +282,10 @@ export default function ProjectEditor({ projectId, onClose }) {
       {tab === 'voiceover' ? (
         <VoiceOverTab projectId={projectId} project={project} segs={segs} edit={edit} dirty={dirty} save={save} wrap={wrap}
           refresh={refresh} apply={apply} running={running} busy={busy} />
+      ) : null}
+      {tab === 'timeline' ? (
+        <TimelineTab projectId={projectId} project={project} segs={segs} edit={edit} dirty={dirty} save={save} wrap={wrap}
+          refresh={refresh} running={running} busy={busy} player={player} mediaUrl={mediaUrl} />
       ) : null}
     </div>
   );

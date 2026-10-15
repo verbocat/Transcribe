@@ -185,3 +185,12 @@ def test_background_separation_basic_and_mix_with_background(tmp_path):
     stems.mix_with_background(str(out / "background.wav"), str(dub), 0.5, str(tmp_path / "mixed.mp3"))
     mixed, sr2 = sf.read(str(tmp_path / "mixed.mp3"))
     assert abs(len(mixed) / sr2 - 3.0) < 0.3 and np.abs(mixed).max() > 0.05
+
+
+def test_waveform_peaks(tmp_path):
+    t = np.arange(8000 * 4) / 8000
+    x = np.where(t < 2, 0.8 * np.sin(2 * np.pi * 200 * t), 0.0)  # loud first half, silent second half
+    f = tmp_path / "w.wav"
+    sf.write(str(f), x.astype("float32"), 8000)
+    d = dp._peaks(str(f), 4.0, 100)
+    assert len(d["peaks"]) == 100 and max(d["peaks"][:45]) == 1.0 and max(d["peaks"][55:]) < 0.05
