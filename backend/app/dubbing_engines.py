@@ -396,11 +396,20 @@ def pick_stock_voice(groups: Dict[str, List[Dict[str, str]]], profile: Dict[str,
     return ranked[0]["id"]
 
 
-def voice_settings(profile: Dict[str, Any], speed: float = 1.0) -> Dict[str, Any]:
+def voice_settings(profile: Dict[str, Any], speed: float = 1.0, override: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """ElevenLabs voice settings: defaults follow the speaker's energy, `override` (speaker or line controls) wins."""
     energy = str(profile.get("energy") or "medium")
     stability, style = {"low": (0.6, 0.0), "high": (0.3, 0.45)}.get(energy, (0.45, 0.2))
-    return {"stability": stability, "similarity_boost": 0.8, "style": style, "use_speaker_boost": True,
-            "speed": max(0.7, min(FIRST_STRETCH, speed))}
+    o = override or {}
+
+    def num(key, default, lo, hi):
+        try:
+            return max(lo, min(hi, float(o[key])))
+        except (KeyError, TypeError, ValueError):
+            return default
+    return {"stability": num("stability", stability, 0.0, 1.0), "similarity_boost": num("similarity", 0.8, 0.0, 1.0),
+            "style": num("style", style, 0.0, 1.0), "use_speaker_boost": True,
+            "speed": num("speed", max(0.7, min(FIRST_STRETCH, speed)), 0.7, FIRST_STRETCH)}
 
 
 async def speak(client: httpx.AsyncClient, voice_id: str, text: str, settings: Dict[str, Any], sem: asyncio.Semaphore) -> bytes:
@@ -427,10 +436,17 @@ _TRIM = ("silenceremove=start_periods=1:start_threshold=-50dB:start_silence=0.03
          "silenceremove=start_periods=1:start_threshold=-50dB:start_silence=0.03,areverse")
 
 
-def to_wav(src: str, dst: str, tempo: float = 1.0) -> float:
-    """Decode a line to mono wav at SAMPLE_RATE, trim silence, optionally speed up by `tempo`. Returns seconds."""
-    chain = _TRIM + (f",atempo={tempo:.4f}" if abs(tempo - 1.0) > 0.005 else "")
-    r = _run([_ffmpeg(), "-y", "-loglevel", "error", "-i", src, "-filter:a", chain, "-ar", str(SAMPLE_RATE), "-ac", "1", dst], timeout=120)
+def to_wav(src: str, dst: str, tempo: float = 1.0, pitch: float = 0.0) -> float:
+    """Decode a line to mono wav at SAMPLE_RATE, trim silence, optionally shift pitch (semitones) and speed up by `tempo`.
+    Returns the length in seconds."""
+    parts = []
+    if abs(pitch) > 0.05:
+        f = 2 ** (pitch / 12.0)  # pitch shift that keeps the speed: resample up/down, then undo the tempo change
+        parts.append(f"asetrate={int(44100 * f)},aresample={SAMPLE_RATE},atempo={1.0 / f:.5f}")
+    parts.append(_TRIM)
+    if abs(tempo - 1.0) > 0.005:
+        parts.append(f"atempo={tempo:.4f}")
+    r = _run([_ffmpeg(), "-y", "-loglevel", "error", "-i", src, "-filter:a", ",".join(parts), "-ar", str(SAMPLE_RATE), "-ac", "1", dst], timeout=120)
     if r.returncode != 0 or not Path(dst).exists():
         raise DubbingError("Could not decode a generated line.")
     return float(sf.info(dst).duration)
@@ -442,6 +458,7 @@ def mix_timeline(lines: List[Dict[str, Any]], total_seconds: float, out_wav: str
     buf = np.zeros(int(end * SAMPLE_RATE) + 1, dtype="float32")
     for l in lines:
         data, _ = sf.read(l["wav"], dtype="float32")
+        data = data * float(l.get("gain", 1.0))
         i = int(l["start"] * SAMPLE_RATE)
         n = max(0, min(len(data), len(buf) - i))
         buf[i:i + n] += data[:n]

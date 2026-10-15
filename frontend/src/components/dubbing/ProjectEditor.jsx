@@ -3,8 +3,9 @@ import {
   Loader2, Play, Save, Scissors, Merge, Trash2, Plus, Languages, Wand2, Mic2, Volume2, AlertTriangle, X, RotateCcw,
 } from 'lucide-react';
 import { api, call, send, GRAD, fmtTime } from './dubApi';
+import VoiceOverTab from './VoiceOverTab';
 
-const TABS = [['transcript', 'Transcript'], ['speakers', 'Speakers & voices'], ['translation', 'Translation']];
+const TABS = [['transcript', 'Transcript'], ['speakers', 'Speakers & voices'], ['translation', 'Translation'], ['voiceover', 'Voice-over']];
 const BUSY = new Set(['transcribing', 'profiling', 'translating', 'speaking', 'rendering']);
 
 function Btn({ children, onClick, disabled, primary, icon: Icon, small, title }) {
@@ -114,7 +115,7 @@ export default function ProjectEditor({ projectId, onClose }) {
     try { await fn(); } catch (e) { setError(e.message); } finally { setBusy(false); }
   };
   const save = () => wrap(async () => {
-    const rows = segs.filter((s) => s.text.trim()).map(({ id, speaker, start, end, text, translation }) => ({ id, speaker, start, end, text, translation }));
+    const rows = segs.filter((s) => s.text.trim()).map(({ id, speaker, start, end, text, translation, tts, mute, gain, shift }) => ({ id, speaker, start, end, text, translation, tts, mute, gain, shift }));
     apply(await send('PUT', `/projects/${projectId}/segments`, { segments: rows }), true);
   });
   const translate = (ids) => wrap(async () => {
@@ -275,6 +276,11 @@ export default function ProjectEditor({ projectId, onClose }) {
             })}
           </div>
         </div>
+      ) : null}
+
+      {tab === 'voiceover' ? (
+        <VoiceOverTab projectId={projectId} project={project} segs={segs} edit={edit} dirty={dirty} save={save} wrap={wrap}
+          refresh={refresh} apply={apply} running={running} busy={busy} />
       ) : null}
     </div>
   );

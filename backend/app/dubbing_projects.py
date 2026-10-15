@@ -37,7 +37,7 @@ TTL_SEC = 14 * 24 * 3600
 
 _projects: Dict[str, Dict[str, Any]] = {}
 _tasks: Dict[str, asyncio.Task] = {}
-_PRIVATE = {"media_path", "owner", "updated"}
+_PRIVATE = {"media_path", "owner", "updated", "lines"}
 BUSY = ("transcribing", "profiling", "translating", "speaking", "rendering")
 
 
@@ -77,12 +77,6 @@ def _get(pid: str, user: User) -> Dict[str, Any]:
     return p
 
 
-def _public(p: Dict[str, Any]) -> Dict[str, Any]:
-    out = {k: v for k, v in p.items() if k not in _PRIVATE}
-    out["languages"] = {k: v["cps"] for k, v in eng.LANGUAGES.items()}
-    return out
-
-
 def _idle(p: Dict[str, Any]) -> None:
     if p["id"] in _tasks:
         raise HTTPException(status_code=409, detail="This project is busy. Wait for the current step to finish.")
@@ -92,6 +86,30 @@ def _progress(p: Dict[str, Any], base: float, span: float):
     def cb(stage: str, frac: float, detail: str = "") -> None:
         p.update(stage=stage, percent=round(min(99.0, base + span * max(0.0, min(1.0, frac))), 1), detail=detail)
     return cb
+
+
+def _clamp(v, lo, hi, default):
+    try:
+        return round(max(lo, min(hi, float(v))), 3)
+    except (TypeError, ValueError):
+        return default
+
+
+TTS_LIMITS = {"stability": (0.0, 1.0), "similarity": (0.0, 1.0), "style": (0.0, 1.0), "speed": (0.7, 1.2), "pitch": (-6.0, 6.0)}
+
+
+def _clean_tts(raw) -> Dict[str, Any]:
+    """Only known voice controls, within range. `fit` (speed the line up to fit its slot) is a boolean."""
+    out: Dict[str, Any] = {}
+    if isinstance(raw, dict):
+        for k, (lo, hi) in TTS_LIMITS.items():
+            if raw.get(k) is not None:
+                v = _clamp(raw[k], lo, hi, None)
+                if v is not None:
+                    out[k] = v
+        if raw.get("fit") is not None:
+            out["fit"] = bool(raw["fit"])
+    return out
 
 
 def _default_voice() -> Dict[str, Any]:
@@ -307,7 +325,9 @@ async def save_segments(pid: str, payload: dict, current_user: User = Depends(ge
         speaker = str(r.get("speaker") or "Speaker 1").strip()[:40] or "Speaker 1"
         out.append({"id": sid, "speaker": speaker, "gender": (old.get(sid) or {}).get("gender", "Unknown"),
                     "start": start, "end": end, "text": str(r.get("text") or "").strip(),
-                    "translation": str(r.get("translation") or "").strip()})
+                    "translation": str(r.get("translation") or "").strip(),
+                    "tts": _clean_tts(r.get("tts")), "mute": bool(r.get("mute")),
+                    "gain": _clamp(r.get("gain"), 0.0, 2.0, 1.0), "shift": _clamp(r.get("shift"), -10.0, 10.0, 0.0)})
     out.sort(key=lambda s: s["start"])
     p["segments"] = out
     sync_speakers(p)
@@ -427,3 +447,198 @@ async def translate(pid: str, payload: dict, current_user: User = Depends(get_cu
             _save(p)
     _tasks[pid] = asyncio.create_task(run())
     return {"ok": True}
+
+
+# --------------------------------------------------------------------------------------------- stage 4: speech per line
+def _line_meta(p: Dict[str, Any]) -> Dict[str, Any]:
+    return p.setdefault("lines", {})
+
+
+def _controls(p: Dict[str, Any], seg: Dict[str, Any]) -> Dict[str, Any]:
+    """Voice controls for a line: speaker defaults, then the line's own."""
+    sp = p["speakers"].get(seg["speaker"], {})
+    merged = {"fit": True}
+    merged.update(sp.get("tts") or {})
+    merged.update(seg.get("tts") or {})
+    return merged
+
+
+def _signature(p: Dict[str, Any], seg: Dict[str, Any]) -> Dict[str, Any]:
+    sp = p["speakers"].get(seg["speaker"], {})
+    return {"text": seg.get("translation", ""), "voice_id": (sp.get("voice") or {}).get("voice_id"),
+            "controls": _controls(p, seg), "slot": round(seg["end"] - seg["start"], 2)}
+
+
+def line_state(p: Dict[str, Any], seg: Dict[str, Any]) -> Dict[str, Any]:
+    meta = _line_meta(p).get(str(seg["id"]))
+    if not meta or not meta.get("file"):
+        return {"ready": False, "error": (meta or {}).get("error")}
+    stale = meta.get("sig") != _signature(p, seg)
+    return {"ready": True, "stale": stale, "duration": meta["duration"], "tempo": meta.get("tempo", 1.0),
+            "overrun": meta.get("overrun", False), "rev": meta.get("rev", 0), "error": meta.get("error")}
+
+
+def _public(p: Dict[str, Any]) -> Dict[str, Any]:
+    out = {k: v for k, v in p.items() if k not in _PRIVATE and k != "lines"}
+    out["languages"] = {k: v["cps"] for k, v in eng.LANGUAGES.items()}
+    out["segments"] = [dict(s, audio=line_state(p, s)) for s in p["segments"]]
+    return out
+
+
+async def _speak_lines(p: Dict[str, Any], ids: Optional[List[int]], only_stale: bool) -> None:
+    pdir = _dir(p["id"])
+    (pdir / "lines").mkdir(exist_ok=True)
+    try:
+        segs = [s for s in p["segments"] if (s.get("translation") or "").strip() and (not ids or s["id"] in set(ids))]
+        if only_stale:
+            segs = [s for s in segs if not line_state(p, s).get("ready") or line_state(p, s).get("stale")]
+        if not segs:
+            p.update(status="ready", stage="speech", detail="Nothing to generate", percent=100.0)
+            return
+        p.update(status="speaking", stage="speaking", percent=1.0, detail=f"Speaking {len(segs)} lines", error=None)
+        sem = asyncio.Semaphore(eng.TTS_CONCURRENCY)
+        done, failed = {"n": 0}, []
+        meta_all = _line_meta(p)
+        ordered = p["segments"]
+
+        async with httpx.AsyncClient() as client:
+            async def one(s: Dict[str, Any]):
+                sp = p["speakers"].get(s["speaker"], {})
+                vid = (sp.get("voice") or {}).get("voice_id")
+                sid = str(s["id"])
+                try:
+                    if not vid:
+                        raise eng.DubbingError(f"{s['speaker']} has no voice yet. Pick one in Speakers & voices.")
+                    c = _controls(p, s)
+                    sig = _signature(p, s)
+                    mp3 = pdir / "lines" / f"{sid}.mp3"
+                    wav = pdir / "lines" / f"{sid}.wav"
+                    mp3.write_bytes(await eng.speak(client, vid, s["translation"], eng.voice_settings(sp, 1.0, c), sem))
+                    pitch = c.get("pitch", 0.0)
+                    raw = await asyncio.to_thread(eng.to_wav, str(mp3), str(wav), 1.0, pitch)
+                    slot = max(0.4, s["end"] - s["start"])
+                    tempo, dur = 1.0, raw
+                    if c.get("fit", True) and raw > slot * 1.02:
+                        tempo = min(eng.MAX_STRETCH, raw / slot)
+                        dur = await asyncio.to_thread(eng.to_wav, str(mp3), str(wav), tempo, pitch)
+                    old = meta_all.get(sid) or {}
+                    meta_all[sid] = {"file": f"{sid}.wav", "duration": round(dur, 3), "raw_duration": round(raw, 3), "tempo": round(tempo, 3),
+                                     "overrun": dur > slot * 1.1, "sig": sig, "rev": old.get("rev", 0) + 1, "error": None,
+                                     "chars": len(s["translation"])}
+                except Exception as exc:
+                    failed.append(sid)
+                    meta_all[sid] = dict(meta_all.get(sid) or {}, error=str(exc))
+                done["n"] += 1
+                p.update(percent=round(1 + 98 * done["n"] / len(segs), 1), detail=f"Spoke {done['n']} of {len(segs)} lines")
+
+            await asyncio.gather(*(one(s) for s in segs))
+        p.update(status="ready", stage="speech", percent=100.0, detail="Speech ready",
+                 error=f"{len(failed)} lines failed. See the red marks in the Voice-over tab." if failed else None)
+    except asyncio.CancelledError:
+        p.update(status="ready", error="Cancelled.")
+    except Exception as exc:
+        if not isinstance(exc, eng.DubbingError):
+            logger.exception("speech generation failed")
+        p.update(status="ready", error=str(exc) if isinstance(exc, eng.DubbingError) else f"Speech generation failed: {exc}")
+    finally:
+        _tasks.pop(p["id"], None)
+        _save(p)
+
+
+@router.post("/{pid}/speak")
+async def speak_lines(pid: str, payload: dict, current_user: User = Depends(get_current_user_from_token)):
+    """Generate speech for `ids` (one line, some, or all). `only_stale` skips lines whose audio is current."""
+    p = _get(pid, current_user)
+    _idle(p)
+    if not p.get("target_language"):
+        raise HTTPException(status_code=400, detail="Translate the lines first.")
+    _tasks[pid] = asyncio.create_task(_speak_lines(p, payload.get("ids") or None, bool(payload.get("only_stale"))))
+    return {"ok": True}
+
+
+@router.put("/{pid}/speakers/{name}/tts")
+async def speaker_tts(pid: str, name: str, payload: dict, current_user: User = Depends(get_current_user_from_token)):
+    """Default voice controls for a speaker (stability, similarity, style, speed, pitch, fit). Lines can override them."""
+    p = _get(pid, current_user)
+    sp = p["speakers"].get(name)
+    if not sp:
+        raise HTTPException(status_code=404, detail="Speaker not found.")
+    sp["tts"] = _clean_tts(payload)
+    _save(p)
+    return _public(p)
+
+
+@router.get("/{pid}/lines/{sid}/audio")
+async def line_audio(pid: str, sid: int, current_user: User = Depends(get_current_user_from_token)):
+    p = _get(pid, current_user)
+    meta = _line_meta(p).get(str(sid))
+    f = _dir(pid) / "lines" / ((meta or {}).get("file") or "-")
+    if not meta or not f.exists():
+        raise HTTPException(status_code=404, detail="This line has no audio yet.")
+    return FileResponse(f, media_type="audio/wav")
+
+
+# --------------------------------------------------------------------------------------------- mix + downloads
+@router.post("/{pid}/mix")
+async def mix(pid: str, current_user: User = Depends(get_current_user_from_token)):
+    """Place every line on the timeline (respecting mute, gain and shift) and write the dub + one file per speaker."""
+    p = _get(pid, current_user)
+    _idle(p)
+    pdir = _dir(pid)
+    meta_all = _line_meta(p)
+    placed = []
+    for s in p["segments"]:
+        m = meta_all.get(str(s["id"]))
+        f = pdir / "lines" / ((m or {}).get("file") or "-")
+        if m and f.exists() and not s.get("mute"):
+            placed.append({"id": s["id"], "speaker": s["speaker"], "start": max(0.0, s["start"] + s.get("shift", 0.0)),
+                           "duration": m["duration"], "wav": str(f), "gain": s.get("gain", 1.0)})
+    if not placed:
+        raise HTTPException(status_code=400, detail="Generate some speech first.")
+
+    async def run():
+        try:
+            p.update(status="rendering", stage="mixing", percent=5.0, detail="Mixing the dub", error=None)
+            out_dir = pdir / "out"
+            out_dir.mkdir(exist_ok=True)
+            tmp = out_dir / "dub.wav"
+            await asyncio.to_thread(eng.mix_timeline, placed, float(p["duration"]), str(tmp))
+            await asyncio.to_thread(eng.wav_to_mp3, str(tmp), str(out_dir / "dub.mp3"))
+            tmp.unlink(missing_ok=True)
+            speakers = {}
+            for name in p["speakers"]:
+                mine = [l for l in placed if l["speaker"] == name]
+                if not mine:
+                    continue
+                stem = "".join(c if c.isalnum() else "_" for c in name)
+                w = out_dir / f"{stem}.wav"
+                await asyncio.to_thread(eng.mix_timeline, mine, float(p["duration"]), str(w))
+                await asyncio.to_thread(eng.wav_to_mp3, str(w), str(out_dir / f"{stem}.mp3"))
+                w.unlink(missing_ok=True)
+                speakers[name] = f"{stem}.mp3"
+            p["outputs"] = {"audio": "dub.mp3", "speakers": speakers, "mixed_at": time.time()}
+            p.update(status="ready", stage="mixed", percent=100.0, detail="Dub mixed")
+        except asyncio.CancelledError:
+            p.update(status="ready", error="Cancelled.")
+        except Exception as exc:
+            logger.exception("mix failed")
+            p.update(status="ready", error=str(exc) if isinstance(exc, eng.DubbingError) else f"Mixing failed: {exc}")
+        finally:
+            _tasks.pop(pid, None)
+            _save(p)
+    _tasks[pid] = asyncio.create_task(run())
+    return {"ok": True}
+
+
+@router.get("/{pid}/download/{kind}")
+async def download(pid: str, kind: str, speaker: Optional[str] = None, current_user: User = Depends(get_current_user_from_token)):
+    p = _get(pid, current_user)
+    out = p.get("outputs") or {}
+    stem = Path(p["filename"]).stem
+    lang = p.get("target_language") or "dub"
+    if kind == "audio" and out.get("audio"):
+        return FileResponse(_dir(pid) / "out" / out["audio"], media_type="audio/mpeg", filename=f"{stem}.{lang}.dub.mp3")
+    if kind == "speaker" and speaker and (out.get("speakers") or {}).get(speaker):
+        safe = "".join(c if c.isalnum() else "_" for c in speaker)
+        return FileResponse(_dir(pid) / "out" / out["speakers"][speaker], media_type="audio/mpeg", filename=f"{stem}.{lang}.{safe}.mp3")
+    raise HTTPException(status_code=404, detail="That file is not available. Mix the dub first.")
