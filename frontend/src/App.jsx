@@ -23,6 +23,7 @@ import ProjectNotesModal from './components/ProjectNotesModal';
 import HomePage from './components/HomePage';
 import { takeLaunchIntent } from './utils/launchIntent';
 import SubtitleApp from './components/subtitle/SubtitleApp';
+import DubbingStudio from './components/dubbing/DubbingStudio';
 import AdminDashboard from './components/admin/AdminDashboard';
 import NotFoundPage from './components/NotFoundPage';
 import LogoutConfirmModal from './components/LogoutConfirmModal';
@@ -61,6 +62,7 @@ function AppContent() {
     if (path.startsWith('admin')) return 'admin';
     if (path.startsWith('subtitle')) return 'subtitle';
     if (path.startsWith('transcribe')) return 'transcribe';
+    if (path.startsWith('dubbing')) return 'dubbing';
     return window.history.state?.tool || null;
   };
 
@@ -168,6 +170,12 @@ function AppContent() {
       return;
     }
 
+    // Dubbing studio
+    if (path.startsWith('dubbing')) {
+      setIsNotFound(false);
+      return;
+    }
+
     // Any other arbitrary unhandled URL shows 404
     setIsNotFound(true);
   }, [isAuthenticated, isLoading, isAdminUser]);
@@ -188,7 +196,7 @@ function AppContent() {
         }
       } else if (isAdminUser && (!activeTool || activeTool === 'home')) {
         const currentLocTool = getToolFromLocation();
-        if (currentLocTool === 'subtitle' || currentLocTool === 'transcribe') {
+        if (currentLocTool === 'subtitle' || currentLocTool === 'transcribe' || currentLocTool === 'dubbing') {
           setActiveTool(currentLocTool);
         } else {
           setActiveTool('admin');
@@ -210,7 +218,7 @@ function AppContent() {
     // If not authenticated and on a studio route, redirect cleanly to '/'
     if (!isAuthenticated) {
       const path = window.location.pathname.replace(/^\/+/, '').toLowerCase();
-      if (path.startsWith('subtitle') || path.startsWith('transcribe') || path.startsWith('admin')) {
+      if (path.startsWith('subtitle') || path.startsWith('transcribe') || path.startsWith('dubbing') || path.startsWith('admin')) {
         window.history.replaceState({ tool: null }, '', '/');
         setActiveTool(null);
         setShowAuthScreen(false);
@@ -298,8 +306,22 @@ function AppContent() {
         return;
       }
 
+      // Popping to Dubbing Studio
+      if (path.startsWith('dubbing')) {
+        setIsNotFound(false);
+        if (!isAuthenticated) {
+          window.history.replaceState({ tool: null }, '', '/');
+          setActiveTool(null);
+          setShowAuthScreen(false);
+        } else {
+          setActiveTool('dubbing');
+          setShowAuthScreen(false);
+        }
+        return;
+      }
+
       // Any unrecognized URL on popstate
-      if (path !== '' && path !== '/' && !path.startsWith('subtitle') && !path.startsWith('transcribe')) {
+      if (path !== '' && path !== '/' && !path.startsWith('subtitle') && !path.startsWith('transcribe') && !path.startsWith('dubbing')) {
         setIsNotFound(true);
         setActiveTool(null);
         setShowAuthScreen(false);
@@ -446,6 +468,24 @@ function AppContent() {
           onBackToHome={handleBackToHome}
           user={user}
           onLogout={() => setShowLogoutModal(true)}
+          onOpenLogoutModal={() => setShowLogoutModal(true)}
+        />
+        <LogoutConfirmModal
+          isOpen={showLogoutModal}
+          onClose={() => setShowLogoutModal(false)}
+          onConfirm={handleLogout}
+          user={user}
+        />
+      </>
+    );
+  }
+
+  if (isAuthenticated && activeTool === 'dubbing') {
+    return (
+      <>
+        <DubbingStudio
+          onBackToHome={handleBackToHome}
+          user={user}
           onOpenLogoutModal={() => setShowLogoutModal(true)}
         />
         <LogoutConfirmModal

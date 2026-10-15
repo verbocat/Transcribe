@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Mic, Subtitles, UploadCloud, ArrowRight, X, FileAudio, FileVideo, Clock, Palette, FolderOpen,
+  Mic, Subtitles, AudioLines, UploadCloud, ArrowRight, X, FileAudio, FileVideo, Clock, Palette, FolderOpen,
 } from 'lucide-react';
 import BrandLogo from './BrandLogo';
 import AccountMenuDropdown from './AccountMenuDropdown';
@@ -25,6 +25,12 @@ const TOOLS = [
     name: 'Subtitle Studio',
     blurb: 'Build, check, translate and export subtitle cards as SRT, VTT and more.',
     icon: Subtitles,
+  },
+  {
+    id: 'dubbing',
+    name: 'Dubbing Studio',
+    blurb: 'Dub a video or audio file into another language, in each speaker\'s own voice.',
+    icon: AudioLines,
   },
 ];
 
@@ -191,13 +197,17 @@ export default function HomePage({ onSelect, user, onLogout, onOpenAuth }) {
                   className="h-9 px-4 rounded-lg text-[13px] font-semibold flex items-center gap-1.5 border border-[var(--kt-s5)] bg-[var(--kt-s2)] hover:bg-[var(--kt-s3)] cursor-pointer">
                   <Subtitles size={14} /> Subtitle
                 </button>
+                <button type="button" onClick={() => open('dubbing', { file })}
+                  className="h-9 px-4 rounded-lg text-[13px] font-semibold flex items-center gap-1.5 border border-[var(--kt-s5)] bg-[var(--kt-s2)] hover:bg-[var(--kt-s3)] cursor-pointer">
+                  <AudioLines size={14} /> Dub
+                </button>
               </div>
             </div>
           )}
         </section>
 
         {/* Studios */}
-        <section className="grid grid-cols-1 sm:grid-cols-2 gap-3" aria-label="Studios">
+        <section className="grid grid-cols-1 sm:grid-cols-3 gap-3" aria-label="Studios">
           {TOOLS.map((t) => (
             <button key={t.id} type="button" onClick={() => open(t.id)}
               className="group text-left rounded-xl border border-[var(--kt-s4)] bg-[var(--kt-s1)] hover:bg-[var(--kt-s2)] hover:border-[var(--kt-accent)]/60 p-4 flex items-start gap-3.5 transition-colors cursor-pointer">

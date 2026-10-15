@@ -307,6 +307,8 @@ app = FastAPI(
 )
 app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
 app.include_router(admin_router)
+from app.dubbing_routes import router as dubbing_router
+app.include_router(dubbing_router)
 
 # Requests tagged with an X-Job-Id header can be stopped with POST /api/jobs/{job_id}/cancel.
 # Added before CORS so the CORS middleware stays outermost and still decorates a cancelled response.
