@@ -162,3 +162,26 @@ def test_speech_per_line_controls_and_mix(monkeypatch, tmp_path):
             assert c.get(f"/api/dubbing/projects/{pid}/download/audio").status_code == 200
     finally:
         app.dependency_overrides.clear()
+
+
+def test_background_separation_basic_and_mix_with_background(tmp_path):
+    import asyncio
+    from app import dubbing_stems as stems
+    t = np.arange(44100 * 3) / 44100
+    left = 0.3 * np.sin(2 * np.pi * 220 * t) + 0.3 * np.sin(2 * np.pi * 440 * t)   # centred "voice" (440) + side "music" (220)
+    right = 0.3 * np.sin(2 * np.pi * 330 * t) + 0.3 * np.sin(2 * np.pi * 440 * t)
+    src = tmp_path / "in.wav"
+    sf.write(str(src), np.stack([left, right], 1).astype("float32"), 44100)
+    out = tmp_path / "stems"
+    asyncio.run(stems.separate(str(src), out, "basic"))
+    bg, sr = sf.read(str(out / "background.wav"))
+    spec = np.abs(np.fft.rfft(bg[:, 0]))
+    freqs = np.fft.rfftfreq(len(bg), 1 / sr)
+    assert spec[np.argmin(abs(freqs - 440))] < 0.05 * spec[np.argmin(abs(freqs - 220))]  # centred voice removed, side music kept
+    assert (out / "background.mp3").exists() and (out / "vocals.mp3").exists()
+
+    dub = tmp_path / "dub.wav"
+    sf.write(str(dub), np.zeros(24000 * 3, dtype="float32") + 0.1, 24000)
+    stems.mix_with_background(str(out / "background.wav"), str(dub), 0.5, str(tmp_path / "mixed.mp3"))
+    mixed, sr2 = sf.read(str(tmp_path / "mixed.mp3"))
+    assert abs(len(mixed) / sr2 - 3.0) < 0.3 and np.abs(mixed).max() > 0.05

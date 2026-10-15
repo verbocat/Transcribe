@@ -1,6 +1,6 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Play, Pause, Mic2, Wand2, Download, SlidersHorizontal, Volume2, VolumeX, AudioLines } from 'lucide-react';
-import { api, send, GRAD, fmtTime } from './dubApi';
+import { api, call, send, GRAD, fmtTime } from './dubApi';
 
 const CONTROLS = [
   ['stability', 'Stability', 0, 1, 0.05, 'Low = more emotion and variation, high = steady and even.'],
@@ -51,7 +51,10 @@ export default function VoiceOverTab({ projectId, project, segs, edit, dirty, sa
   const [openLine, setOpenLine] = useState(null);
   const [openSpeaker, setOpenSpeaker] = useState(null);
   const [playing, setPlaying] = useState(null);
+  const [stemInfo, setStemInfo] = useState(null);
+  const [bgGain, setBgGain] = useState(0.8);
   const audio = useRef(null);
+  useEffect(() => { call('/stems/status').then(setStemInfo).catch(() => setStemInfo({ demucs: false, basic: true })); }, []);
   const cache = useRef({});
   const lines = segs.filter((s) => s.id != null);
   const withText = lines.filter((s) => (s.translation || '').trim());
@@ -65,9 +68,10 @@ export default function VoiceOverTab({ projectId, project, segs, edit, dirty, sa
   });
   const mix = () => wrap(async () => {
     if (dirty) await save();
-    await send('POST', `/projects/${projectId}/mix`);
+    await send('POST', `/projects/${projectId}/mix`, { background_gain: bgGain });
     await refresh(true);
   });
+  const separate = (mode) => wrap(async () => { await send('POST', `/projects/${projectId}/stems`, { mode }); await refresh(true); });
   const saveSpeaker = (name, tts) => wrap(async () => apply(await send('PUT', `/projects/${projectId}/speakers/${encodeURIComponent(name)}/tts`, tts), false));
   const play = async (s) => {
     try {
@@ -107,11 +111,32 @@ export default function VoiceOverTab({ projectId, project, segs, edit, dirty, sa
         <span className="text-xs text-[var(--kt-faint)]">{todo.length ? `About ${chars(todo)} ElevenLabs characters to generate. ` : ''}Speech uses your ElevenLabs credits, not your hours.</span>
       </div>
 
+      <div className="rounded-xl border border-[var(--kt-s4)] bg-[var(--kt-s1)] p-3 flex flex-col gap-2">
+        <div className="text-sm font-semibold">Background music and effects</div>
+        {project.stems ? (
+          <div className="text-xs text-[var(--kt-success)]">Separated from the original ({project.stems.mode === 'demucs' ? 'Demucs, studio quality' : 'basic centre-channel removal'}). It will sit under the dub when you mix.</div>
+        ) : (
+          <div className="text-xs text-[var(--kt-warn)]">Not separated yet. Without it the mix has the dubbed voices only and the original music and effects are lost.</div>
+        )}
+        <div className="flex flex-wrap items-center gap-2">
+          <Btn small icon={AudioLines} disabled={busy || running || !stemInfo?.demucs} title={stemInfo?.demucs ? '' : stemInfo?.hint || ''} onClick={() => separate('demucs')}>{project.stems?.mode === 'demucs' ? 'Separate again (Demucs)' : 'Separate with Demucs'}</Btn>
+          <Btn small disabled={busy || running} onClick={() => separate('basic')}>Basic separation (fast, lower quality)</Btn>
+        </div>
+        {stemInfo && !stemInfo.demucs ? <div className="text-[11px] text-[var(--kt-faint)]">Demucs is not installed on this server. {stemInfo.hint}</div> : null}
+        <label className="text-xs text-[var(--kt-muted)] flex items-center gap-3">Background level in the mix
+          <input type="range" min="0" max="1.5" step="0.05" value={bgGain} onChange={(e) => setBgGain(Number(e.target.value))} />
+          <span>{Math.round(bgGain * 100)}%</span></label>
+      </div>
+
       {out ? (
         <div className="rounded-xl border border-[var(--kt-success)]/40 bg-[var(--kt-s1)] p-3 flex flex-col gap-2">
           <div className="text-sm font-semibold">Mixed dub</div>
           <div className="flex flex-wrap gap-2">
-            <Btn primary small icon={Download} onClick={() => download(`/projects/${projectId}/download/audio`, `${base}.${project.target_language}.dub.mp3`)}>Dub audio</Btn>
+            {out.video ? <Btn primary small icon={Download} onClick={() => download(`/projects/${projectId}/download/video`, `${base}.${project.target_language}.dub.mp4`)}>Dubbed video</Btn> : null}
+            {out.mixed ? <Btn primary={!out.video} small icon={Download} onClick={() => download(`/projects/${projectId}/download/mixed`, `${base}.${project.target_language}.dub-with-background.mp3`)}>Dub with background</Btn> : null}
+            <Btn primary={!out.video && !out.mixed} small icon={Download} onClick={() => download(`/projects/${projectId}/download/audio`, `${base}.${project.target_language}.dub.mp3`)}>Dub voices only</Btn>
+            {project.stems ? <Btn small icon={Download} onClick={() => download(`/projects/${projectId}/download/background`, `${base}.background.mp3`)}>Background stem</Btn> : null}
+            {project.stems ? <Btn small icon={Download} onClick={() => download(`/projects/${projectId}/download/vocals`, `${base}.original-speech.mp3`)}>Original speech stem</Btn> : null}
             {Object.keys(out.speakers || {}).map((n) => (
               <Btn key={n} small icon={Download} onClick={() => download(`/projects/${projectId}/download/speaker?speaker=${encodeURIComponent(n)}`, `${base}.${n.replace(/\s+/g, '_')}.mp3`)}>{n}</Btn>
             ))}

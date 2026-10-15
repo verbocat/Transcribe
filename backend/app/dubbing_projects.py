@@ -15,10 +15,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import httpx
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
 from app import dubbing_engines as eng
+from app import dubbing_stems as stems
 from app import metering
 from app.auth_module import usage as usage_mod
 from app.auth_module.models import User
@@ -38,7 +39,7 @@ TTL_SEC = 14 * 24 * 3600
 _projects: Dict[str, Dict[str, Any]] = {}
 _tasks: Dict[str, asyncio.Task] = {}
 _PRIVATE = {"media_path", "owner", "updated", "lines"}
-BUSY = ("transcribing", "profiling", "translating", "speaking", "rendering")
+BUSY = ("transcribing", "profiling", "translating", "speaking", "separating", "rendering")
 
 
 # --------------------------------------------------------------------------------------------- storage
@@ -579,13 +580,49 @@ async def line_audio(pid: str, sid: int, current_user: User = Depends(get_curren
 
 
 # --------------------------------------------------------------------------------------------- mix + downloads
+@voices_router.get("/stems/status")
+async def stems_status(current_user: User = Depends(get_current_user_from_token)):
+    return stems.status()
+
+
+@router.post("/{pid}/stems")
+async def separate_background(pid: str, payload: dict = Body(default={}), current_user: User = Depends(get_current_user_from_token)):
+    """Split the original recording into speech and background (music + effects) so the background can sit under the dub."""
+    p = _get(pid, current_user)
+    _idle(p)
+    mode = payload.get("mode") if payload.get("mode") in ("demucs", "basic") else ("demucs" if stems.status()["demucs"] else "basic")
+
+    async def run():
+        try:
+            p.update(status="separating", stage="separating", percent=1.0, detail="Separating the background", error=None)
+
+            def cb(frac, detail):
+                p.update(percent=round(1 + 97 * frac, 1), detail=detail)
+            info = await stems.separate(p["media_path"], _dir(pid) / "stems", mode, cb)
+            p["stems"] = dict(info, at=time.time())
+            p.update(status="ready", stage="separated", percent=100.0, detail="Background ready")
+        except asyncio.CancelledError:
+            p.update(status="ready", error="Cancelled.")
+        except Exception as exc:
+            if not isinstance(exc, eng.DubbingError):
+                logger.exception("stem separation failed")
+            p.update(status="ready", error=str(exc) if isinstance(exc, eng.DubbingError) else f"Separation failed: {exc}")
+        finally:
+            _tasks.pop(pid, None)
+            _save(p)
+    _tasks[pid] = asyncio.create_task(run())
+    return {"ok": True, "mode": mode}
+
+
 @router.post("/{pid}/mix")
-async def mix(pid: str, current_user: User = Depends(get_current_user_from_token)):
-    """Place every line on the timeline (respecting mute, gain and shift) and write the dub + one file per speaker."""
+async def mix(pid: str, payload: dict = Body(default={}), current_user: User = Depends(get_current_user_from_token)):
+    """Place every line on the timeline (respecting mute, gain and shift). Writes the dub (voices only), one file per speaker,
+    and, when the background has been separated, the dub over the background plus the video with that audio."""
     p = _get(pid, current_user)
     _idle(p)
     pdir = _dir(pid)
     meta_all = _line_meta(p)
+    bg_gain = _clamp(payload.get("background_gain"), 0.0, 2.0, 1.0)
     placed = []
     for s in p["segments"]:
         m = meta_all.get(str(s["id"]))
@@ -595,6 +632,7 @@ async def mix(pid: str, current_user: User = Depends(get_current_user_from_token
                            "duration": m["duration"], "wav": str(f), "gain": s.get("gain", 1.0)})
     if not placed:
         raise HTTPException(status_code=400, detail="Generate some speech first.")
+    bg = pdir / "stems" / "background.wav"
 
     async def run():
         try:
@@ -604,8 +642,14 @@ async def mix(pid: str, current_user: User = Depends(get_current_user_from_token
             tmp = out_dir / "dub.wav"
             await asyncio.to_thread(eng.mix_timeline, placed, float(p["duration"]), str(tmp))
             await asyncio.to_thread(eng.wav_to_mp3, str(tmp), str(out_dir / "dub.mp3"))
+            outputs: Dict[str, Any] = {"audio": "dub.mp3", "speakers": {}, "mixed_at": time.time(), "background_gain": bg_gain}
+            final_audio = out_dir / "dub.mp3"
+            if bg.exists():
+                p.update(percent=40.0, detail="Mixing with the background")
+                await asyncio.to_thread(stems.mix_with_background, str(bg), str(tmp), bg_gain, str(out_dir / "mixed.mp3"))
+                outputs["mixed"] = "mixed.mp3"
+                final_audio = out_dir / "mixed.mp3"
             tmp.unlink(missing_ok=True)
-            speakers = {}
             for name in p["speakers"]:
                 mine = [l for l in placed if l["speaker"] == name]
                 if not mine:
@@ -615,8 +659,12 @@ async def mix(pid: str, current_user: User = Depends(get_current_user_from_token
                 await asyncio.to_thread(eng.mix_timeline, mine, float(p["duration"]), str(w))
                 await asyncio.to_thread(eng.wav_to_mp3, str(w), str(out_dir / f"{stem}.mp3"))
                 w.unlink(missing_ok=True)
-                speakers[name] = f"{stem}.mp3"
-            p["outputs"] = {"audio": "dub.mp3", "speakers": speakers, "mixed_at": time.time()}
+                outputs["speakers"][name] = f"{stem}.mp3"
+            if p["is_video"]:
+                p.update(percent=70.0, detail="Putting the new audio on the video")
+                await asyncio.to_thread(eng.mux_video, p["media_path"], str(final_audio), str(out_dir / "dub.mp4"))
+                outputs["video"] = "dub.mp4"
+            p["outputs"] = outputs
             p.update(status="ready", stage="mixed", percent=100.0, detail="Dub mixed")
         except asyncio.CancelledError:
             p.update(status="ready", error="Cancelled.")
@@ -638,6 +686,12 @@ async def download(pid: str, kind: str, speaker: Optional[str] = None, current_u
     lang = p.get("target_language") or "dub"
     if kind == "audio" and out.get("audio"):
         return FileResponse(_dir(pid) / "out" / out["audio"], media_type="audio/mpeg", filename=f"{stem}.{lang}.dub.mp3")
+    if kind == "mixed" and out.get("mixed"):
+        return FileResponse(_dir(pid) / "out" / out["mixed"], media_type="audio/mpeg", filename=f"{stem}.{lang}.dub-with-background.mp3")
+    if kind == "video" and out.get("video"):
+        return FileResponse(_dir(pid) / "out" / out["video"], media_type="video/mp4", filename=f"{stem}.{lang}.dub.mp4")
+    if kind in ("background", "vocals") and (_dir(pid) / "stems" / f"{kind}.mp3").exists():
+        return FileResponse(_dir(pid) / "stems" / f"{kind}.mp3", media_type="audio/mpeg", filename=f"{stem}.{kind}.mp3")
     if kind == "speaker" and speaker and (out.get("speakers") or {}).get(speaker):
         safe = "".join(c if c.isalnum() else "_" for c in speaker)
         return FileResponse(_dir(pid) / "out" / out["speakers"][speaker], media_type="audio/mpeg", filename=f"{stem}.{lang}.{safe}.mp3")

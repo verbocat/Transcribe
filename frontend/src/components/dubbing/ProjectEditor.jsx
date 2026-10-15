@@ -6,7 +6,7 @@ import { api, call, send, GRAD, fmtTime } from './dubApi';
 import VoiceOverTab from './VoiceOverTab';
 
 const TABS = [['transcript', 'Transcript'], ['speakers', 'Speakers & voices'], ['translation', 'Translation'], ['voiceover', 'Voice-over']];
-const BUSY = new Set(['transcribing', 'profiling', 'translating', 'speaking', 'rendering']);
+const BUSY = new Set(['transcribing', 'profiling', 'translating', 'speaking', 'separating', 'rendering']);
 
 function Btn({ children, onClick, disabled, primary, icon: Icon, small, title }) {
   return (
