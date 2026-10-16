@@ -9,15 +9,53 @@
  * is the same audio the server would have produced.
  */
 import { FFmpeg } from '@ffmpeg/ffmpeg';
-import { toBlobURL } from '@ffmpeg/util';
 import { computeWaveformPeaks } from './audioExtractor';
 import { CancelledError } from './cancellable';
 
 const CORE_BASE = '/ffmpeg';
+// Bump when @ffmpeg/core is upgraded so old copies are not reused.
+const CORE_CACHE = 'lowerthird-ffmpeg-core-0.12.10';
 let ffmpegPromise = null;
 
 export function browserExtractionSupported() {
   return typeof WebAssembly === 'object' && typeof Worker === 'function' && typeof File === 'function';
+}
+
+/**
+ * Fetch a core file once and keep it in the browser's Cache Storage. The ~32 MB wasm used to be
+ * re-downloaded after the tab was closed because plain HTTP caching of it is not reliable (large
+ * entries get evicted, and the server sends no long-lived cache headers). Cache Storage persists.
+ */
+async function cachedBlobURL(url, mimeType, onChunk) {
+  let cache = null;
+  try { cache = await caches.open(CORE_CACHE); } catch (_) { /* Cache Storage unavailable (private mode) */ }
+  let res = cache ? await cache.match(url) : null;
+  if (!res) {
+    const net = await fetch(url);
+    if (!net.ok) throw new Error(`Could not load the audio engine (${net.status})`);
+    const total = Number(net.headers.get('content-length')) || 0;
+    const reader = net.body?.getReader();
+    const parts = [];
+    let received = 0;
+    if (reader) {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        parts.push(value);
+        received += value.length;
+        onChunk?.({ total, received });
+      }
+    } else {
+      parts.push(new Uint8Array(await net.arrayBuffer()));
+    }
+    const blob = new Blob(parts, { type: mimeType });
+    // Only keep a complete download (guards against a truncated response being cached forever)
+    if (cache && (!total || blob.size === total)) {
+      try { await cache.put(url, new Response(blob, { headers: { 'Content-Type': mimeType } })); } catch (_) { /* quota */ }
+    }
+    return URL.createObjectURL(blob);
+  }
+  return URL.createObjectURL(new Blob([await res.arrayBuffer()], { type: mimeType }));
 }
 
 async function loadEngine(onProgress) {
@@ -25,9 +63,8 @@ async function loadEngine(onProgress) {
   ffmpegPromise = (async () => {
     const ffmpeg = new FFmpeg();
     onProgress?.({ stage: 'engine', percent: 0, loaded: 0, total: 0, detail: 'Loading the audio engine (one-time download)' });
-    const coreURL = await toBlobURL(`${CORE_BASE}/ffmpeg-core.js`, 'text/javascript');
-    const wasmURL = await toBlobURL(`${CORE_BASE}/ffmpeg-core.wasm`, 'application/wasm', true, ({ total, received, done }) => {
-      if (done) return;
+    const coreURL = await cachedBlobURL(`${CORE_BASE}/ffmpeg-core.js`, 'text/javascript');
+    const wasmURL = await cachedBlobURL(`${CORE_BASE}/ffmpeg-core.wasm`, 'application/wasm', ({ total, received }) => {
       onProgress?.({
         stage: 'engine',
         percent: total > 0 ? (received / total) * 100 : null,
