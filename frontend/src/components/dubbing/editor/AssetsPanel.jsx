@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight, FileVideo, FileAudio, AudioLines, Search, Mic2, Eye, EyeOff, Undo2, Plus, X } from 'lucide-react';
 import { MIN_DB, clipDb, fmtDb } from './audioModel';
+import { TextSection, VideoSection } from './InspectorVisual';
 import { clipEnd, clipLength, clipOut, isEditable, sourceLength, timecode } from './editModel';
 
 const inputCls = 'h-7 w-full rounded-md bg-[var(--kt-s2)] border border-[var(--kt-s5)] px-2 text-xs tabular-nums';
@@ -93,7 +94,7 @@ function VolumeSection({ clip, ctx, fps, editable, getTime, onLevels, onKeyframe
 
 export default function AssetsPanel({
   project, edit, ctx, fps, selection, palette, onPickClip, onClipTimes, onToggleClip, onRegenerate, busy, tab, setTab, removed, onPutBack,
-  mixer, getTime, onLevels, onKeyframes,
+  mixer, getTime, onLevels, onKeyframes, onText, onEffects, onTransition, transitionFor, onStyleAll,
 }) {
   const [q, setQ] = useState('');
   const [open, setOpen] = useState({});
@@ -183,7 +184,7 @@ export default function AssetsPanel({
             <>
               <div>
                 <div className="text-[10px] uppercase tracking-wider text-[var(--kt-faint)]">{edit.tracks.find((t) => t.id === selectedClip.track)?.name}{isGroup ? ` · linked with ${selection.length - 1} more` : ''}</div>
-                <div className="mt-1 font-semibold truncate">{selectedClip.source === 'background' ? 'Background (music and effects)' : project.filename}</div>
+                <div className="mt-1 font-semibold truncate">{selectedClip.source === 'background' ? 'Background (music and effects)' : selectedClip.source === 'text' ? (selectedClip.text || 'Text') : project.filename}</div>
               </div>
               <div className="grid grid-cols-2 gap-2">
                 <TimeField label="Timeline start (s)" value={selectedClip.start} disabled={!isEditable(selectedClip, edit)} onCommit={(v) => onClipTimes(selectedClip.id, { start: v })} />
@@ -229,7 +230,15 @@ export default function AssetsPanel({
               </div>
             </>
           ) : null}
-          {selectedClip && selectedClip.track !== 'V1' ? (
+          {selectedClip?.source === 'text' ? (
+            <TextSection key={selectedClip.id} clip={selectedClip} editable={isEditable(selectedClip, edit)} isSubtitle={selectedClip.track === 'T2'}
+              onText={(patch) => onText([selectedClip.id], patch)} onFades={(patch) => onLevels(selectedClip.id, patch)} onStyleAll={() => onStyleAll(selectedClip)} />
+          ) : null}
+          {selectedClip?.track === 'V1' ? (
+            <VideoSection key={selectedClip.id} clip={selectedClip} editable={isEditable(selectedClip, edit)} {...transitionFor(selectedClip.id)}
+              onEffects={(patch) => onEffects([selectedClip.id], patch)} onTransition={(tr) => onTransition(selectedClip.id, tr)} onFades={(patch) => onLevels(selectedClip.id, patch)} />
+          ) : null}
+          {selectedClip && selectedClip.track !== 'V1' && selectedClip.source !== 'text' ? (
             <VolumeSection key={selectedClip.id} clip={selectedClip} ctx={ctx} fps={fps} editable={isEditable(selectedClip, edit)} getTime={getTime}
               onLevels={(patch) => onLevels(selectedClip.id, patch)} onKeyframes={(action, ...args) => onKeyframes(action, selectedClip.id, ...args)} />
           ) : null}

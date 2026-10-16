@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import httpx
-from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 
 from app import dubbing_edit as edits
@@ -642,8 +642,11 @@ async def mix(pid: str, payload: dict = Body(default={}), current_user: User = D
     if not on.get("A2", True) or not bg_pieces:
         bg = pdir / "stems" / "-"  # the background track is muted, soloed away or emptied in the editor
     master = float((edit.get("master") or {}).get("volume", 1.0))
-    v_pieces = edits.media_placements(p, edit, "V1")
-    plain_video = edits.is_identity(v_pieces, duration) and total <= duration + 0.05
+    vplan = edits.video_plan(p, edit, total) if p["is_video"] else {"pieces": [], "plain": True}
+    overlays = edits.overlay_items(edit) if p["is_video"] else []
+    missing = [o for o in overlays if not (pdir / "overlays" / f"{o['image']}.png").exists()]
+    overlays = [o for o in overlays if o not in missing]
+    plain_video = vplan["plain"] and not overlays and total <= duration + 0.05
 
     async def run():
         try:
@@ -696,8 +699,10 @@ async def mix(pid: str, payload: dict = Body(default={}), current_user: User = D
                     await asyncio.to_thread(eng.mux_video, p["media_path"], str(final_audio), str(out_dir / "dub.mp4"))
                 else:
                     p.update(percent=70.0, detail="Rendering the edited video")
-                    await asyncio.to_thread(eng.render_video_track, p["media_path"], edits.concat_plan(v_pieces, total), str(final_audio), str(out_dir / "dub.mp4"))
+                    await asyncio.to_thread(eng.render_picture, p["media_path"], vplan, overlays, str(pdir / "overlays"), str(final_audio), str(out_dir / "dub.mp4"))
                 outputs["video"] = "dub.mp4"
+            if missing:
+                outputs["warning"] = f"{len(missing)} text overlays were left out because their pictures had not reached the server. Open the Editor so it can send them, then mix again."
             p["outputs"] = outputs
             p.update(status="ready", stage="mixed", percent=100.0, detail="Dub mixed")
         except asyncio.CancelledError:
@@ -733,7 +738,79 @@ async def get_edit(pid: str, current_user: User = Depends(get_current_user_from_
     if not p.get("fps"):
         p["fps"] = await asyncio.to_thread(_probe_fps, p["media_path"]) if p.get("is_video") else 25.0
         _save(p)
-    return {"edit": _edit(p), "stored": bool(p.get("edit")), "fps": p["fps"]}
+    if p.get("is_video") and not p.get("video_info"):
+        try:
+            p["video_info"] = await asyncio.to_thread(eng.probe_video, p["media_path"])
+            _save(p)
+        except Exception:
+            logger.warning("could not probe the video size of %s", pid)
+    return {"edit": _edit(p), "stored": bool(p.get("edit")), "fps": p["fps"], "video": p.get("video_info")}
+
+
+@router.get("/{pid}/thumbs")
+async def thumbnails(pid: str, current_user: User = Depends(get_current_user_from_token)):
+    """Frames for the video track: a sprite sheet (GET .../thumbs.jpg) and how to read it."""
+    p = _get(pid, current_user)
+    if not p.get("is_video"):
+        raise HTTPException(status_code=404, detail="This project has no video.")
+    pdir = _dir(pid)
+    meta = pdir / "thumbs.json"
+    if meta.exists() and (pdir / "thumbs.jpg").exists():
+        return json.loads(meta.read_text())
+    try:
+        data = await asyncio.to_thread(eng.thumbnail_sprite, p["media_path"], str(pdir / "thumbs.jpg"), float(p["duration"]))
+    except eng.DubbingError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+    meta.write_text(json.dumps(data))
+    return data
+
+
+@router.get("/{pid}/thumbs.jpg")
+async def thumbnails_image(pid: str, current_user: User = Depends(get_current_user_from_token)):
+    _get(pid, current_user)
+    f = _dir(pid) / "thumbs.jpg"
+    if not f.exists():
+        raise HTTPException(status_code=404, detail="No thumbnails yet.")
+    return FileResponse(f, media_type="image/jpeg")
+
+
+def _overlay_name(name: str) -> str:
+    if not (8 <= len(name) <= 64 and all(ch in "0123456789abcdef" for ch in name)):
+        raise HTTPException(status_code=400, detail="Bad overlay name.")
+    return name
+
+
+@router.get("/{pid}/overlays")
+async def list_overlays(pid: str, current_user: User = Depends(get_current_user_from_token)):
+    """The text-overlay pictures the server already has (by name), so the editor only sends new ones."""
+    _get(pid, current_user)
+    d = _dir(pid) / "overlays"
+    return {"names": sorted(f.stem for f in d.glob("*.png") if not f.stem.startswith("blank_")) if d.exists() else []}
+
+
+@router.put("/{pid}/overlays/{name}")
+async def put_overlay(pid: str, name: str, request: Request, current_user: User = Depends(get_current_user_from_token)):
+    """Store a text-overlay picture drawn by the editor (a PNG the size of the video, transparent around the text)."""
+    p = _get(pid, current_user)
+    name = _overlay_name(name)
+    body = await request.body()
+    if len(body) > 12 * 1024 * 1024 or not body.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise HTTPException(status_code=400, detail="Send a PNG picture (at most 12 MB).")
+    d = _dir(pid) / "overlays"
+    d.mkdir(exist_ok=True)
+    if len(list(d.glob("*.png"))) > 6000:
+        raise HTTPException(status_code=400, detail="This project has too many text overlays.")
+    (d / f"{name}.png").write_bytes(body)
+    return {"ok": True, "name": name}
+
+
+@router.get("/{pid}/overlays/{name}.png")
+async def get_overlay(pid: str, name: str, current_user: User = Depends(get_current_user_from_token)):
+    _get(pid, current_user)
+    f = _dir(pid) / "overlays" / f"{_overlay_name(name)}.png"
+    if not f.exists():
+        raise HTTPException(status_code=404, detail="No such overlay.")
+    return FileResponse(f, media_type="image/png")
 
 
 @router.put("/{pid}/edit")

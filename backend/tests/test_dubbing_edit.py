@@ -24,7 +24,7 @@ def _project(**kw):
 
 def test_seed_puts_media_and_every_line_on_its_track():
     e = ed.seed(_project())
-    assert [t["id"] for t in e["tracks"]] == ["V1", "A1", "A2", "S:A", "S:B"]
+    assert [t["id"] for t in e["tracks"]] == ["T2", "T1", "V1", "A1", "A2", "S:A", "S:B"]
     assert next(t for t in e["tracks"] if t["id"] == "A1")["mute"] is True  # original is a reference only
     lines = {c["line"]: c for c in e["clips"] if c["source"] == "line"}
     assert lines[1]["start"] == 1.0 and lines[2]["start"] == 4.5 and lines[2]["track"] == "S:B"
@@ -44,7 +44,7 @@ def test_reconcile_follows_line_changes_and_keeps_track_state():
     e = ed.reconcile(p, e)
     lines = {c["line"]: c for c in e["clips"] if c["source"] == "line"}
     assert lines[1]["start"] == 2.25 and lines[2]["track"] == "S:A" and lines[3]["track"] == "S:C"
-    assert [t["id"] for t in e["tracks"]] == ["V1", "A1", "A2", "S:A", "S:C"]
+    assert [t["id"] for t in e["tracks"]] == ["T2", "T1", "V1", "A1", "A2", "S:A", "S:C"]
     assert next(t for t in e["tracks"] if t["id"] == "S:A")["mute"] is True
     p["segments"] = p["segments"][:1]
     assert [c["line"] for c in ed.reconcile(p, e)["clips"] if c["source"] == "line"] == [1]
@@ -296,5 +296,120 @@ def test_mix_applies_ducking_clip_levels_and_master(monkeypatch, tmp_path):
             assert abs(level(1.5, 2.5) - 0.1 * 0.2512) < 0.01  # ducked by 12 dB under the line
             assert level(5.6, 5.9) < 0.04                    # fading out over the last second
             assert not list((pdir / "out").glob("background_*.wav")) and not (pdir / "out" / "dub_exact.wav").exists()
+    finally:
+        app.dependency_overrides.clear()
+
+
+# ------------------------------------------------------------------ step 4: pictures
+# The same case is checked in frontend/src/components/dubbing/editor/videoModel.test.mjs.
+PLAN_EDIT = {"tracks": [{"id": "V1", "kind": "video"}], "clips": [
+    {"id": "A", "track": "V1", "source": "media", "start": 0, "in": 0, "out": 4},
+    {"id": "B", "track": "V1", "source": "media", "start": 4, "in": 6, "out": 9, "transition": {"type": "dissolve", "duration": 2}},
+    {"id": "C", "track": "V1", "source": "media", "start": 7, "in": 0, "out": 2, "transition": {"type": "dip", "duration": 1}},
+    {"id": "D", "track": "V1", "source": "media", "start": 10, "in": 5, "out": 6, "transition": {"type": "dissolve", "duration": 1}}]}
+
+
+def test_video_plan_transitions_handles_and_gaps():
+    pl = ed.video_plan({"is_video": True, "duration": 10.0, "segments": []}, PLAN_EDIT, 11.0)
+    got = [(x["kind"], x.get("in"), x.get("out"), x.get("xfade"), x.get("fade_in"), x.get("fade_out"), x.get("duration")) for x in pl["pieces"]]
+    assert got == [("clip", 0.0, 5.0, 0.0, 0.0, 0.0, None),   # tail handle of 1 s for the 2 s dissolve
+                   ("clip", 5.0, 9.0, 2.0, 0.0, 0.5, None),   # head handle of 1 s; dips to black into C
+                   ("clip", 0.0, 2.0, 0.0, 0.5, 0.0, None),
+                   ("gap", None, None, None, None, None, 1.0),
+                   ("clip", 5.0, 6.0, 0.0, 0.0, 0.0, None)]   # D does not touch C: its dissolve does nothing
+    assert not pl["plain"]
+    clips = sorted(PLAN_EDIT["clips"], key=lambda c: c["start"])
+    tight = [dict(clips[0], out=9.8), dict(clips[1], start=9.8, **{"in": 0.3})]
+    assert ed.transition_at(tight, 1, 10.0)["duration"] == 0.4  # limited by the 0.2 s / 0.3 s of spare source
+    seeded = ed.seed({"is_video": True, "duration": 10.0, "segments": []})
+    assert ed.video_plan({"is_video": True, "duration": 10.0, "segments": []}, seeded, 10.0)["plain"]
+
+
+def test_clean_text_clips_effects_and_transitions():
+    p = _project()
+    e = ed.seed(p)
+    assert [t["id"] for t in e["tracks"]][:3] == ["T2", "T1", "V1"]
+    e["clips"].append({"id": "t1", "track": "T1", "source": "text", "start": 1, "in": 0, "out": 3, "text": "नमस्ते " * 300,
+                       "style": {"size": 9, "color": "red", "align": "left", "junk": 1}, "image": "ABCDEF0123", "fade_in": 0.5})
+    v = next(c for c in e["clips"] if c["id"] == "V1")
+    v.update(effects={"saturation": 0, "brightness": 1, "bogus": 5}, transition={"type": "wipe"})
+    got = ed.clean(p, e, {1: 2.0, 2: 1.5})
+    t = next(c for c in got["clips"] if c["id"] == "t1")
+    assert len(t["text"]) == 1000 and t["style"]["size"] == 0.4 and t["style"]["color"] == "#ffffff" and t["style"]["align"] == "left"
+    assert "junk" not in t["style"] and "image" not in t and t["fade_in"] == 0.5
+    v = next(c for c in got["clips"] if c["id"] == "V1")
+    assert v["effects"] == {"brightness": 1.0, "contrast": 1.0, "saturation": 0.0, "blur": 0.0} and "transition" not in v
+    bad = dict(e, clips=[dict(c, out=None) if c["id"] == "t1" else c for c in e["clips"]])
+    with pytest.raises(ValueError):
+        ed.clean(p, bad, {1: 2.0, 2: 1.5})
+    assert [c for c in ed.reconcile(_project(is_video=False), got)["clips"] if c["source"] == "text"] == []
+
+
+def test_render_with_dissolve_effects_overlay_and_thumbnails(monkeypatch, tmp_path):
+    import re
+    import subprocess
+    from app.video_processor import get_ffmpeg_path
+    monkeypatch.setattr(dp, "ROOT", tmp_path)
+    ff = get_ffmpeg_path()
+    pid = "pic12345"
+    pdir = tmp_path / pid
+    (pdir / "lines").mkdir(parents=True)
+    subprocess.run([ff, "-y", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc2=size=320x240:rate=25:duration=6",
+                    "-f", "lavfi", "-i", "sine=frequency=300:duration=6", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
+                    "-shortest", str(pdir / "source.mp4")], check=True)
+    red = tmp_path / "red.png"
+    subprocess.run([ff, "-y", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=red@1.0:s=320x240,format=rgba", "-frames:v", "1", str(red)], check=True)
+    sf.write(str(pdir / "lines" / "1.wav"), np.full(eng.SAMPLE_RATE, 0.2, dtype="float32"), eng.SAMPLE_RATE)
+    proj = {
+        "id": pid, "owner": "u1", "filename": "v.mp4", "media_path": str(pdir / "source.mp4"), "is_video": True,
+        "duration": 6.0, "status": "ready", "stage": "speech", "percent": 100, "detail": "", "error": None,
+        "source_language": "Hindi", "target_language": "English", "created": 0,
+        "segments": [{"id": 1, "speaker": "A", "gender": "Male", "start": 0.5, "end": 1.5, "text": "x", "translation": "y"}],
+        "speakers": {"A": {"voice": {"voice_id": "va"}}},
+    }
+    proj["lines"] = {"1": {"file": "1.wav", "duration": 1.0, "rev": 1, "sig": dp._signature(proj, proj["segments"][0])}}
+    e = ed.seed(proj)
+    for c in list(e["clips"]):
+        if c["track"] in ("V1", "A1"):
+            c["out"] = 3.0
+            e["clips"].append(dict(c, id=c["id"] + "b", start=3.0, **{"in": 4.0, "out": 6.0}))
+    vb = next(c for c in e["clips"] if c["id"] == "V1b")
+    vb.update(transition={"type": "dissolve", "duration": 1.0}, effects={"saturation": 0.0})
+    e["clips"].append({"id": "tx", "track": "T1", "source": "text", "start": 0.5, "in": 0, "out": 1.0, "text": "Hi", "style": {}, "image": "00ff00aa11"})
+    proj["edit"] = e
+    dp._projects[pid] = proj
+    dp._save(proj)
+    app.dependency_overrides[get_current_user_from_token] = lambda: SimpleNamespace(id="u1", email="a@b.c")
+    try:
+        with TestClient(app) as c:
+            assert c.get(f"/api/dubbing/projects/{pid}/edit").json()["video"] == {"width": 320, "height": 240, "fps": 25.0}
+            assert c.put(f"/api/dubbing/projects/{pid}/overlays/00ff00aa11", content=b"not a png").status_code == 400
+            assert c.put(f"/api/dubbing/projects/{pid}/overlays/xyz", content=red.read_bytes()).status_code == 400
+            assert c.put(f"/api/dubbing/projects/{pid}/overlays/00ff00aa11", content=red.read_bytes()).status_code == 200
+            assert c.get(f"/api/dubbing/projects/{pid}/overlays").json()["names"] == ["00ff00aa11"]
+            th = c.get(f"/api/dubbing/projects/{pid}/thumbs").json()
+            assert th["count"] == 6 and th["interval"] == 1.0 and c.get(f"/api/dubbing/projects/{pid}/thumbs.jpg").status_code == 200
+
+            assert c.post(f"/api/dubbing/projects/{pid}/mix").status_code == 200
+            for _ in range(600):
+                j = c.get(f"/api/dubbing/projects/{pid}").json()
+                if j["status"] not in dp.BUSY:
+                    break
+                time.sleep(0.05)
+            assert j["outputs"].get("video") == "dub.mp4" and "warning" not in j["outputs"], j
+        out = pdir / "out" / "dub.mp4"
+
+        def frame(t):
+            r = subprocess.run([ff, "-loglevel", "error", "-ss", str(t), "-i", str(out), "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"], capture_output=True)
+            return np.frombuffer(r.stdout, dtype=np.uint8).reshape(240, 320, 3).astype(int)
+        f1 = frame(1.0)                     # the red text overlay covers the picture
+        assert f1[120, 160, 0] > 200 and f1[120, 160, 1] < 60
+        f4 = frame(4.5)                     # after the dissolve: the second clip, grey (saturation 0)
+        assert np.abs(f4[60:180, 20:300, 0] - f4[60:180, 20:300, 2]).mean() < 8
+        f2 = frame(2.0)                     # before the dissolve: the first clip in colour
+        assert np.abs(f2[60:180, 20:300, 0] - f2[60:180, 20:300, 2]).mean() > 40
+        info = subprocess.run([ff, "-hide_banner", "-i", str(out)], capture_output=True, text=True).stderr
+        h, m, s = re.search(r"Duration: (\d+):(\d+):([\d.]+)", info).groups()
+        assert abs(int(h) * 3600 + int(m) * 60 + float(s) - 5.0) < 0.2
     finally:
         app.dependency_overrides.clear()

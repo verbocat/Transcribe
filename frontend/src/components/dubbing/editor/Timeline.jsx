@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Lock, Unlock, Film, AudioLines } from 'lucide-react';
+import { Lock, Unlock, Film, AudioLines, Eye, EyeOff, Type, Captions } from 'lucide-react';
+import { videoClips, transitionAt } from './videoModel';
 import { themeColor, withAlpha } from '../../../theme/themeEngine';
 import {
   clipEnd, clipLength, clipOut, isEditable, moveClips, trimClips, slipClips, rollEdit, razor, snapTargets, nearestSnap,
@@ -11,7 +12,7 @@ import {
 
 export const LABEL_W = 176;
 const RULER_H = 28;
-const rowHeight = (t) => (t.kind === 'video' ? 44 : 58);
+const rowHeight = (t) => (t.kind === 'video' ? 48 : t.kind === 'overlay' ? 34 : 58);
 const DRAG_PX = 3;
 const SNAP_PX = 8;
 const EPS = 1e-3;
@@ -114,9 +115,33 @@ function VolumeLine({ clip, len, pps, view, height, duck, onDown }) {
   );
 }
 
+function VideoThumbs({ thumbs, clip, len, pps, view, height }) {
+  if (!thumbs?.meta || !thumbs.url) return null;
+  const m = thumbs.meta;
+  const tileW = Math.max(16, Math.round((height * m.w) / m.h));
+  const left = clip.start * pps;
+  const a = Math.max(0, view.left - LABEL_W - left);
+  const b = Math.min(len * pps, view.left + view.width - left);
+  const tiles = [];
+  for (let x = Math.floor(a / tileW) * tileW; x < b; x += tileW) {
+    const s = clip.in + (x + tileW / 2) / pps;
+    const i = Math.max(0, Math.min(m.count - 1, Math.round(s / m.interval)));
+    const scale = height / m.h;
+    tiles.push(
+      <div key={x} className="absolute top-0" style={{
+        left: x, width: tileW, height,
+        backgroundImage: `url(${thumbs.url})`, backgroundRepeat: 'no-repeat',
+        backgroundSize: `${m.cols * m.w * scale}px ${m.rows * m.h * scale}px`,
+        backgroundPosition: `-${(i % m.cols) * m.w * scale}px -${Math.floor(i / m.cols) * m.h * scale}px`,
+      }} />,
+    );
+  }
+  return <div className="absolute inset-0 pointer-events-none opacity-80">{tiles}</div>;
+}
+
 export default function Timeline({
   edit, ctx, fps, pps, setPps, minPps, maxPps, getTime, seek, selection, setSelection, dispatch, snapping,
-  peaks, linePeaks, palette, filename, scrollToRef, playing, tool, linked, gap, setGap,
+  peaks, linePeaks, palette, filename, scrollToRef, playing, tool, linked, gap, setGap, thumbs, onPickTransition,
 }) {
   const scroller = useRef(null);
   const head = useRef(null);
@@ -388,7 +413,8 @@ export default function Timeline({
     ticks.push({ t, isMajor });
   }
   const faint = themeColor('faint');
-  const colorOf = (track) => speakerColor[track.id] || (track.role === 'background' ? themeColor('success') : track.kind === 'video' ? themeColor('accent') : faint);
+  const colorOf = (track) => speakerColor[track.id] || (track.role === 'background' ? themeColor('success') : track.kind === 'video' ? themeColor('accent')
+    : track.kind === 'overlay' ? themeColor('accent2') : faint);
   const bodyCursor = tool === 'razor' ? 'crosshair' : tool === 'slip' ? 'ew-resize' : tool === 'select' ? 'grab' : 'default';
   const edgeCursor = tool === 'roll' ? 'col-resize' : tool === 'ripple' ? 'w-resize' : 'ew-resize';
 
@@ -409,6 +435,18 @@ export default function Timeline({
     const left = start * pps; const w = Math.max(2, len * pps);
     const selected = sel.has(c.id);
     const frame = { left, width: w, borderColor: selected ? themeColor('text') : withAlpha(color, 0.7), boxShadow: selected ? `0 0 0 1px ${themeColor('text')}` : undefined, cursor: isEditable(c, edit) ? bodyCursor : 'default' };
+    if (c.source === 'text') {
+      return (
+        <div key={c.id} onPointerDown={(e) => onClipDown(e, c, 'body')} onDoubleClick={() => seek(c.start)}
+          className={`absolute top-1 bottom-1 rounded-sm overflow-hidden border ${c.disabled ? 'opacity-35' : ''}`}
+          style={{ ...frame, borderColor: selected ? themeColor('text') : color, background: withAlpha(color, 0.3) }} title={c.text}>
+          <div className="absolute inset-0 flex items-center gap-1 px-1.5 text-[10px] text-[var(--kt-text)] whitespace-nowrap pointer-events-none" style={{ fontFamily: 'var(--kt-font-script)' }}>
+            {track.role === 'subtitles' ? <Captions size={11} className="shrink-0" /> : <Type size={11} className="shrink-0" />}<span className="truncate">{c.text}</span>
+          </div>
+          {edges(c)}
+        </div>
+      );
+    }
     if (c.source !== 'line') {
       return (
         <div key={c.id} onPointerDown={(e) => onClipDown(e, c, 'body')}
@@ -416,7 +454,13 @@ export default function Timeline({
           style={{ ...frame, background: c.disabled ? `repeating-linear-gradient(135deg, ${withAlpha(color, 0.12)} 0 6px, transparent 6px 12px)` : withAlpha(color, track.kind === 'video' ? 0.16 : 0.12) }}
           title={`${track.name} · source ${timecode(c.in, fps)} – ${timecode(clipOut(c, ctx), fps)}`}>
           {track.kind === 'video'
-            ? <div className="absolute top-0 bottom-0 inline-flex items-center gap-1.5 px-2 text-[11px] text-[var(--kt-muted)] whitespace-nowrap pointer-events-none" style={{ left: Math.max(0, view.left - left) }}><Film size={12} />{filename} <span className="text-[var(--kt-faint)]" style={{ fontFamily: 'var(--kt-font-mono)' }}>{timecode(c.in, fps)}</span></div>
+            ? <>
+              <VideoThumbs thumbs={thumbs} clip={c} len={len} pps={pps} view={view} height={h - 8} />
+              <div className="absolute top-0 inline-flex items-center gap-1.5 px-1.5 text-[10px] text-[var(--kt-text)] whitespace-nowrap pointer-events-none bg-[var(--kt-s0)]/60 rounded-br-sm" style={{ left: Math.max(0, view.left - left) }}>
+                <Film size={11} />{filename} <span className="text-[var(--kt-faint)]" style={{ fontFamily: 'var(--kt-font-mono)' }}>{timecode(c.in, fps)}</span>
+                {c.effects ? <span className="text-[var(--kt-warn)]">fx</span> : null}
+              </div>
+            </>
             : <ClipWave peaks={track.role === 'background' ? peaks.background : peaks.original} span={ctx.duration} clip={c} len={len} pps={pps} view={view} height={h - 8} color={withAlpha(color, 0.75)} />}
           {levels(c, track, h)}
           {edges(c)}
@@ -458,6 +502,9 @@ export default function Timeline({
     </button>
   );
 
+  const vc = videoClips(edit);
+  const transitions = vc.map((c, i) => { const x = transitionAt(vc, i, ctx); return x ? { ...x, id: c.id } : null; }).filter(Boolean);
+
   const selectedLine = selection.length === 1 ? edit.clips.find((c) => c.id === selection[0] && c.source === 'line') : null;
   const ghost = selectedLine ? ctx.lines[selectedLine.line] : null;
 
@@ -483,7 +530,10 @@ export default function Timeline({
           <div key={t.id} className="flex border-b border-[var(--kt-s4)]" style={{ height: h }}>
             <div className="sticky left-0 z-20 shrink-0 bg-[var(--kt-s1)] border-r border-[var(--kt-s4)] px-2 flex flex-col justify-center gap-1" style={{ width: LABEL_W }}>
               <div className="flex items-center gap-1.5 text-xs min-w-0">
-                {t.role === 'speaker' ? <span className="h-2.5 w-2.5 rounded-sm shrink-0" style={{ background: colorOf(t) }} /> : t.kind === 'video' ? <Film size={12} className="shrink-0 text-[var(--kt-faint)]" /> : <AudioLines size={12} className="shrink-0 text-[var(--kt-faint)]" />}
+                {t.role === 'speaker' ? <span className="h-2.5 w-2.5 rounded-sm shrink-0" style={{ background: colorOf(t) }} />
+                  : t.kind === 'video' ? <Film size={12} className="shrink-0 text-[var(--kt-faint)]" />
+                    : t.kind === 'overlay' ? (t.role === 'subtitles' ? <Captions size={12} className="shrink-0 text-[var(--kt-faint)]" /> : <Type size={12} className="shrink-0 text-[var(--kt-faint)]" />)
+                      : <AudioLines size={12} className="shrink-0 text-[var(--kt-faint)]" />}
                 <span className="truncate font-medium" title={t.name}>{t.name}</span>
                 {t.kind === 'audio' && !on[t.id] ? <span className="ml-auto text-[9px] uppercase tracking-wider text-[var(--kt-faint)]">silent</span> : null}
               </div>
@@ -492,6 +542,10 @@ export default function Timeline({
                   <HeadBtn on={t.mute} title={t.role === 'original' ? 'Mute the original (it is a reference and not part of the dub mix)' : 'Mute this track'} onClick={() => toggleTrack(t, 'mute')} tone="bg-[var(--kt-warn)] text-[var(--kt-s0)] border-transparent">M</HeadBtn>
                   <HeadBtn on={t.solo} title="Solo: hear only soloed tracks" onClick={() => toggleTrack(t, 'solo')} tone="bg-[var(--kt-success)] text-[var(--kt-s0)] border-transparent">S</HeadBtn>
                 </> : null}
+                {t.kind !== 'audio' ? (
+                  <HeadBtn on={t.mute} tone="bg-[var(--kt-warn)] text-[var(--kt-s0)] border-transparent" title={t.mute ? 'Show this track' : 'Hide this track (in the preview and the render)'} onClick={() => toggleTrack(t, 'mute')}>
+                    {t.mute ? <EyeOff size={10} /> : <Eye size={10} />}</HeadBtn>
+                ) : null}
                 <HeadBtn on={t.locked} title={t.locked ? 'Unlock this track' : 'Lock this track: its clips cannot be edited, and ripple edits leave it in place'} onClick={() => toggleTrack(t, 'locked')}>{t.locked ? <Lock size={10} /> : <Unlock size={10} />}</HeadBtn>
                 {t.role === 'original' ? <span className="text-[9px] text-[var(--kt-faint)] ml-1">reference</span> : null}
                 {t.role === 'background' ? <HeadBtn on={t.duck?.on} title="Duck: lower the background while dub lines play (amount in the Mixer)" onClick={() => dispatch({ type: 'commit', edit: setTrackDuck(edit, t.id, { on: !t.duck?.on }) })}>Duck</HeadBtn> : null}
@@ -507,6 +561,14 @@ export default function Timeline({
                 <div className="absolute top-0.5 bottom-0.5 rounded-sm border border-dashed border-[var(--kt-faint)] pointer-events-none" style={{ left: ghost.start * pps, width: Math.max(2, (ghost.end - ghost.start) * pps) }} title="The line's original time" />
               ) : null}
               {(clipsByTrack[t.id] || []).map((c) => renderClip(c, t, h))}
+              {t.id === 'V1' ? transitions.map((x) => (
+                <button type="button" key={x.id} onPointerDown={(e) => e.stopPropagation()} onClick={() => onPickTransition?.(x.id)}
+                  title={`${x.type === 'dissolve' ? 'Cross dissolve' : 'Dip to black'} ${x.duration.toFixed(2)}s${x.duration < x.requested - 1e-3 ? ` (shortened from ${x.requested}s to fit the clips)` : ''}`}
+                  className="absolute top-2 bottom-2 z-[3] rounded-sm border border-[var(--kt-text)]/70 cursor-pointer grid place-items-center text-[9px] font-bold text-[var(--kt-s0)] overflow-hidden"
+                  style={{ left: (x.cut - x.duration / 2) * pps, width: Math.max(8, x.duration * pps), background: x.type === 'dissolve' ? 'linear-gradient(90deg, rgba(255,255,255,0.15), rgba(255,255,255,0.75))' : 'linear-gradient(90deg, rgba(255,255,255,0.7), #000 50%, rgba(255,255,255,0.7))' }}>
+                  {x.duration * pps > 40 ? (x.type === 'dissolve' ? 'Dissolve' : 'Dip') : ''}
+                </button>
+              )) : null}
             </div>
           </div>
         ))}

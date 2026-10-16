@@ -12,6 +12,12 @@ The edit is a list of tracks and clips:
   tracks also carry `volume` (fader, linear 0..2) and, for the original and background, `duck`
           {on, amount (dB), attack, release}: the track dips while any dub line plays.
   master         {volume}: the master fader, applied to the whole mix.
+  Pictures (video projects): T2 "Subtitles" and T1 "Text" overlay tracks sit above V1. A text clip (source "text") has
+          `text`, `style` and `image`: the id of a PNG the browser drew from them at the video's size (so the render uses
+          exactly what the preview showed, scripts shaped by the browser) and uploaded. Video clips can carry `effects`
+          {brightness, contrast, saturation (multipliers, 1 = unchanged), blur (fraction of the picture height)} and a
+          `transition` {type: dissolve | dip, duration} with the clip just before them; fade_in / fade_out on a video or
+          text clip fade it from / to black (text: to transparent). A muted overlay or video track is hidden.
   removed_lines  lines taken off the timeline on purpose (deleted or rippled away); they are not put back automatically.
   seeded         media tracks that have had their starting clip, so a track the user emptied stays empty.
 A line clip always sits on its speaker's track; changing a line's speaker moves its clips there. A line can have several
@@ -21,6 +27,9 @@ from typing import Any, Callable, Dict, List, Optional
 
 VERSION = 2
 MEDIA_TRACKS = ("V1", "A1", "A2")
+OVERLAY_TRACKS = ("T1", "T2")
+TEXT_LIMIT = 36000.0  # a text clip has no source of its own; its length is just out - in
+TEXT_FONTS = ("sans", "serif", "mono")
 MEDIA_LINK = "m0"
 
 
@@ -56,6 +65,8 @@ def _tracks(p: Dict[str, Any], old: Optional[List[Dict[str, Any]]] = None) -> Li
 
     out = []
     if p.get("is_video"):
+        out.append(tr("T2", "overlay", "subtitles", "Subtitles"))
+        out.append(tr("T1", "overlay", "text", "Text"))
         out.append(tr("V1", "video", "video", "Video"))
     # the original speech is a reference while editing; it is not part of the dub mix, so it starts muted
     out.append(tr("A1", "audio", "original", "Original", mute=True))
@@ -104,6 +115,8 @@ def reconcile(p: Dict[str, Any], edit: Dict[str, Any]) -> Dict[str, Any]:
                 c["start"] = _r(max(0.0, c["start"] + a - c["anchor"]))
             c["anchor"] = a
             have_lines.add(c["line"])
+        elif c.get("source") == "text" and c.get("track") in ids and c.get("track") in OVERLAY_TRACKS:
+            c = dict(c)
         elif c.get("track") in ids and c.get("track") in MEDIA_TRACKS:
             c = dict(c)
             if not c.get("link") and c["id"] in MEDIA_TRACKS:
@@ -156,7 +169,7 @@ def clean(p: Dict[str, Any], raw: Any, line_lengths: Dict[int, float]) -> Dict[s
     clips = []
     seen = set()
     for c in raw["clips"]:
-        if not isinstance(c, dict) or c.get("source") not in ("media", "background", "line"):
+        if not isinstance(c, dict) or c.get("source") not in ("media", "background", "line", "text"):
             continue
         cid = str(c.get("id") or "")[:40]
         if not cid or cid in seen:
@@ -174,6 +187,13 @@ def clean(p: Dict[str, Any], raw: Any, line_lengths: Dict[int, float]) -> Dict[s
             kfs = [{"t": _num(k.get("t"), 0.0, limit), "db": _num(k.get("db", 0.0), -60.0, 20.0)}
                    for k in c["keyframes"][:500] if isinstance(k, dict)]
             out["keyframes"] = sorted(kfs, key=lambda k: k["t"])
+        if isinstance(c.get("effects"), dict):
+            fx = {k: _num(c["effects"].get(k, d), lo, hi) for k, (d, lo, hi) in EFFECT_LIMITS.items()}
+            if any(abs(fx[k] - EFFECT_LIMITS[k][0]) > 1e-6 for k in fx):
+                out["effects"] = fx
+        tr_raw = c.get("transition")
+        if isinstance(tr_raw, dict) and tr_raw.get("type") in ("dissolve", "dip"):
+            out["transition"] = {"type": tr_raw["type"], "duration": _num(tr_raw.get("duration", 1.0), 0.04, 10.0)}
         if c["source"] == "line":
             if not isinstance(c.get("line"), int):
                 continue
@@ -181,6 +201,15 @@ def clean(p: Dict[str, Any], raw: Any, line_lengths: Dict[int, float]) -> Dict[s
             src_len = line_lengths.get(c["line"])
             if c.get("anchor") is not None:
                 out["anchor"] = _num(c["anchor"], 0.0, limit)
+        elif c["source"] == "text":
+            out["text"] = str(c.get("text") or "")[:1000]
+            out["style"] = _clean_style(c.get("style"))
+            img = str(c.get("image") or "")
+            if img and len(img) <= 64 and all(ch in "0123456789abcdef" for ch in img):
+                out["image"] = img
+            if c.get("out") is None:
+                raise ValueError("A text clip needs a length.")
+            src_len = TEXT_LIMIT
         else:
             src_len = dur
         out["start"] = _num(c.get("start", 0.0), 0.0, limit)
@@ -199,6 +228,33 @@ def clean(p: Dict[str, Any], raw: Any, line_lengths: Dict[int, float]) -> Dict[s
     return reconcile(p, {"version": VERSION, "tracks": tracks, "clips": clips, "removed_lines": removed, "seeded": seeded, "master": master})
 
 
+EFFECT_LIMITS = {"brightness": (1.0, 0.0, 3.0), "contrast": (1.0, 0.0, 3.0), "saturation": (1.0, 0.0, 3.0), "blur": (0.0, 0.0, 0.05)}
+
+
+def _hex(v, default: str) -> str:
+    v = str(v or "")
+    return v.lower() if len(v) == 7 and v[0] == "#" and all(ch in "0123456789abcdefABCDEF" for ch in v[1:]) else default
+
+
+def _clean_style(raw) -> Dict[str, Any]:
+    """Text style: only known keys, within range (sizes are fractions of the picture height, positions of its size)."""
+    r = raw if isinstance(raw, dict) else {}
+
+    def num(k, d, lo, hi):
+        try:
+            return _num(r.get(k, d), lo, hi)
+        except ValueError:
+            return d
+    return {
+        "font": r.get("font") if r.get("font") in TEXT_FONTS else "sans", "size": num("size", 0.06, 0.01, 0.4),
+        "color": _hex(r.get("color"), "#ffffff"), "bold": bool(r.get("bold", True)), "italic": bool(r.get("italic")),
+        "align": r.get("align") if r.get("align") in ("left", "center", "right") else "center",
+        "x": num("x", 0.5, 0.0, 1.0), "y": num("y", 0.85, 0.0, 1.0), "width": num("width", 0.8, 0.1, 1.0),
+        "box": bool(r.get("box")), "box_color": _hex(r.get("box_color"), "#000000"), "box_opacity": num("box_opacity", 0.6, 0.0, 1.0),
+        "outline": num("outline", 0.0, 0.0, 0.03), "outline_color": _hex(r.get("outline_color"), "#000000"), "shadow": bool(r.get("shadow")),
+    }
+
+
 def audible(edit: Dict[str, Any]) -> Dict[str, bool]:
     """Which tracks play: not muted, and when any track is soloed, only the soloed ones."""
     tracks = edit.get("tracks") or []
@@ -209,6 +265,11 @@ def audible(edit: Dict[str, Any]) -> Dict[str, bool]:
 def _length(c: Dict[str, Any], src_len: float) -> float:
     out = src_len if c.get("out") is None else min(float(c["out"]), src_len)
     return max(0.0, out - float(c.get("in") or 0.0))
+
+
+def visible(edit: Dict[str, Any]) -> Dict[str, bool]:
+    """Which picture tracks show (video and overlays): not muted (hidden)."""
+    return {t["id"]: not t.get("mute") for t in edit.get("tracks") or [] if t.get("kind") in ("video", "overlay")}
 
 
 def sequence_end(p: Dict[str, Any], edit: Dict[str, Any], line_meta: Dict[str, Any]) -> float:
@@ -223,6 +284,8 @@ def sequence_end(p: Dict[str, Any], edit: Dict[str, Any], line_meta: Dict[str, A
             if not seg:
                 continue
             src = float(m["duration"]) if m.get("file") else seg["end"] - seg["start"]
+        elif c.get("source") == "text":
+            src = TEXT_LIMIT
         else:
             src = dur
         end = max(end, float(c["start"]) + _length(c, src))
@@ -265,6 +328,89 @@ def concat_plan(pieces: List[Dict[str, float]], total: float) -> List[tuple]:
     if total - t > 0.01:
         plan.append(("gap", round(total - t, 3)))
     return plan
+
+
+def transition_at(clips: List[Dict[str, Any]], i: int, dur: float) -> Optional[Dict[str, Any]]:
+    """The transition into clips[i] (sorted, enabled clips of one video track) from the clip just before it, with its
+    duration limited so it fits: a dissolve needs half its length of spare source after the first clip's out and before
+    the second clip's in (handles), and neither clip may be shorter than it. None when there is no usable transition."""
+    c = clips[i]
+    t = c.get("transition")
+    if not t or i == 0:
+        return None
+    left = clips[i - 1]
+    l_len, r_len = _length(left, dur), _length(c, dur)
+    if abs(left["start"] + l_len - c["start"]) > 1e-3:
+        return None  # not touching: there is no cut to transition across
+    d = min(float(t.get("duration", 1.0)), l_len, r_len)
+    if t.get("type") == "dissolve":
+        l_out = dur if left.get("out") is None else min(float(left["out"]), dur)
+        d = min(d, 2 * (dur - l_out), 2 * float(c.get("in") or 0.0))
+    if d < 0.04:
+        return None
+    return {"type": t["type"], "duration": round(d, 3), "cut": c["start"]}
+
+
+def video_plan(p: Dict[str, Any], edit: Dict[str, Any], total: float) -> Dict[str, Any]:
+    """The edited picture as back-to-back pieces for the renderer:
+    {"pieces": [{"kind": "clip", in, out, effects, fade_in, fade_out, xfade (seconds of dissolve with the piece before)}
+                or {"kind": "gap", "duration"}], "plain": bool}. `plain` means the source can be used untouched."""
+    dur = float(p.get("duration") or 0)
+    shown = visible(edit).get("V1", True)
+    clips = sorted((c for c in edit.get("clips") or [] if c.get("track") == "V1" and not c.get("disabled")), key=lambda c: c["start"]) if shown else []
+    pieces: List[Dict[str, Any]] = []
+    t = 0.0
+    trans = [transition_at(clips, i, dur) for i in range(len(clips))]
+    for i, c in enumerate(clips):
+        a = float(c.get("in") or 0.0)
+        b = dur if c.get("out") is None else min(float(c["out"]), dur)
+        start = float(c["start"])
+        if start < t - 1e-3:  # overlap (the editor does not make these): start where the last piece ended
+            a += t - start
+            start = t
+        if b - a <= 0.01:
+            continue
+        if start - t > 0.01:
+            pieces.append({"kind": "gap", "duration": round(start - t, 3)})
+        fi, fo = float(c.get("fade_in") or 0.0), float(c.get("fade_out") or 0.0)
+        xfade = 0.0
+        if trans[i]:
+            if trans[i]["type"] == "dissolve":
+                xfade = trans[i]["duration"]
+                a -= xfade / 2  # the head handle; the piece before got its tail handle
+            else:
+                fi = max(fi, trans[i]["duration"] / 2)  # dip to black: fade in from black after the cut
+        nxt = trans[i + 1] if i + 1 < len(trans) else None
+        if nxt:
+            if nxt["type"] == "dissolve":
+                b += nxt["duration"] / 2
+            else:
+                fo = max(fo, nxt["duration"] / 2)
+        tail = nxt["duration"] / 2 if nxt and nxt["type"] == "dissolve" else 0.0
+        pieces.append({"kind": "clip", "in": round(a, 3), "out": round(b, 3), "effects": c.get("effects") or {},
+                       "fade_in": fi, "fade_out": fo, "xfade": xfade, "head": xfade / 2, "tail": tail})
+        t = start + (b - a) - (xfade / 2 if xfade else 0) - (nxt["duration"] / 2 if nxt and nxt["type"] == "dissolve" else 0)
+    if total - t > 0.01:
+        pieces.append({"kind": "gap", "duration": round(total - t, 3)})
+    plain = (len(pieces) == 1 and pieces[0]["kind"] == "clip" and pieces[0]["in"] < 0.01 and pieces[0]["out"] >= dur - 0.05
+             and not pieces[0]["effects"] and not pieces[0]["fade_in"] and not pieces[0]["fade_out"])
+    return {"pieces": pieces, "plain": plain}
+
+
+def overlay_items(edit: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Text clips to draw, bottom track first: {track, start, end, image, fade_in, fade_out}. Hidden tracks, disabled
+    clips and clips without an uploaded picture are left out."""
+    shown = visible(edit)
+    out = []
+    for track in ("T1", "T2"):
+        if not shown.get(track):
+            continue
+        for c in sorted((c for c in edit.get("clips") or [] if c.get("track") == track and c.get("source") == "text" and not c.get("disabled")), key=lambda c: c["start"]):
+            length = _length(c, TEXT_LIMIT)
+            if length > 0.01 and c.get("image"):
+                out.append({"track": track, "start": float(c["start"]), "end": float(c["start"]) + length, "image": c["image"],
+                            "fade_in": float(c.get("fade_in") or 0.0), "fade_out": float(c.get("fade_out") or 0.0)})
+    return out
 
 
 def line_placements(p: Dict[str, Any], edit: Dict[str, Any], line_meta: Dict[str, Any]) -> List[Dict[str, Any]]:

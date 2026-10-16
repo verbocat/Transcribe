@@ -507,33 +507,146 @@ def probe_video(path: str) -> Dict[str, float]:
     return {"width": w - w % 2, "height": h - h % 2, "fps": f if 5.0 <= f <= 120.0 else 25.0}
 
 
-def render_video_track(video: str, plan: List[tuple], audio: str, out_mp4: str) -> None:
-    """Build the edited picture from `plan` (("clip", in, out) pieces of the source and ("gap", seconds) of black, back to
-    back, as made by dubbing_edit.concat_plan) and put `audio` under it."""
+def _effects_chain(fx: Dict[str, Any], height: int) -> List[str]:
+    """ffmpeg filters for a clip's effects, in the same order and with the same maths as the CSS filters of the preview
+    (brightness, contrast, saturate, blur)."""
+    out: List[str] = []
+    b = float(fx.get("brightness", 1.0))
+    c = float(fx.get("contrast", 1.0))
+    s = float(fx.get("saturation", 1.0))
+    blur = float(fx.get("blur", 0.0))
+    if abs(b - 1) > 1e-3:
+        out.append(f"colorchannelmixer=rr={b:.4f}:gg={b:.4f}:bb={b:.4f}")
+    if abs(c - 1) > 1e-3:
+        e = f"clip((val-127.5)*{c:.4f}+127.5\\,0\\,255)"
+        out.append(f"lutrgb=r='{e}':g='{e}':b='{e}'")
+    if abs(s - 1) > 1e-3:  # the CSS saturate() matrix
+        m = [0.213 + 0.787 * s, 0.715 - 0.715 * s, 0.072 - 0.072 * s,
+             0.213 - 0.213 * s, 0.715 + 0.285 * s, 0.072 - 0.072 * s,
+             0.213 - 0.213 * s, 0.715 - 0.715 * s, 0.072 + 0.928 * s]
+        keys = ["rr", "rg", "rb", "gr", "gg", "gb", "br", "bg", "bb"]
+        out.append("colorchannelmixer=" + ":".join(f"{k}={v:.4f}" for k, v in zip(keys, m)))
+    if blur > 1e-4:
+        out.append(f"gblur=sigma={blur * height:.2f}")
+    return out
+
+
+def render_picture(video: str, plan: Dict[str, Any], overlays: List[Dict[str, Any]], overlay_dir: str, audio: str, out_mp4: str) -> None:
+    """Render the edited picture: video pieces (with effects, fades, dissolves; black gaps), then the text overlays drawn
+    by the editor (PNG pictures the size of the video), with `audio` underneath. See dubbing_edit.video_plan / overlay_items."""
     info = probe_video(video)
     w, h, fps = info["width"], info["height"], info["fps"]
-    norm = f"scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={fps},format=yuv420p"
-    parts, labels = [], []
-    clips = [p for p in plan if p[0] == "clip"]
-    if clips:
-        parts.append(f"[0:v]split={len(clips)}" + "".join(f"[s{i}]" for i in range(len(clips))))
+    norm = f"scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={fps}"
+    pieces = plan["pieces"]
+    parts: List[str] = []
+    clip_pieces = [p for p in pieces if p["kind"] == "clip"]
+    if clip_pieces:
+        parts.append(f"[0:v]split={len(clip_pieces)}" + "".join(f"[s{i}]" for i in range(len(clip_pieces))))
     k = 0
-    for i, p in enumerate(plan):
-        if p[0] == "clip":
-            parts.append(f"[s{k}]trim=start={p[1]:.3f}:end={p[2]:.3f},setpts=PTS-STARTPTS,{norm}[v{i}]")
+    lens: List[float] = []
+    for i, p in enumerate(pieces):
+        if p["kind"] == "clip":
+            length = p["out"] - p["in"]
+            chain = [f"trim=start={p['in']:.3f}:end={p['out']:.3f}", "setpts=PTS-STARTPTS", norm] + _effects_chain(p.get("effects") or {}, h)
+            if p.get("fade_in"):
+                chain.append(f"fade=t=in:st={p.get('head', 0):.3f}:d={p['fade_in']:.3f}")
+            if p.get("fade_out"):
+                chain.append(f"fade=t=out:st={max(0.0, length - p.get('tail', 0) - p['fade_out']):.3f}:d={p['fade_out']:.3f}")
+            parts.append(f"[s{k}]" + ",".join(chain + ["format=yuv420p"]) + f"[p{i}]")
             k += 1
         else:
-            parts.append(f"color=c=black:s={w}x{h}:r={fps}:d={p[1]:.3f},setsar=1,format=yuv420p[v{i}]")
-        labels.append(f"[v{i}]")
-    parts.append("".join(labels) + f"concat=n={len(labels)}:v=1:a=0[vout]")
-    with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8") as f:
-        f.write(";\n".join(parts))
-        script = f.name
+            length = p["duration"]
+            parts.append(f"color=c=black:s={w}x{h}:r={fps}:d={length:.3f},setsar=1,format=yuv420p[p{i}]")
+        lens.append(length)
+    # join: concat back to back, or xfade into a piece that dissolves with the one before it
+    cur, cur_len = None, 0.0
+    for i, p in enumerate(pieces):
+        if cur is None:
+            cur, cur_len = f"p{i}", lens[i]
+            continue
+        nxt = f"j{i}"
+        if p["kind"] == "clip" and p.get("xfade"):
+            parts.append(f"[{cur}][p{i}]xfade=transition=fade:duration={p['xfade']:.3f}:offset={cur_len - p['xfade']:.3f}[{nxt}]")
+            cur_len += lens[i] - p["xfade"]
+        else:
+            parts.append(f"[{cur}][p{i}]concat=n=2:v=1:a=0[{nxt}]")
+            cur_len += lens[i]
+        cur = nxt
+    if cur is None:
+        raise DubbingError("There is no picture to render.")
+    # overlays: per track, clips without fades share one slideshow input; clips that fade get an input each
+    inputs: List[List[str]] = []
+    tmp_files: List[str] = []
+    od = Path(overlay_dir)
+    blank = od / f"blank_{w}x{h}.png"
+    if overlays and not blank.exists():
+        r = _run([_ffmpeg(), "-y", "-loglevel", "error", "-f", "lavfi", "-i", f"color=c=black@0.0:s={w}x{h},format=rgba", "-frames:v", "1", str(blank)], 60)
+        if r.returncode != 0:
+            raise DubbingError("Could not prepare the text overlays.")
+    for track in ("T1", "T2"):
+        mine = [o for o in overlays if o["track"] == track]
+        still = [o for o in mine if not o["fade_in"] and not o["fade_out"]]
+        if still:
+            lines = ["ffconcat version 1.0"]
+            t = 0.0
+            for o in still:
+                if o["start"] > t + 0.001:
+                    lines += [f"file '{blank.as_posix()}'", f"duration {o['start'] - t:.3f}"]
+                lines += [f"file '{(od / (o['image'] + '.png')).as_posix()}'", f"duration {o['end'] - max(o['start'], t):.3f}"]
+                t = max(t, o["end"])
+            lines += [f"file '{blank.as_posix()}'", "duration 1", f"file '{blank.as_posix()}'"]
+            with tempfile.NamedTemporaryFile("w", suffix=".ffconcat", delete=False, encoding="utf-8") as fh:
+                fh.write("\n".join(lines) + "\n")
+                tmp_files.append(fh.name)
+            inputs.append(["-f", "concat", "-safe", "0", "-i", fh.name])
+            parts.append(f"[{len(inputs) + 1}:v]fps={fps},scale={w}:{h},format=rgba[o{len(inputs)}]")
+            parts.append(f"[{cur}][o{len(inputs)}]overlay=0:0:eof_action=pass[ov{len(inputs)}]")
+            cur = f"ov{len(inputs)}"
+        for o in mine:
+            if o in still:
+                continue
+            inputs.append(["-loop", "1", "-framerate", str(fps), "-t", f"{o['end']:.3f}", "-i", str(od / (o["image"] + ".png"))])
+            n = len(inputs)
+            chain = [f"scale={w}:{h}", "format=rgba"]
+            if o["fade_in"]:
+                chain.append(f"fade=t=in:st={o['start']:.3f}:d={o['fade_in']:.3f}:alpha=1")
+            if o["fade_out"]:
+                chain.append(f"fade=t=out:st={o['end'] - o['fade_out']:.3f}:d={o['fade_out']:.3f}:alpha=1")
+            parts.append(f"[{n + 1}:v]" + ",".join(chain) + f"[o{n}]")
+            parts.append(f"[{cur}][o{n}]overlay=0:0:eof_action=pass:enable='between(t,{o['start']:.3f},{o['end']:.3f})'[ov{n}]")
+            cur = f"ov{n}"
+    parts.append(f"[{cur}]format=yuv420p[vout]")
+    with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8") as fh:
+        fh.write(";\n".join(parts))
+        script = fh.name
+    cmd = [_ffmpeg(), "-y", "-loglevel", "error", "-i", video, "-i", audio]
+    for extra in inputs:
+        cmd += extra
+    cmd += ["-filter_complex_script", script, "-map", "[vout]", "-map", "1:a:0", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+            "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-shortest", "-movflags", "+faststart", out_mp4]
     try:
-        r = _run([_ffmpeg(), "-y", "-loglevel", "error", "-i", video, "-i", audio, "-filter_complex_script", script,
-                  "-map", "[vout]", "-map", "1:a:0", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
-                  "-c:a", "aac", "-b:a", "192k", "-shortest", "-movflags", "+faststart", out_mp4], timeout=4 * 3600)
+        r = _run(cmd, timeout=6 * 3600)
     finally:
-        os.unlink(script)
+        for f in tmp_files + [script]:
+            os.unlink(f)
     if r.returncode != 0:
-        raise DubbingError("Could not render the edited video: " + r.stderr.decode("utf-8", "replace").strip()[-300:])
+        raise DubbingError("Could not render the edited video: " + r.stderr.decode("utf-8", "replace").strip()[-400:])
+
+
+def thumbnail_sprite(video: str, out_jpg: str, duration: float, max_frames: int = 400, tile_w: int = 160) -> Dict[str, Any]:
+    """A sprite sheet of small frames for the timeline, one every `interval` seconds (at most `max_frames`).
+    Returns {interval, count, cols, rows, w, h}."""
+    import math
+    info = probe_video(video)
+    th = max(2, int(round(tile_w * info["height"] / max(1, info["width"]) / 2)) * 2)
+    interval = max(1.0, math.ceil(duration / max_frames))
+    count = max(1, int(math.ceil(duration / interval)))
+    cols = min(20, count)
+    rows = int(math.ceil(count / cols))
+    # long videos: decode key frames only (much faster; each thumbnail is then the nearest key frame)
+    skip = ["-skip_frame", "nokey"] if duration > 600 else []
+    r = _run([_ffmpeg(), "-y", "-loglevel", "error", *skip, "-i", video, "-an",
+              "-vf", f"fps=1/{interval},scale={tile_w}:{th},tile={cols}x{rows},format=yuvj420p", "-frames:v", "1", "-q:v", "5", out_jpg], timeout=1800)
+    if r.returncode != 0 or not Path(out_jpg).exists():
+        raise DubbingError("Could not make the timeline thumbnails.")
+    return {"interval": interval, "count": count, "cols": cols, "rows": rows, "w": tile_w, "h": th}

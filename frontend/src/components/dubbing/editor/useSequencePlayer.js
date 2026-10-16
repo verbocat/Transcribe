@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../dubApi';
 import { audible, clipEnd, clipLength, clipOnTrackAt, sequenceEnd } from './editModel';
 import { clipGain, hasLevels, mediaEnvelope, sampleCurve } from './audioModel';
+import { videoLayers, overlaysAt, cssFilter } from './videoModel';
+import { drawText } from './overlayDraw';
 
 /**
  * Plays the edit in the browser. The timeline has its own clock; media elements follow it:
@@ -17,7 +19,7 @@ const MEDIA_RATE = 40;      // gain-curve points per second for the original and
 const LINE_RATE = 100;      // and for a dub line
 const MEDIA_WINDOW = 600;   // seconds of media level curve scheduled at a time
 
-export default function useSequencePlayer({ projectId, edit, ctx, video, mediaUrl, hasStems, onBlack }) {
+export default function useSequencePlayer({ projectId, edit, ctx, video, video2, overlay, dims, mediaUrl, hasStems, onBlack }) {
   const [playing, setPlaying] = useState(false);
   const [rate, setRateState] = useState(1);
   const clock = useRef({ playing: false, rate: 1, t0: 0, a0: 0 });
@@ -35,6 +37,9 @@ export default function useSequencePlayer({ projectId, edit, ctx, video, mediaUr
   const mediaUntil = useRef(0);
   const blackRef = useRef(onBlack);
   useEffect(() => { blackRef.current = onBlack; });
+  const dimsRef = useRef(dims);
+  useEffect(() => { dimsRef.current = dims; });
+  const drawn = useRef('');
 
   const now = () => performance.now() / 1000;
   const getTime = useCallback(() => {
@@ -113,33 +118,90 @@ export default function useSequencePlayer({ projectId, edit, ctx, video, mediaUr
     return () => { cancelled = true; if (bg.current) bg.current.pause(); bg.current = null; if (url) URL.revokeObjectURL(url); };
   }, [projectId, hasStems]);
 
-  // Make one element show/play what its track has at time T.
+  // Play or show source time `src` of clip `clipId` on a media element, keeping it on the clock.
+  const drive = useCallback((el, clipId, src, isPicture) => {
+    const k = clock.current;
+    const run = k.playing && k.rate > 0 && (isPicture || Math.abs(k.rate - 1) < 0.01);
+    if (run) {
+      if (el.playbackRate !== k.rate) el.playbackRate = k.rate;
+      if (el.dataset.clip !== clipId || Math.abs(el.currentTime - src) > 0.3) { el.currentTime = Math.max(0, src); el.dataset.clip = clipId; }
+      if (el.paused) el.play().catch(() => {});
+    } else {
+      if (!el.paused) el.pause();
+      if (isPicture && Math.abs(el.currentTime - src) > 0.02) el.currentTime = Math.max(0, src);
+      el.dataset.clip = clipId;
+    }
+  }, []);
+  // The picture: up to two layers (a dissolve shows both clips), each on its own video element with its opacity and
+  // effects; an element keeps the clip it already shows so a dissolve never makes it seek.
+  const followPicture = useCallback((T) => {
+    const els = [video.current, video2?.current];
+    if (!els[0]) return;
+    const { edit: e, ctx: c } = live.current;
+    const layers = videoLayers(e, c, T);
+    blackRef.current?.(!layers.length);
+    const assign = [null, null];
+    layers.forEach((l, z) => {
+      const k = [0, 1].find((i) => els[i] && !assign[i] && els[i].dataset.clip === l.clip.id);
+      if (k != null) assign[k] = { ...l, z };
+    });
+    layers.forEach((l, z) => {
+      if (assign.some((a) => a && a.clip.id === l.clip.id)) return;
+      const k = [0, 1].find((i) => els[i] && !assign[i]);
+      if (k != null) assign[k] = { ...l, z };
+    });
+    els.forEach((el, i) => {
+      if (!el) return;
+      el.muted = true;
+      const a = assign[i];
+      if (!a) { el.style.opacity = '0'; if (!el.paused) el.pause(); el.dataset.clip = ''; return; }
+      el.style.opacity = String(a.opacity);
+      el.style.zIndex = String(a.z + 1);
+      const shownH = el.videoWidth ? Math.min(el.clientHeight, (el.clientWidth * el.videoHeight) / el.videoWidth) : el.clientHeight;
+      const f = cssFilter(a.clip.effects, shownH);
+      if (el.style.filter !== f) el.style.filter = f;
+      drive(el, a.clip.id, a.src, true);
+    });
+  }, [video, video2, drive]);
+  // Text overlays, drawn over the picture at its shown size (redrawn only when something visible changed).
+  const drawOverlays = useCallback((T) => {
+    const cv = overlay?.current; const d = dimsRef.current;
+    if (!cv || !d) return;
+    const box = cv.parentElement.getBoundingClientRect();
+    const scale = Math.min(box.width / d.width, box.height / d.height);
+    const w = Math.max(1, Math.round(d.width * scale)); const h = Math.max(1, Math.round(d.height * scale));
+    const dpr = window.devicePixelRatio || 1;
+    const items = overlaysAt(live.current.edit, T);
+    const key = `${w}x${h}:${items.map((o) => `${o.clip.image}@${o.alpha.toFixed(2)}`).join('|')}`;
+    if (key === drawn.current) return;
+    drawn.current = key;
+    cv.style.width = `${w}px`; cv.style.height = `${h}px`;
+    cv.style.left = `${(box.width - w) / 2}px`; cv.style.top = `${(box.height - h) / 2}px`;
+    if (cv.width !== Math.round(w * dpr)) cv.width = Math.round(w * dpr);
+    if (cv.height !== Math.round(h * dpr)) cv.height = Math.round(h * dpr);
+    const g = cv.getContext('2d');
+    g.clearRect(0, 0, cv.width, cv.height);
+    for (const o of items) { g.globalAlpha = o.alpha; drawText(g, cv.width, cv.height, o.clip.text, o.clip.style); }
+    g.globalAlpha = 1;
+  }, [overlay]);
+
+  // Make one audio element play what its track has at time T.
   const follow = useCallback((el, track, isPicture, T, on) => {
     if (!el) return;
     const { edit: e, ctx: c } = live.current;
     const clip = clipOnTrackAt(e, track, T, c);
     const usable = clip && !clip.disabled && (isPicture || on[track]);
-    if (isPicture) blackRef.current?.(!usable);
     if (!usable) { if (!el.paused) el.pause(); el.dataset.clip = ''; return; }
     const src = clip.in + (T - clip.start);
-    const k = clock.current;
-    const run = k.playing && k.rate > 0 && (isPicture || Math.abs(k.rate - 1) < 0.01);
-    if (run) {
-      if (el.playbackRate !== k.rate) el.playbackRate = k.rate;
-      if (el.dataset.clip !== clip.id || Math.abs(el.currentTime - src) > 0.3) { el.currentTime = src; el.dataset.clip = clip.id; }
-      if (el.paused) el.play().catch(() => {});
-    } else {
-      if (!el.paused) el.pause();
-      if (isPicture && Math.abs(el.currentTime - src) > 0.02) el.currentTime = src;
-      el.dataset.clip = clip.id;
-    }
-  }, []);
+    drive(el, clip.id, src, isPicture);
+  }, [drive]);
   const syncMedia = useCallback((T) => {
     const on = audible(live.current.edit);
-    if (video.current) { video.current.muted = true; follow(video.current, 'V1', true, T, on); }
+    followPicture(T);
+    drawOverlays(T);
     follow(a1.current, 'A1', false, T, on);
     follow(bg.current, 'A2', false, T, on);
-  }, [follow, video]);
+  }, [follow, followPicture, drawOverlays]);
 
   // the original's and background's levels (clip gain, keyframes, fades, ducking) as gain curves on the clock
   const scheduleMedia = useCallback(() => {
@@ -293,6 +355,7 @@ export default function useSequencePlayer({ projectId, edit, ctx, video, mediaUr
     const prev = shape.current;
     const next = { clips: edit.clips, heard: JSON.stringify(audible(edit)), duck: JSON.stringify(edit.tracks.map((t) => t.duck || null)) };
     shape.current = next;
+    drawn.current = '';
     if (!clock.current.playing) { syncMedia(clock.current.t0); return undefined; }
     const linesChanged = prev.clips !== next.clips || prev.heard !== next.heard;
     if (!linesChanged && prev.duck === next.duck) return undefined;

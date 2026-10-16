@@ -11,7 +11,7 @@ function Tbtn({ icon: Icon, onClick, title, primary }) {
   );
 }
 
-export default function ProgramMonitor({ mediaUrl, isVideo, player, black, fps, duration, getTime, playing, rate, controls }) {
+export default function ProgramMonitor({ mediaUrl, isVideo, player, player2, overlay, black, fps, duration, getTime, playing, rate, controls }) {
   const tc = useRef(null);
   useEffect(() => {
     let raf;
@@ -25,7 +25,13 @@ export default function ProgramMonitor({ mediaUrl, isVideo, player, black, fps, 
       <div className="h-8 shrink-0 px-3 flex items-center border-b border-[var(--kt-s4)] text-[11px] font-semibold uppercase tracking-wider text-[var(--kt-faint)]">Program</div>
       <div className="relative flex-1 min-h-0 bg-black grid place-items-center overflow-hidden">
         {!mediaUrl ? <span className="text-xs text-[var(--kt-faint)]">Loading media…</span> : isVideo
-          ? <video ref={player} src={mediaUrl} preload="auto" playsInline muted className="max-w-full max-h-full" onClick={controls.toggle} />
+          ? (
+            <>
+              {/* two layers, so a cross dissolve can show both clips; the sequence player sets their opacity and effects */}
+              <video ref={player} src={mediaUrl} preload="auto" playsInline muted className="absolute inset-0 w-full h-full object-contain" style={{ opacity: 0 }} onClick={controls.toggle} />
+              <video ref={player2} src={mediaUrl} preload="auto" playsInline muted className="absolute inset-0 w-full h-full object-contain" style={{ opacity: 0 }} onClick={controls.toggle} />
+            </>
+          )
           : (
             <div className="flex flex-col items-center gap-2 text-[var(--kt-faint)]">
               <AudioLines size={40} />
@@ -33,7 +39,8 @@ export default function ProgramMonitor({ mediaUrl, isVideo, player, black, fps, 
             </div>
           )}
         {/* shown between video clips: the edit has no picture there */}
-        <div ref={black} className="absolute inset-0 bg-black" style={{ display: 'none' }} onClick={controls.toggle} />
+        <div ref={black} className="absolute inset-0 bg-black z-[5]" style={{ display: 'none' }} onClick={controls.toggle} />
+        {isVideo ? <canvas ref={overlay} className="absolute pointer-events-none z-10" aria-hidden="true" /> : null}
       </div>
       <div className="shrink-0 border-t border-[var(--kt-s4)] px-3 py-1.5 flex items-center gap-2">
         <span ref={tc} className="text-[13px] text-[var(--kt-accent)] tabular-nums min-w-[96px]" style={{ fontFamily: 'var(--kt-font-mono)' }}>00:00:00:00</span>

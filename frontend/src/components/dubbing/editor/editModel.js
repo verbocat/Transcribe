@@ -9,7 +9,9 @@ const r3 = (v) => Math.round(v * 1000) / 1000;
 let seq = 0;
 export const newId = (prefix = 'c') => `${prefix}${Date.now().toString(36)}${(seq += 1).toString(36)}`;
 
+export const TEXT_SOURCE = 36000; // a text clip has no source of its own; its length is out - in
 export function sourceLength(clip, ctx) {
+  if (clip.source === 'text') return TEXT_SOURCE;
   if (clip.source !== 'line') return ctx.duration;
   const seg = ctx.lines[clip.line];
   if (!seg) return 0;
@@ -259,6 +261,7 @@ export function razor(edit, idList, t, ctx) {
     const at = r3(c.in + (t - c.start));
     // the fade-in stays with the first piece and the fade-out with the second
     const right = { ...c, id: newId(c.source === 'line' ? 'L' : 'm'), start: r3(t), in: at, ...(c.fade_in ? { fade_in: 0 } : {}) };
+    delete right.transition; // a transition belongs to the clip's start, which stays with the first piece
     if (c.link) right.link = (links[c.link] = links[c.link] || newId('k'));
     out.push({ ...c, out: at, ...(c.fade_out ? { fade_out: 0 } : {}) }, right);
     cut = true;
@@ -393,7 +396,11 @@ export function historyReducer(h, action) {
     case 'reset': return historyInit(action.edit);
     case 'commit':
       if (action.edit === h.present) return h;
-      return { past: [...h.past, h.present].slice(-LIMIT), present: action.edit, future: [], base: null };
+      // rapid changes to one control (a slider being dragged) become a single undo step
+      if (action.merge && h.merge === action.merge && Date.now() - (h.mergeAt || 0) < 1000) {
+        return { ...h, present: action.edit, future: [], base: null, mergeAt: Date.now() };
+      }
+      return { past: [...h.past, h.present].slice(-LIMIT), present: action.edit, future: [], base: null, merge: action.merge || null, mergeAt: Date.now() };
     case 'begin': return { ...h, base: h.present };
     case 'preview': return { ...h, present: action.edit };
     case 'end':

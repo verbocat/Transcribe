@@ -1,9 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import {
   Loader2, Undo2, Redo2, Magnet, ZoomIn, ZoomOut, Maximize2, MousePointer2, Keyboard, RotateCcw, AlertTriangle, X, Check, CloudOff,
-  Scissors, MoveHorizontal, Columns2, ArrowRightToLine, Link2, Unlink2,
+  Scissors, MoveHorizontal, Columns2, ArrowRightToLine, Link2, Unlink2, Type, Captions,
 } from 'lucide-react';
-import { call, send } from '../dubApi';
+import { api, call, send } from '../dubApi';
 import { getSpeakerPalette, subscribeTheme } from '../../../theme/themeEngine';
 import {
   historyInit, historyReducer, moveClips, toggleDisabled, setClipTimes, editPoints, sequenceEnd, liftClips, rippleDeleteClips,
@@ -15,6 +15,10 @@ import AssetsPanel from './AssetsPanel';
 import useSequencePlayer from './useSequencePlayer';
 import AudioMixer from './AudioMixer';
 import { setClipLevels, addKeyframe, moveKeyframe, removeKeyframe, clearKeyframes } from './audioModel';
+import {
+  addText, setText, subtitlesFromLines, setEffects, setTransition, applyDefaultTransition, videoClips, transitionAt, SUB_TRACK,
+} from './videoModel';
+import { useOverlayUploads } from './overlayDraw';
 
 const SHORTCUTS = [
   ['Playback', [['Space', 'Play or pause'], ['J / K / L', 'Shuttle back, stop, forward (press again for faster)'], ['Left / Right', 'One frame (Shift: five frames)'],
@@ -24,6 +28,8 @@ const SHORTCUTS = [
   ['Editing', [['Ctrl + K', 'Cut at the playhead (selected clips, or all)'], ['Ctrl + Shift + K', 'Cut every track at the playhead'], ['Delete', 'Remove clips and leave a gap, or close a selected gap'],
     ['Shift + Delete', 'Ripple delete: remove clips and close the gap'], ['Q / W', 'Ripple trim from the previous edit to the playhead / from the playhead to the next edit'],
     ['Alt + Left / Right', 'Nudge selected clips a frame (Shift: five)'], ['Shift + E', 'Turn selected clips on or off'], ['Ctrl + Z / Ctrl + Shift + Z', 'Undo / redo']]],
+  ['Pictures', [['T', 'Add text at the playhead'], ['Ctrl + D', 'Cross dissolve at the video cut nearest the playhead'],
+    ['Subtitles button', 'Subtitles from the dub lines'], ['Eye on a track', 'Hide or show it'], ['Clip tab', 'Effects, transitions, text style']]],
   ['Volume', [['Drag the yellow line', 'Clip gain'], ['Ctrl + click the line', 'Add a keyframe'], ['Drag / Alt + click a keyframe', 'Move / remove it'],
     ['Drag a corner square', 'Fade in or out'], ['Mixer tab', 'Track faders, master, ducking'], ['Double-click a fader', 'Back to 0 dB']]],
   ['Timeline', [['S', 'Snapping on or off'], ['Ctrl while dragging', 'Invert snapping for this drag'], ['= / -', 'Zoom in or out'], ['\\', 'Zoom to fit'],
@@ -62,7 +68,11 @@ export default function EditorWorkspace({ projectId, project, mediaUrl, dirtySeg
   const [palette, setPalette] = useState(getSpeakerPalette());
   const [split, setSplit] = useState(() => { try { return Number(localStorage.getItem(SPLIT_KEY)) || 0.46; } catch { return 0.46; } });
   const player = useRef(null);
+  const player2 = useRef(null);
+  const overlay = useRef(null);
   const black = useRef(null);
+  const [dims, setDims] = useState(null);
+  const [thumbs, setThumbs] = useState(null);
   const timelineApi = useRef({});
   const saved = useRef(null);
   const root = useRef(null);
@@ -74,7 +84,8 @@ export default function EditorWorkspace({ projectId, project, mediaUrl, dirtySeg
 
   const ctx = useMemo(() => ({ duration, lines: Object.fromEntries((project.segments || []).map((s) => [s.id, s])) }), [duration, project.segments]);
   const onBlack = useCallback((on) => { if (black.current) black.current.style.display = on ? 'block' : 'none'; }, []);
-  const sp = useSequencePlayer({ projectId, edit: edit || EMPTY, ctx, video: player, mediaUrl, hasStems: !!project.stems, onBlack });
+  const sp = useSequencePlayer({ projectId, edit: edit || EMPTY, ctx, video: player, video2: player2, overlay, dims, mediaUrl, hasStems: !!project.stems, onBlack });
+  const uploads = useOverlayUploads(projectId, edit, dims);
   const { getTime, seek } = sp;
 
   // ------------------------------------------------------------------ load + autosave
@@ -83,6 +94,7 @@ export default function EditorWorkspace({ projectId, project, mediaUrl, dirtySeg
     call(`/projects/${projectId}/edit`).then((d) => {
       if (off) return;
       saved.current = d.edit; dispatch({ type: 'reset', edit: d.edit }); setFps(d.fps || 25);
+      if (d.video) setDims({ width: d.video.width, height: d.video.height });
       setPps(Math.max(minPps, Math.min(maxPps, 1100 / duration)));
     }).catch((e) => setError(e.message));
     return () => { off = true; };
@@ -121,6 +133,17 @@ export default function EditorWorkspace({ projectId, project, mediaUrl, dirtySeg
     if (!project.stems) return;
     call(`/projects/${projectId}/waveform/background`).then((d) => setPeaks((p) => ({ ...p, background: d.peaks }))).catch(() => {});
   }, [projectId, project.stems]);
+  useEffect(() => {
+    if (!project.is_video) return undefined;
+    let url = ''; let off = false;
+    call(`/projects/${projectId}/thumbs`).then(async (meta) => {
+      const r = await fetch(api(`/projects/${projectId}/thumbs.jpg`));
+      if (!r.ok || off) return;
+      url = URL.createObjectURL(await r.blob());
+      setThumbs({ meta, url });
+    }).catch(() => {});
+    return () => { off = true; if (url) URL.revokeObjectURL(url); };
+  }, [projectId, project.is_video]);
   const revs = (project.segments || []).map((s) => `${s.id}:${s.audio?.rev ?? ''}`).join(',');
   useEffect(() => {
     call(`/projects/${projectId}/waveform/lines`).then((d) => setLinePeaks(d.lines || {})).catch(() => {});
@@ -145,7 +168,7 @@ export default function EditorWorkspace({ projectId, project, mediaUrl, dirtySeg
   }, [edit, ctx, duration, fps, sp, seek, getTime]);
 
   // ------------------------------------------------------------------ edit actions
-  const commit = useCallback((next) => dispatch({ type: 'commit', edit: next }), []);
+  const commit = useCallback((next, merge) => dispatch({ type: 'commit', edit: next, merge }), []);
   const nudge = (frames) => { if (edit && selection.length) commit(moveClips(edit, selection, frames / fps, ctx).edit); };
   const pickClip = (id) => {
     const c = edit?.clips.find((x) => x.id === id);
@@ -199,6 +222,37 @@ export default function EditorWorkspace({ projectId, project, mediaUrl, dirtySeg
     else if (action === 'remove') commit(removeKeyframe(edit, id, args[0]));
     else if (action === 'clear') commit(clearKeyframes(edit, id));
   };
+  // pictures: text, subtitles, effects, transitions
+  const addTitle = () => {
+    if (!dims) { setError('This project has no video to put text on.'); return; }
+    const r = addText(edit, getTime(), dims);
+    if (r.error) { setError(r.error); return; }
+    commit(r.edit); setSelection([r.id]); setPanelTab('clip'); setError('');
+  };
+  const makeSubtitles = () => {
+    if (!dims) return;
+    const n = edit.clips.filter((c) => c.track === SUB_TRACK).length;
+    if (n && !window.confirm(`Replace the ${n} subtitles on the Subtitles track with new ones from the dub lines?`)) return;
+    const next = subtitlesFromLines(edit, ctx, dims);
+    if (!next.clips.some((c) => c.track === SUB_TRACK)) { setError('No translated dub lines to make subtitles from.'); return; }
+    commit(next); setError('');
+  };
+  const onText = (ids, patch) => commit(setText(edit, ids, patch, dims), `text:${ids.join()}:${Object.keys(patch.style || {}).join()}${patch.text != null ? 'w' : ''}`);
+  const onStyleAll = (clip) => commit(setText(edit, edit.clips.filter((c) => c.track === SUB_TRACK).map((c) => c.id), { style: clip.style }, dims));
+  const onEffects = (ids, patch) => commit(setEffects(edit, ids, patch), `fx:${ids.join()}:${Object.keys(patch).join()}`);
+  const onTransition = (id, tr) => commit(setTransition(edit, id, tr));
+  const transitionFor = (id) => {
+    const vc = videoClips(edit);
+    const i = vc.findIndex((c) => c.id === id);
+    const prev = vc[i - 1];
+    const c = vc[i];
+    const hasCutBefore = !!(prev && c && Math.abs(prev.start + (Math.min(prev.out ?? ctx.duration, ctx.duration) - prev.in) - c.start) < 1e-3);
+    return { hasCutBefore, transition: i > 0 ? transitionAt(vc, i, ctx) : null };
+  };
+  const defaultTransition = () => {
+    const r = applyDefaultTransition(edit, ctx, getTime());
+    if (r.error) setError(r.error); else { commit(r.edit); setError(''); }
+  };
   const regenerate = (sid) => wrap(async () => {
     if (dirtySegments) await saveSegments();
     await send('POST', `/projects/${projectId}/speak`, { ids: [sid] });
@@ -222,6 +276,7 @@ export default function EditorWorkspace({ projectId, project, mediaUrl, dirtySeg
       if (mod && lk === 's') { saveNow(edit); done(); return; }
       if (mod && lk === 'a') { setSelection(edit.clips.map((c) => c.id)); setGap(null); done(); return; }
       if (mod && lk === 'k') { addEdit(e.shiftKey); done(); return; }
+      if (mod && lk === 'd') { defaultTransition(); done(); return; }
       if (mod) return;
       if (k === 'Delete' || k === 'Backspace') { remove(e.shiftKey || (k === 'Backspace' && e.altKey)); done(); return; }
       if (k === ' ') { controls.toggle(); done(); return; }
@@ -240,6 +295,7 @@ export default function EditorWorkspace({ projectId, project, mediaUrl, dirtySeg
       if (lk === 'e' && e.shiftKey) { if (selection.length) commit(toggleDisabled(edit, selection)); done(); return; }
       if (k === 'Escape') { setSelection([]); setGap(null); setHelp(false); done(); return; }
       if (lk === 'q' || lk === 'w') { rippleTrimToPlayhead(lk); done(); return; }
+      if (lk === 't' && !e.shiftKey && !e.altKey) { addTitle(); done(); return; }
       if (TOOL_KEYS[lk] && !e.shiftKey && !e.altKey) { setTool(TOOL_KEYS[lk]); done(); return; }
       if (lk === 's') { setSnapping((v) => !v); done(); return; }
       if (k === '=' || k === '+') { timelineApi.current.zoom?.(1.5); done(); return; }
@@ -293,10 +349,11 @@ export default function EditorWorkspace({ projectId, project, mediaUrl, dirtySeg
             onPickClip={(id) => { pickClip(id); }} onClipTimes={(id, patch) => commit(setClipTimes(edit, id, patch, ctx))}
             onToggleClip={(ids) => commit(toggleDisabled(edit, ids))} onRegenerate={regenerate} busy={busy || running}
             removed={removed} onPutBack={putBack} getTime={getTime} onLevels={onLevels} onKeyframes={onKeyframes}
+            onText={onText} onEffects={onEffects} onTransition={onTransition} transitionFor={transitionFor} onStyleAll={onStyleAll}
             mixer={<AudioMixer edit={edit} dispatch={dispatch} palette={palette} meters={sp.meters} />} />
         </div>
         <div className="flex-1 min-w-0">
-          <ProgramMonitor mediaUrl={mediaUrl} isVideo={project.is_video} player={player} black={black} fps={fps} duration={seqEnd} getTime={getTime}
+          <ProgramMonitor mediaUrl={mediaUrl} isVideo={project.is_video} player={player} player2={player2} overlay={overlay} black={black} fps={fps} duration={seqEnd} getTime={getTime}
             playing={sp.playing} rate={sp.playing ? sp.rate : 0} controls={controls} />
         </div>
       </div>
@@ -310,6 +367,11 @@ export default function EditorWorkspace({ projectId, project, mediaUrl, dirtySeg
             <Tool key={id} icon={TOOL_ICONS[id]} title={`${t.label} tool (${t.key})`} active={tool === id} onClick={() => setTool(id)} />
           ))}
           <span className="w-px h-4 bg-[var(--kt-s4)] mx-1 shrink-0" />
+          {project.is_video ? <>
+            <Tool icon={Type} title="Add text at the playhead (T)" onClick={addTitle} />
+            <Tool icon={Captions} title="Subtitles from the dub lines (their translations), on the Subtitles track" onClick={makeSubtitles} />
+            <span className="w-px h-4 bg-[var(--kt-s4)] mx-1 shrink-0" />
+          </> : null}
           <Tool icon={linked ? Link2 : Unlink2} title={`Linked selection ${linked ? 'on' : 'off'}: video and its audio pieces move together (Alt+click acts on one)`} active={linked} onClick={() => setLinked((v) => !v)} />
           <Tool icon={Magnet} title={`Snapping ${snapping ? 'on' : 'off'} (S)`} active={snapping} onClick={() => setSnapping((v) => !v)} />
           <span className="w-px h-4 bg-[var(--kt-s4)] mx-1 shrink-0" />
@@ -325,6 +387,8 @@ export default function EditorWorkspace({ projectId, project, mediaUrl, dirtySeg
             {TOOLS[tool].label} · {lineCount} line clips{offCount ? ` · ${offCount} off` : ''}{removed.length ? ` · ${removed.length} lines removed` : ''} · edit {seqEnd.toFixed(1)}s
           </span>
           <div className="flex-1" />
+          {uploads.pending ? <span className="text-[11px] text-[var(--kt-faint)] shrink-0 mr-2" title="Text is drawn here and sent to the server for the render">Sending {uploads.pending} text pictures</span> : null}
+          {uploads.error ? <span className="text-[11px] text-[var(--kt-danger)] shrink-0 mr-2" title={uploads.error}>Text pictures not sent</span> : null}
           <span className={`flex items-center gap-1 text-[11px] shrink-0 ${saveState === 'error' ? 'text-[var(--kt-danger)]' : 'text-[var(--kt-faint)]'}`} title="The timeline saves itself as you edit">
             <SaveIcon size={12} className={saveState === 'saving' || saveState === 'pending' ? 'animate-spin' : ''} />
             {saveState === 'saved' ? 'Saved' : saveState === 'error' ? 'Not saved' : 'Saving'}
@@ -335,15 +399,16 @@ export default function EditorWorkspace({ projectId, project, mediaUrl, dirtySeg
         <Timeline edit={edit} ctx={ctx} fps={fps} pps={pps} setPps={setPps} minPps={minPps} maxPps={maxPps} getTime={getTime} seek={seek}
           selection={selection} setSelection={(ids) => { setSelection(ids); if (ids.length) setGap(null); if (ids.length === 1 || (ids.length > 1 && expandLinked(edit, [ids[0]]).length === ids.length)) setPanelTab('clip'); }}
           dispatch={dispatch} snapping={snapping} peaks={peaks} linePeaks={linePeaks} palette={palette} filename={project.filename}
-          scrollToRef={timelineApi} playing={sp.playing} tool={tool} linked={linked} gap={gap} setGap={setGap} />
+          scrollToRef={timelineApi} playing={sp.playing} tool={tool} linked={linked} gap={gap} setGap={setGap}
+          thumbs={thumbs} onPickTransition={(id) => { setSelection([id]); setPanelTab('clip'); }} />
       </div>
 
       {help ? (
         <div className="absolute inset-0 z-50 bg-black/50 grid place-items-center p-4" onClick={() => setHelp(false)}>
-          <div role="dialog" aria-label="Keyboard shortcuts" className="max-w-6xl w-full max-h-full overflow-auto rounded-xl border border-[var(--kt-s5)] bg-[var(--kt-s1)] p-5" onClick={(e) => e.stopPropagation()}>
+          <div role="dialog" aria-label="Keyboard shortcuts" className="max-w-7xl w-full max-h-full overflow-auto rounded-xl border border-[var(--kt-s5)] bg-[var(--kt-s1)] p-5" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-3"><div className="font-semibold text-sm">Keyboard shortcuts</div>
               <button type="button" aria-label="Close" onClick={() => setHelp(false)} className="cursor-pointer text-[var(--kt-faint)] hover:text-[var(--kt-text)]"><X size={15} /></button></div>
-            <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-5 gap-5">
+            <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-6 gap-5">
               {SHORTCUTS.map(([group, rows]) => (
                 <div key={group}><div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--kt-faint)] mb-2">{group}</div>
                   <dl className="flex flex-col gap-1.5 text-xs">{rows.map(([keys, what]) => (
