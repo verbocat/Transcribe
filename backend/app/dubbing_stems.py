@@ -127,3 +127,20 @@ def assemble_track(src_wav: str, plan: list, out_wav: str) -> None:
         os.unlink(script)
     if r.returncode != 0:
         raise DubbingError("Could not build the edited background: " + r.stderr.decode("utf-8", "replace").strip()[-300:])
+
+
+def apply_gain(in_wav: str, out_wav: str, gain_fn, block_seconds: float = 10.0) -> None:
+    """Multiply an audio file by gain_fn(timeline seconds), a block at a time (so long files never sit in memory).
+    Written as float so levels above full scale survive until the final limiter."""
+    import numpy as np
+    import soundfile as sf
+    with sf.SoundFile(in_wav) as src, sf.SoundFile(out_wav, "w", samplerate=src.samplerate, channels=src.channels, subtype="FLOAT") as dst:
+        n = int(block_seconds * src.samplerate)
+        pos = 0
+        while True:
+            block = src.read(n, dtype="float32", always_2d=True)
+            if not len(block):
+                break
+            t = (pos + np.arange(len(block))) / src.samplerate
+            dst.write(block * gain_fn(t)[:, None].astype("float32"))
+            pos += len(block)

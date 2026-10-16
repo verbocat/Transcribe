@@ -226,3 +226,75 @@ def test_mix_renders_cut_video_and_background(monkeypatch, tmp_path):
             assert abs(int(h) * 3600 + int(m) * 60 + float(s) - 4.0) < 0.2, info
     finally:
         app.dependency_overrides.clear()
+
+
+# ------------------------------------------------------------------ step 3: levels
+# The same numbers are checked in frontend/src/components/dubbing/editor/audioModel.test.mjs, so preview and render agree.
+LEVEL_CLIP = {"in": 1.0, "gain": -6, "fade_in": 0.5, "fade_out": 1.0, "keyframes": [{"t": 1.5, "db": 0}, {"t": 2.5, "db": -12}]}
+LEVEL_X = [0, 0.25, 0.5, 1.0, 1.5, 2.5, 2.9]
+LEVEL_EXPECTED = [0.0, 0.354393, 0.501187, 0.251189, 0.125893, 0.089019, 0.019694]
+
+
+def test_clip_gain_and_duck_points_reference_values():
+    assert np.allclose(ed.clip_gain(LEVEL_CLIP, LEVEL_X, 3.0), LEVEL_EXPECTED, atol=1e-6)
+    xs, ys = ed.duck_points([(1, 2), (2.5, 4), (8, 9)], {"amount": -12, "attack": 0.25, "release": 0.5})
+    assert xs == [0.75, 1, 4, 4.5, 7.75, 8, 9, 9.5] and ys == [0, -12, -12, 0, 0, -12, -12, 0]
+
+
+def test_clean_keeps_levels_duck_and_master():
+    p = _project()
+    e = ed.seed(p)
+    c = next(c for c in e["clips"] if c["id"] == "A2")
+    c.update(gain=-99, fade_in=0.5, keyframes=[{"t": 5, "db": 3}, {"t": 2, "db": -6}, "junk"])
+    next(t for t in e["tracks"] if t["id"] == "A2")["duck"] = {"on": True, "amount": -80, "attack": 0.2}
+    e["master"] = {"volume": 0.5}
+    got = ed.clean(p, e, {1: 2.0, 2: 1.5})
+    c = next(c for c in got["clips"] if c["id"] == "A2")
+    assert c["gain"] == -60 and c["fade_in"] == 0.5 and [k["t"] for k in c["keyframes"]] == [2, 5]
+    assert next(t for t in got["tracks"] if t["id"] == "A2")["duck"] == {"on": True, "amount": -40, "attack": 0.2, "release": 0.5}
+    assert got["master"] == {"volume": 0.5}
+    assert ed.track_gain_fn(p, ed.seed(p), "A2", {}) is None  # untouched track: no gain pass needed
+
+
+def test_mix_applies_ducking_clip_levels_and_master(monkeypatch, tmp_path):
+    monkeypatch.setattr(dp, "ROOT", tmp_path)
+    pid = "lvl12345"
+    pdir = tmp_path / pid
+    (pdir / "lines").mkdir(parents=True)
+    (pdir / "stems").mkdir()
+    sf.write(str(pdir / "source.wav"), np.zeros(44100 * 6, dtype="float32"), 44100)
+    sf.write(str(pdir / "stems" / "background.wav"), np.full((44100 * 6, 2), 0.2, dtype="float32"), 44100)
+    sf.write(str(pdir / "lines" / "1.wav"), np.zeros(eng.SAMPLE_RATE * 2, dtype="float32"), eng.SAMPLE_RATE)  # silent line: only its timing matters
+    proj = {
+        "id": pid, "owner": "u1", "filename": "a.wav", "media_path": str(pdir / "source.wav"), "is_video": False,
+        "duration": 6.0, "status": "ready", "stage": "speech", "percent": 100, "detail": "", "error": None,
+        "source_language": "Hindi", "target_language": "English", "created": 0, "stems": {"mode": "basic"},
+        "segments": [{"id": 1, "speaker": "A", "gender": "Male", "start": 1.0, "end": 3.0, "text": "x", "translation": "y"}],
+        "speakers": {"A": {"voice": {"voice_id": "va"}}},
+    }
+    proj["lines"] = {"1": {"file": "1.wav", "duration": 2.0, "rev": 1, "sig": dp._signature(proj, proj["segments"][0])}}
+    e = ed.seed(proj)
+    next(t for t in e["tracks"] if t["id"] == "A2")["duck"] = {"on": True, "amount": -12, "attack": 0.2, "release": 0.2}
+    next(c for c in e["clips"] if c["id"] == "A2")["fade_out"] = 1.0
+    e["master"] = {"volume": 0.5}
+    proj["edit"] = e
+    dp._projects[pid] = proj
+    dp._save(proj)
+    app.dependency_overrides[get_current_user_from_token] = lambda: SimpleNamespace(id="u1", email="a@b.c")
+    try:
+        with TestClient(app) as c:
+            assert c.post(f"/api/dubbing/projects/{pid}/mix").status_code == 200
+            for _ in range(400):
+                j = c.get(f"/api/dubbing/projects/{pid}").json()
+                if j["status"] not in dp.BUSY:
+                    break
+                time.sleep(0.05)
+            assert j["outputs"].get("mixed") == "mixed.mp3", j
+            mixed, sr = sf.read(str(pdir / "out" / "mixed.mp3"))
+            level = lambda a, b: float(np.median(np.abs(mixed[int(a * sr):int(b * sr), 0])))
+            assert abs(level(3.6, 4.4) - 0.1) < 0.015      # master 0.5 on a 0.2 background
+            assert abs(level(1.5, 2.5) - 0.1 * 0.2512) < 0.01  # ducked by 12 dB under the line
+            assert level(5.6, 5.9) < 0.04                    # fading out over the last second
+            assert not list((pdir / "out").glob("background_*.wav")) and not (pdir / "out" / "dub_exact.wav").exists()
+    finally:
+        app.dependency_overrides.clear()

@@ -5,6 +5,9 @@ import {
   clipEnd, clipLength, clipOut, isEditable, moveClips, trimClips, slipClips, rollEdit, razor, snapTargets, nearestSnap,
   audible, timecode, expandLinked, linkGroup, clipsAt, gapAt, leftNeighbour, rightNeighbour, sequenceEnd,
 } from './editModel';
+import {
+  clipDb, setClipLevels, addKeyframe, moveKeyframe, removeKeyframe, duckPoints, speechRegions, interpPoints, setTrackDuck, fmtDb,
+} from './audioModel';
 
 export const LABEL_W = 176;
 const RULER_H = 28;
@@ -62,6 +65,55 @@ function ClipWave({ peaks, span, clip, len, pps, view, height, color }) {
   return <canvas ref={ref} className="absolute bottom-0 pointer-events-none" style={{ left: a - left, width: w, height }} />;
 }
 
+// Volume line over an audio clip (Premiere's rubber band). Level scale: +12 dB at the top, -40 dB at the bottom.
+const DB_TOP = 12; const DB_RANGE = 52;
+const dbY = (db, h) => ((DB_TOP - Math.max(DB_TOP - DB_RANGE, Math.min(DB_TOP, db))) / DB_RANGE) * h;
+export const pxToDb = (dy, h) => (dy * DB_RANGE) / h;
+function VolumeLine({ clip, len, pps, view, height, duck, onDown }) {
+  const left = clip.start * pps;
+  const a = Math.max(0, view.left - LABEL_W - left);
+  const b = Math.min(len * pps, view.left + view.width - left);
+  if (b <= a) return null;
+  const fi = clip.fade_in || 0; const fo = clip.fade_out || 0;
+  const level = (x) => {
+    let db = clipDb(clip, x);
+    if (fi > 0 && x < fi) db += 20 * Math.log10(Math.max(1e-4, Math.sin((Math.PI / 2) * (x / fi))));
+    if (fo > 0 && len - x < fo) db += 20 * Math.log10(Math.max(1e-4, Math.sin((Math.PI / 2) * ((len - x) / fo))));
+    return db;
+  };
+  const pts = []; const duckPts = [];
+  const step = Math.max(2, (b - a) / 600);
+  for (let px = a; px <= b + 0.01; px += step) {
+    const x = Math.min(len, px / pps);
+    const db = level(x);
+    pts.push(`${px.toFixed(1)},${dbY(db, height).toFixed(1)}`);
+    if (duck) duckPts.push(`${px.toFixed(1)},${dbY(db + interpPoints(duck, clip.start + x), height).toFixed(1)}`);
+  }
+  const kfs = (clip.keyframes || []).map((k, i) => ({ i, x: (k.t - clip.in) * pps, y: dbY(clipDb(clip, k.t - clip.in), height) }))
+    .filter((k) => k.x >= a - 6 && k.x <= b + 6 && k.x >= 0 && k.x <= len * pps);
+  const fadeIn = fi * pps; const fadeOut = len * pps - fo * pps;
+  return (
+    <svg className="absolute left-0 top-0 overflow-visible z-[2]" width={Math.max(1, len * pps)} height={height} style={{ pointerEvents: 'none' }}>
+      {fi > 0 ? <polygon points={`0,0 ${fadeIn},0 0,${height}`} fill="var(--kt-s0)" opacity="0.35" /> : null}
+      {fo > 0 ? <polygon points={`${len * pps},0 ${fadeOut},0 ${len * pps},${height}`} fill="var(--kt-s0)" opacity="0.35" /> : null}
+      {duck ? <polyline points={duckPts.join(' ')} fill="none" stroke="var(--kt-warn)" strokeWidth="1" strokeDasharray="3 3" opacity="0.8" /> : null}
+      <polyline points={pts.join(' ')} fill="none" stroke="var(--kt-warn)" strokeWidth="1.5" />
+      <polyline points={pts.join(' ')} fill="none" stroke="transparent" strokeWidth="10" style={{ pointerEvents: 'stroke', cursor: 'ns-resize' }}
+        onPointerDown={(e) => onDown(e, 'gain')}><title>Drag to change the clip gain · Ctrl+click to add a keyframe</title></polyline>
+      {kfs.map((k) => (
+        <rect key={k.i} x={k.x - 4} y={k.y - 4} width="8" height="8" transform={`rotate(45 ${k.x} ${k.y})`} fill="var(--kt-warn)" stroke="var(--kt-s0)"
+          style={{ pointerEvents: 'all', cursor: 'move' }} onPointerDown={(e) => onDown(e, 'kf', k.i)} onDoubleClick={(e) => onDown(e, 'kf-remove', k.i)}>
+          <title>Drag to move · Alt+click or double-click to remove</title></rect>
+      ))}
+      {[['in', fadeIn], ['out', fadeOut]].map(([side, x]) => (x >= a - 6 && x <= b + 6 ? (
+        <rect key={side} x={x - 4} y={0} width="8" height="8" fill="var(--kt-s5)" stroke="var(--kt-warn)"
+          style={{ pointerEvents: 'all', cursor: 'ew-resize' }} onPointerDown={(e) => onDown(e, `fade-${side}`)}>
+          <title>{`Drag to set the fade ${side}`}</title></rect>
+      ) : null))}
+    </svg>
+  );
+}
+
 export default function Timeline({
   edit, ctx, fps, pps, setPps, minPps, maxPps, getTime, seek, selection, setSelection, dispatch, snapping,
   peaks, linePeaks, palette, filename, scrollToRef, playing, tool, linked, gap, setGap,
@@ -93,6 +145,11 @@ export default function Timeline({
     return m;
   }, [edit.clips]);
   const sel = useMemo(() => new Set(selection), [selection]);
+  const duckOf = useMemo(() => {
+    const m = {};
+    for (const t of edit.tracks) if (t.duck?.on) m[t.id] = duckPoints(speechRegions(edit, ctx), t.duck);
+    return m;
+  }, [edit, ctx]);
   const t0 = view.left / pps;
   const t1 = (view.left + view.width) / pps;
 
@@ -192,7 +249,21 @@ export default function Timeline({
   const begin = (e, d) => {
     e.currentTarget.setPointerCapture(e.pointerId);
     dispatch({ type: 'begin' });
-    setDrag({ ...d, x0: e.clientX, base: edit, started: false, targets: snapTargets(edit, ctx, getTime(), new Set(d.ids || [d.id])) });
+    setDrag({ ...d, x0: e.clientX, y0: e.clientY, base: edit, started: false, targets: snapTargets(edit, ctx, getTime(), new Set(d.ids || [d.id])) });
+  };
+  // the volume line: gain, keyframes and fades
+  const onLevelDown = (e, c, part, index, h) => {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    if (!isEditable(c, edit)) return;
+    setSelection([c.id]); setGap(null);
+    if (part === 'kf-remove' || (part === 'kf' && e.altKey)) { dispatch({ type: 'commit', edit: removeKeyframe(edit, c.id, index) }); return; }
+    if (part === 'gain' && (e.ctrlKey || e.metaKey)) {
+      const r = e.currentTarget.ownerSVGElement?.getBoundingClientRect() || e.currentTarget.getBoundingClientRect();
+      dispatch({ type: 'commit', edit: addKeyframe(edit, c.id, Math.max(0, (e.clientX - r.left) / pps)) });
+      return;
+    }
+    begin(e, { mode: part, id: c.id, ids: [c.id], index, h });
   };
   const onClipDown = (e, c, part) => {
     if (e.button !== 0) return;
@@ -257,11 +328,34 @@ export default function Timeline({
       return;
     }
     const px = e.clientX - drag.x0;
-    if (!drag.started && Math.abs(px) < DRAG_PX) return;
+    const py = e.clientY - (drag.y0 ?? e.clientY);
+    if (!drag.started && Math.hypot(px, py) < DRAG_PX) return;
     if (!drag.started) setDrag((d) => ({ ...d, started: true }));
     const dt = px / pps;
     const snap = snapping !== (e.ctrlKey || e.metaKey) ? { targets: drag.targets, threshold: SNAP_PX / pps } : null;
     let res;
+    if (drag.mode === 'gain' || drag.mode === 'kf' || drag.mode.startsWith('fade-')) {
+      const b = drag.base.clips.find((x) => x.id === drag.id);
+      let next; let text;
+      if (drag.mode === 'gain') {
+        next = setClipLevels(drag.base, [drag.id], { gain: (b.gain || 0) - pxToDb(py, drag.h) }, ctx);
+        text = `Gain ${fmtDb(next.clips.find((x) => x.id === drag.id).gain)} dB`;
+      } else if (drag.mode === 'kf') {
+        const k = b.keyframes[drag.index];
+        const t = Math.max(b.in, Math.min(clipOut(b, ctx), k.t + px / pps));
+        next = moveKeyframe(drag.base, drag.id, drag.index, t, k.db - pxToDb(py, drag.h));
+        const nk = next.clips.find((x) => x.id === drag.id).keyframes[drag.index];
+        text = `${timecode(b.start + nk.t - b.in, fps)} · ${fmtDb(nk.db + (b.gain || 0))} dB`;
+      } else {
+        const side = drag.mode === 'fade-in' ? 'fade_in' : 'fade_out';
+        const f = (b[side] || 0) + (side === 'fade_in' ? px : -px) / pps;
+        next = setClipLevels(drag.base, [drag.id], { [side]: Math.max(0, f) }, ctx);
+        text = `Fade ${side === 'fade_in' ? 'in' : 'out'} ${next.clips.find((x) => x.id === drag.id)[side].toFixed(2)}s`;
+      }
+      dispatch({ type: 'preview', edit: next });
+      setTip({ x: e.clientX, y: e.clientY, text });
+      return;
+    }
     if (drag.mode === 'move') res = moveClips(drag.base, drag.ids, dt, ctx, snap);
     else if (drag.mode === 'trim') res = trimClips(drag.base, drag.ids, drag.edge, dt, ctx, snap, { grab: drag.id, ripple: drag.ripple });
     else if (drag.mode === 'slip') res = slipClips(drag.base, drag.ids, dt, ctx);
@@ -303,6 +397,11 @@ export default function Timeline({
     <div className="absolute right-0 top-0 bottom-0 w-[6px] hover:bg-[var(--kt-text)]/30 z-[1]" style={{ cursor: edgeCursor }} onPointerDown={(e) => onClipDown(e, c, 'right')} />
   </> : null);
 
+  const levels = (c, track, h) => (tool === 'select' && track.kind === 'audio' && isEditable(c, edit) && clipLength(c, ctx) * pps >= 24 ? (
+    <VolumeLine clip={c} len={clipLength(c, ctx)} pps={pps} view={view} height={h - 10} duck={duckOf[track.id]}
+      onDown={(e, part, index) => onLevelDown(e, c, part, index, h - 10)} />
+  ) : null);
+
   const renderClip = (c, track, h) => {
     const start = c.start; const len = clipLength(c, ctx); const end = start + len;
     if (end < t0 - 2 || start > t1 + 2) return null;
@@ -319,6 +418,7 @@ export default function Timeline({
           {track.kind === 'video'
             ? <div className="absolute top-0 bottom-0 inline-flex items-center gap-1.5 px-2 text-[11px] text-[var(--kt-muted)] whitespace-nowrap pointer-events-none" style={{ left: Math.max(0, view.left - left) }}><Film size={12} />{filename} <span className="text-[var(--kt-faint)]" style={{ fontFamily: 'var(--kt-font-mono)' }}>{timecode(c.in, fps)}</span></div>
             : <ClipWave peaks={track.role === 'background' ? peaks.background : peaks.original} span={ctx.duration} clip={c} len={len} pps={pps} view={view} height={h - 8} color={withAlpha(color, 0.75)} />}
+          {levels(c, track, h)}
           {edges(c)}
         </div>
       );
@@ -336,6 +436,7 @@ export default function Timeline({
         }}
         title={`${seg.speaker || ''} · ${seg.translation || seg.text || ''}`}>
         {audio.ready && lp ? <ClipWave peaks={lp.peaks} span={lp.duration} clip={c} len={len} pps={pps} view={view} height={h - 22} color={withAlpha(color, 0.9)} /> : null}
+        {levels(c, track, h)}
         <div className="relative flex items-center gap-1 px-1.5 h-[16px] text-[10px] leading-[16px] text-[var(--kt-text)] whitespace-nowrap pointer-events-none">
           {status === 'stale' ? <span className="h-1.5 w-1.5 rounded-full shrink-0 bg-[var(--kt-warn)]" title="Changed since generated" /> : null}
           {status === 'over' ? <span className="h-1.5 w-1.5 rounded-full shrink-0 bg-[var(--kt-danger)]" title="Longer than its slot" /> : null}
@@ -393,6 +494,7 @@ export default function Timeline({
                 </> : null}
                 <HeadBtn on={t.locked} title={t.locked ? 'Unlock this track' : 'Lock this track: its clips cannot be edited, and ripple edits leave it in place'} onClick={() => toggleTrack(t, 'locked')}>{t.locked ? <Lock size={10} /> : <Unlock size={10} />}</HeadBtn>
                 {t.role === 'original' ? <span className="text-[9px] text-[var(--kt-faint)] ml-1">reference</span> : null}
+                {t.role === 'background' ? <HeadBtn on={t.duck?.on} title="Duck: lower the background while dub lines play (amount in the Mixer)" onClick={() => dispatch({ type: 'commit', edit: setTrackDuck(edit, t.id, { on: !t.duck?.on }) })}>Duck</HeadBtn> : null}
               </div>
             </div>
             <div className={`relative shrink-0 ${t.locked ? 'bg-[repeating-linear-gradient(135deg,transparent_0_8px,var(--kt-s1)_8px_16px)]' : ''}`} style={{ width: width + 200, cursor: tool === 'razor' ? 'crosshair' : undefined }} onPointerDown={(e) => onBgDown(e, t.id)}>

@@ -13,6 +13,8 @@ import Timeline, { TOOLS } from './Timeline';
 import ProgramMonitor from './ProgramMonitor';
 import AssetsPanel from './AssetsPanel';
 import useSequencePlayer from './useSequencePlayer';
+import AudioMixer from './AudioMixer';
+import { setClipLevels, addKeyframe, moveKeyframe, removeKeyframe, clearKeyframes } from './audioModel';
 
 const SHORTCUTS = [
   ['Playback', [['Space', 'Play or pause'], ['J / K / L', 'Shuttle back, stop, forward (press again for faster)'], ['Left / Right', 'One frame (Shift: five frames)'],
@@ -22,6 +24,8 @@ const SHORTCUTS = [
   ['Editing', [['Ctrl + K', 'Cut at the playhead (selected clips, or all)'], ['Ctrl + Shift + K', 'Cut every track at the playhead'], ['Delete', 'Remove clips and leave a gap, or close a selected gap'],
     ['Shift + Delete', 'Ripple delete: remove clips and close the gap'], ['Q / W', 'Ripple trim from the previous edit to the playhead / from the playhead to the next edit'],
     ['Alt + Left / Right', 'Nudge selected clips a frame (Shift: five)'], ['Shift + E', 'Turn selected clips on or off'], ['Ctrl + Z / Ctrl + Shift + Z', 'Undo / redo']]],
+  ['Volume', [['Drag the yellow line', 'Clip gain'], ['Ctrl + click the line', 'Add a keyframe'], ['Drag / Alt + click a keyframe', 'Move / remove it'],
+    ['Drag a corner square', 'Fade in or out'], ['Mixer tab', 'Track faders, master, ducking'], ['Double-click a fader', 'Back to 0 dB']]],
   ['Timeline', [['S', 'Snapping on or off'], ['Ctrl while dragging', 'Invert snapping for this drag'], ['= / -', 'Zoom in or out'], ['\\', 'Zoom to fit'],
     ['Ctrl + scroll', 'Zoom around the pointer'], ['Click empty track space', 'Select the gap there'], ['Ctrl + A / Esc', 'Select all / deselect'], ['Ctrl + S', 'Save now'], ['?', 'This list']]],
 ];
@@ -182,6 +186,19 @@ export default function EditorWorkspace({ projectId, project, mediaUrl, dirtySeg
     const r = putBackLine(edit, seg, ctx);
     if (r.error) setError(r.error); else { commit(r.edit); setError(''); }
   };
+  // clip volume from the inspector (the timeline's volume line edits the same values)
+  const onLevels = (id, patch) => commit(setClipLevels(edit, [id], patch, ctx));
+  const onKeyframes = (action, id, ...args) => {
+    const c = edit.clips.find((x) => x.id === id);
+    if (!c) return;
+    if (action === 'add') {
+      const [x, len] = args;
+      if (x < 0 || x > len) { setError('Move the playhead over this clip to add a keyframe there.'); return; }
+      commit(addKeyframe(edit, id, x));
+    } else if (action === 'set') commit(moveKeyframe(edit, id, args[0], c.keyframes[args[0]].t, args[1]));
+    else if (action === 'remove') commit(removeKeyframe(edit, id, args[0]));
+    else if (action === 'clear') commit(clearKeyframes(edit, id));
+  };
   const regenerate = (sid) => wrap(async () => {
     if (dirtySegments) await saveSegments();
     await send('POST', `/projects/${projectId}/speak`, { ids: [sid] });
@@ -275,7 +292,8 @@ export default function EditorWorkspace({ projectId, project, mediaUrl, dirtySeg
           <AssetsPanel project={project} edit={edit} ctx={ctx} fps={fps} selection={selection} palette={palette} tab={panelTab} setTab={setPanelTab}
             onPickClip={(id) => { pickClip(id); }} onClipTimes={(id, patch) => commit(setClipTimes(edit, id, patch, ctx))}
             onToggleClip={(ids) => commit(toggleDisabled(edit, ids))} onRegenerate={regenerate} busy={busy || running}
-            removed={removed} onPutBack={putBack} />
+            removed={removed} onPutBack={putBack} getTime={getTime} onLevels={onLevels} onKeyframes={onKeyframes}
+            mixer={<AudioMixer edit={edit} dispatch={dispatch} palette={palette} meters={sp.meters} />} />
         </div>
         <div className="flex-1 min-w-0">
           <ProgramMonitor mediaUrl={mediaUrl} isVideo={project.is_video} player={player} black={black} fps={fps} duration={seqEnd} getTime={getTime}
@@ -322,10 +340,10 @@ export default function EditorWorkspace({ projectId, project, mediaUrl, dirtySeg
 
       {help ? (
         <div className="absolute inset-0 z-50 bg-black/50 grid place-items-center p-4" onClick={() => setHelp(false)}>
-          <div role="dialog" aria-label="Keyboard shortcuts" className="max-w-4xl w-full max-h-full overflow-auto rounded-xl border border-[var(--kt-s5)] bg-[var(--kt-s1)] p-5" onClick={(e) => e.stopPropagation()}>
+          <div role="dialog" aria-label="Keyboard shortcuts" className="max-w-6xl w-full max-h-full overflow-auto rounded-xl border border-[var(--kt-s5)] bg-[var(--kt-s1)] p-5" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-3"><div className="font-semibold text-sm">Keyboard shortcuts</div>
               <button type="button" aria-label="Close" onClick={() => setHelp(false)} className="cursor-pointer text-[var(--kt-faint)] hover:text-[var(--kt-text)]"><X size={15} /></button></div>
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-5">
+            <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-5 gap-5">
               {SHORTCUTS.map(([group, rows]) => (
                 <div key={group}><div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--kt-faint)] mb-2">{group}</div>
                   <dl className="flex flex-col gap-1.5 text-xs">{rows.map(([keys, what]) => (

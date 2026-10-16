@@ -7,12 +7,17 @@ The edit is a list of tracks and clips:
           (`out` None = to the end of the source). `anchor` remembers the line's own start (start + shift) when the clip
           was last placed, so retiming a line elsewhere (Transcript tab, shift slider) moves its clips by the same amount.
           Clips with the same `link` (video and its audio pieces) are selected, cut and trimmed together in the editor.
+          Audio levels on a clip: `gain` (dB), `fade_in` / `fade_out` (seconds, equal-power curves) and `keyframes`
+          [{t, db}] at source times (so they stay with the sound when the clip is slipped or cut), interpolated in dB.
+  tracks also carry `volume` (fader, linear 0..2) and, for the original and background, `duck`
+          {on, amount (dB), attack, release}: the track dips while any dub line plays.
+  master         {volume}: the master fader, applied to the whole mix.
   removed_lines  lines taken off the timeline on purpose (deleted or rippled away); they are not put back automatically.
   seeded         media tracks that have had their starting clip, so a track the user emptied stays empty.
 A line clip always sits on its speaker's track; changing a line's speaker moves its clips there. A line can have several
 clips (cut with the razor). Media tracks can be cut, moved and trimmed like any other.
 """
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 VERSION = 2
 MEDIA_TRACKS = ("V1", "A1", "A2")
@@ -44,7 +49,7 @@ def _tracks(p: Dict[str, Any], old: Optional[List[Dict[str, Any]]] = None) -> Li
         base = {"id": tid, "kind": kind, "role": role, "name": name, "mute": False, "solo": False, "locked": False, "volume": 1.0}
         base.update(extra)
         prev = keep.get(tid) or {}
-        for k in ("mute", "solo", "locked", "volume"):
+        for k in ("mute", "solo", "locked", "volume", "duck"):
             if k in prev:
                 base[k] = prev[k]
         return base
@@ -115,7 +120,8 @@ def reconcile(p: Dict[str, Any], edit: Dict[str, Any]) -> Dict[str, Any]:
     for sid, seg in segs.items():
         if sid not in have_lines and sid not in removed:
             clips.append(_line_clip(seg))
-    return {"version": VERSION, "tracks": tracks, "clips": clips, "removed_lines": removed, "seeded": seeded}
+    master = {"volume": float((edit.get("master") or {}).get("volume", 1.0))}
+    return {"version": VERSION, "tracks": tracks, "clips": clips, "removed_lines": removed, "seeded": seeded, "master": master}
 
 
 def _num(v, lo: float, hi: float) -> float:
@@ -140,8 +146,13 @@ def clean(p: Dict[str, Any], raw: Any, line_lengths: Dict[int, float]) -> Dict[s
     tracks = []
     for t in raw["tracks"]:
         if isinstance(t, dict) and isinstance(t.get("id"), str):
-            tracks.append({"id": t["id"][:60], "mute": bool(t.get("mute")), "solo": bool(t.get("solo")),
-                           "locked": bool(t.get("locked")), "volume": _num(t.get("volume", 1.0), 0.0, 2.0)})
+            tr = {"id": t["id"][:60], "mute": bool(t.get("mute")), "solo": bool(t.get("solo")),
+                  "locked": bool(t.get("locked")), "volume": _num(t.get("volume", 1.0), 0.0, 2.0)}
+            d = t.get("duck")
+            if isinstance(d, dict):
+                tr["duck"] = {"on": bool(d.get("on")), "amount": _num(d.get("amount", -12.0), -40.0, 0.0),
+                              "attack": _num(d.get("attack", 0.25), 0.0, 3.0), "release": _num(d.get("release", 0.5), 0.0, 5.0)}
+            tracks.append(tr)
     clips = []
     seen = set()
     for c in raw["clips"]:
@@ -154,6 +165,15 @@ def clean(p: Dict[str, Any], raw: Any, line_lengths: Dict[int, float]) -> Dict[s
         out = {"id": cid, "track": str(c.get("track") or "")[:60], "source": c["source"], "disabled": bool(c.get("disabled"))}
         if c.get("link"):
             out["link"] = str(c["link"])[:40]
+        if c.get("gain") is not None:
+            out["gain"] = _num(c["gain"], -60.0, 20.0)
+        for k in ("fade_in", "fade_out"):
+            if c.get(k) is not None:
+                out[k] = _num(c[k], 0.0, 600.0)
+        if isinstance(c.get("keyframes"), list) and c["keyframes"]:
+            kfs = [{"t": _num(k.get("t"), 0.0, limit), "db": _num(k.get("db", 0.0), -60.0, 20.0)}
+                   for k in c["keyframes"][:500] if isinstance(k, dict)]
+            out["keyframes"] = sorted(kfs, key=lambda k: k["t"])
         if c["source"] == "line":
             if not isinstance(c.get("line"), int):
                 continue
@@ -175,7 +195,8 @@ def clean(p: Dict[str, Any], raw: Any, line_lengths: Dict[int, float]) -> Dict[s
         clips.append(out)
     removed = [i for i in raw.get("removed_lines") or [] if isinstance(i, int)]
     seeded = [t for t in raw.get("seeded") or [] if t in MEDIA_TRACKS]
-    return reconcile(p, {"version": VERSION, "tracks": tracks, "clips": clips, "removed_lines": removed, "seeded": seeded})
+    master = {"volume": _num((raw.get("master") or {}).get("volume", 1.0), 0.0, 2.0)}
+    return reconcile(p, {"version": VERSION, "tracks": tracks, "clips": clips, "removed_lines": removed, "seeded": seeded, "master": master})
 
 
 def audible(edit: Dict[str, Any]) -> Dict[str, bool]:
@@ -266,5 +287,89 @@ def line_placements(p: Dict[str, Any], edit: Dict[str, Any], line_meta: Dict[str
         if b - a <= 0.01:
             continue
         placed.append({"id": seg["id"], "speaker": seg["speaker"], "start": float(c["start"]), "offset": a, "duration": b - a,
-                       "file": m["file"], "gain": float(seg.get("gain", 1.0)) * float(vol.get(c["track"], 1.0))})
+                       "file": m["file"], "gain": float(seg.get("gain", 1.0)) * float(vol.get(c["track"], 1.0)),
+                       "clip": c if has_levels(c) else None})
     return placed
+
+
+# --------------------------------------------------------------------------------------------- levels
+# These formulas are mirrored in the editor (frontend/src/components/dubbing/editor/audioModel.js) so the browser preview
+# and the render agree; both test suites check the same numbers.
+def db_to_gain(db):
+    import numpy as np
+    return np.power(10.0, np.asarray(db, dtype="float64") / 20.0)
+
+
+def has_levels(c: Dict[str, Any]) -> bool:
+    return bool(c.get("gain") or c.get("fade_in") or c.get("fade_out") or c.get("keyframes"))
+
+
+def _fade(u):
+    import numpy as np
+    return np.sin(np.pi / 2 * np.clip(u, 0.0, 1.0))
+
+
+def clip_gain(c: Dict[str, Any], x, length: float):
+    """Linear gain of a clip at clip-local times x (seconds from the clip's start): gain, keyframes, fades."""
+    import numpy as np
+    x = np.asarray(x, dtype="float64")
+    db = np.full(x.shape, float(c.get("gain") or 0.0))
+    kfs = c.get("keyframes") or []
+    if kfs:
+        db = db + np.interp(float(c.get("in") or 0.0) + x, [k["t"] for k in kfs], [k["db"] for k in kfs])
+    g = db_to_gain(db)
+    fi, fo = float(c.get("fade_in") or 0.0), float(c.get("fade_out") or 0.0)
+    if fi > 0:
+        g = g * np.where(x < fi, _fade(x / fi), 1.0)
+    if fo > 0:
+        g = g * np.where(length - x < fo, _fade((length - x) / fo), 1.0)
+    return g
+
+
+def speech_regions(p: Dict[str, Any], edit: Dict[str, Any], line_meta: Dict[str, Any]) -> List[tuple]:
+    """Where dub speech plays: (start, end) of every line that is heard, sorted."""
+    return sorted((l["start"], l["start"] + l["duration"]) for l in line_placements(p, edit, line_meta))
+
+
+def duck_points(regions: List[tuple], duck: Dict[str, Any]) -> tuple:
+    """Breakpoints (times, dB) of a ducking envelope: down by `amount` while speech plays, easing in `attack` seconds
+    before it and out `release` seconds after it. Speech closer together than attack + release counts as one stretch."""
+    att, rel, amt = float(duck.get("attack", 0.25)), float(duck.get("release", 0.5)), float(duck.get("amount", -12.0))
+    merged: List[List[float]] = []
+    for a, b in regions:
+        if merged and a - merged[-1][1] < att + rel:
+            merged[-1][1] = max(merged[-1][1], b)
+        else:
+            merged.append([a, b])
+    xs, ys = [], []
+    for a, b in merged:
+        xs += [a - att, a, b, b + rel]
+        ys += [0.0, amt, amt, 0.0]
+    return xs, ys
+
+
+def track_gain_fn(p: Dict[str, Any], edit: Dict[str, Any], track: str, line_meta: Dict[str, Any]) -> Optional[Callable]:
+    """Gain over timeline time for a media track (clip levels, fader, ducking, master), or None when it is 1 everywhere."""
+    import numpy as np
+    dur = float(p.get("duration") or 0)
+    tr = next((t for t in edit.get("tracks") or [] if t["id"] == track), {})
+    vol = float(tr.get("volume", 1.0)) * float((edit.get("master") or {}).get("volume", 1.0))
+    duck = tr.get("duck") if (tr.get("duck") or {}).get("on") else None
+    clips = sorted((c for c in edit.get("clips") or [] if c.get("track") == track and not c.get("disabled")), key=lambda c: c["start"])
+    if not duck and abs(vol - 1.0) < 1e-6 and not any(has_levels(c) for c in clips):
+        return None
+    xs, ys = duck_points(speech_regions(p, edit, line_meta), duck) if duck else ([], [])
+
+    def fn(t):
+        t = np.asarray(t, dtype="float64")
+        g = np.zeros(t.shape)
+        for c in clips:
+            length = _length(c, dur)
+            m = (t >= c["start"]) & (t < c["start"] + length)
+            if m.any():
+                g[m] = clip_gain(c, t[m] - c["start"], length) if has_levels(c) else 1.0
+        g = g * vol
+        if xs:
+            g = g * db_to_gain(np.interp(t, xs, ys, left=0.0, right=0.0))
+        return g
+    return fn

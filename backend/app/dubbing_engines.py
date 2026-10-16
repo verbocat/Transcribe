@@ -452,18 +452,26 @@ def to_wav(src: str, dst: str, tempo: float = 1.0, pitch: float = 0.0) -> float:
     return float(sf.info(dst).duration)
 
 
-def mix_timeline(lines: List[Dict[str, Any]], total_seconds: float, out_wav: str) -> None:
+def mix_timeline(lines: List[Dict[str, Any]], total_seconds: float, out_wav: str, gain: float = 1.0, normalize: bool = True) -> None:
     """Place each line's wav at its start time. Overlaps add together. `offset` skips the start of a line's audio
-    (a trimmed clip); `duration` is how much of it plays."""
+    (a trimmed clip); `duration` is how much of it plays; `clip` (when the clip has levels) shapes it with the clip's
+    gain, keyframes and fades. `gain` scales the whole mix (the master fader). With `normalize` the result is scaled down
+    when it would clip; without it the levels are kept exactly (written as float, for further mixing)."""
+    from app.dubbing_edit import clip_gain
     end = max([total_seconds] + [l["start"] + l["duration"] for l in lines])
     buf = np.zeros(int(end * SAMPLE_RATE) + 1, dtype="float32")
     for l in lines:
         data, _ = sf.read(l["wav"], dtype="float32")
         a = int(float(l.get("offset", 0.0)) * SAMPLE_RATE)
-        data = data[a:a + int(round(float(l["duration"]) * SAMPLE_RATE))] * float(l.get("gain", 1.0))
+        data = data[a:a + int(round(float(l["duration"]) * SAMPLE_RATE))] * float(l.get("gain", 1.0)) * float(gain)
+        if l.get("clip"):
+            data = data * clip_gain(l["clip"], np.arange(len(data)) / SAMPLE_RATE, float(l["duration"])).astype("float32")
         i = int(l["start"] * SAMPLE_RATE)
         n = max(0, min(len(data), len(buf) - i))
         buf[i:i + n] += data[:n]
+    if not normalize:
+        sf.write(out_wav, buf, SAMPLE_RATE, subtype="FLOAT")
+        return
     peak = float(np.max(np.abs(buf))) if len(buf) else 0.0
     if peak > 0.98:
         buf *= 0.98 / peak

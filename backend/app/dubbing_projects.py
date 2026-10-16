@@ -637,12 +637,11 @@ async def mix(pid: str, payload: dict = Body(default={}), current_user: User = D
     duration = float(p["duration"])
     total = edits.sequence_end(p, edit, meta_all)
     on = edits.audible(edit)
-    vol = {t["id"]: t.get("volume", 1.0) for t in edit["tracks"]}
     bg = pdir / "stems" / "background.wav"
     bg_pieces = edits.media_placements(p, edit, "A2")
     if not on.get("A2", True) or not bg_pieces:
         bg = pdir / "stems" / "-"  # the background track is muted, soloed away or emptied in the editor
-    bg_level = bg_gain * float(vol.get("A2", 1.0))  # the Voice-over level times the Background track volume
+    master = float((edit.get("master") or {}).get("volume", 1.0))
     v_pieces = edits.media_placements(p, edit, "V1")
     plain_video = edits.is_identity(v_pieces, duration) and total <= duration + 0.05
 
@@ -652,19 +651,32 @@ async def mix(pid: str, payload: dict = Body(default={}), current_user: User = D
             out_dir = pdir / "out"
             out_dir.mkdir(exist_ok=True)
             tmp = out_dir / "dub.wav"
-            await asyncio.to_thread(eng.mix_timeline, placed, total, str(tmp))
+            await asyncio.to_thread(eng.mix_timeline, placed, total, str(tmp), master)
             await asyncio.to_thread(eng.wav_to_mp3, str(tmp), str(out_dir / "dub.mp3"))
             outputs: Dict[str, Any] = {"audio": "dub.mp3", "speakers": {}, "mixed_at": time.time(), "background_gain": bg_gain, "length": total}
             final_audio = out_dir / "dub.mp3"
             if bg.exists():
                 p.update(percent=40.0, detail="Mixing with the background")
                 bg_src = bg
+                temps = []
                 if not (edits.is_identity(bg_pieces, duration) and abs(total - duration) < 0.05):
                     bg_src = out_dir / "background_edit.wav"
                     await asyncio.to_thread(stems.assemble_track, str(bg), edits.concat_plan(bg_pieces, total), str(bg_src))
-                await asyncio.to_thread(stems.mix_with_background, str(bg_src), str(tmp), bg_level, str(out_dir / "mixed.mp3"))
-                if bg_src != bg:
-                    bg_src.unlink(missing_ok=True)
+                    temps.append(bg_src)
+                levels = edits.track_gain_fn(p, edit, "A2", meta_all)  # clip levels, fader, ducking, master
+                if levels:
+                    p.update(percent=30.0, detail="Applying the background levels and ducking")
+                    shaped = out_dir / "background_levels.wav"
+                    await asyncio.to_thread(stems.apply_gain, str(bg_src), str(shaped), levels)
+                    bg_src = shaped
+                    temps.append(shaped)
+                # the voices at their exact levels (float, no normalising) so the balance with the background is kept
+                exact = out_dir / "dub_exact.wav"
+                await asyncio.to_thread(eng.mix_timeline, placed, total, str(exact), master, False)
+                temps.append(exact)
+                await asyncio.to_thread(stems.mix_with_background, str(bg_src), str(exact), bg_gain, str(out_dir / "mixed.mp3"))
+                for f in temps:
+                    f.unlink(missing_ok=True)
                 outputs["mixed"] = "mixed.mp3"
                 final_audio = out_dir / "mixed.mp3"
             tmp.unlink(missing_ok=True)

@@ -257,9 +257,10 @@ export function razor(edit, idList, t, ctx) {
   for (const c of edit.clips) {
     if (!ids.has(c.id) || !isEditable(c, edit) || !(t > c.start + MIN_CLIP / 2 && t < clipEnd(c, ctx) - MIN_CLIP / 2)) { out.push(c); continue; }
     const at = r3(c.in + (t - c.start));
-    const right = { ...c, id: newId(c.source === 'line' ? 'L' : 'm'), start: r3(t), in: at };
+    // the fade-in stays with the first piece and the fade-out with the second
+    const right = { ...c, id: newId(c.source === 'line' ? 'L' : 'm'), start: r3(t), in: at, ...(c.fade_in ? { fade_in: 0 } : {}) };
     if (c.link) right.link = (links[c.link] = links[c.link] || newId('k'));
-    out.push({ ...c, out: at }, right);
+    out.push({ ...c, out: at, ...(c.fade_out ? { fade_out: 0 } : {}) }, right);
     cut = true;
   }
   return cut ? { ...edit, clips: out } : edit;

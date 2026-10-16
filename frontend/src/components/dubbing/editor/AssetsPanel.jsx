@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
-import { ChevronDown, ChevronRight, FileVideo, FileAudio, AudioLines, Search, Mic2, Eye, EyeOff, Undo2 } from 'lucide-react';
+import { ChevronDown, ChevronRight, FileVideo, FileAudio, AudioLines, Search, Mic2, Eye, EyeOff, Undo2, Plus, X } from 'lucide-react';
+import { MIN_DB, clipDb, fmtDb } from './audioModel';
 import { clipEnd, clipLength, clipOut, isEditable, sourceLength, timecode } from './editModel';
 
 const inputCls = 'h-7 w-full rounded-md bg-[var(--kt-s2)] border border-[var(--kt-s5)] px-2 text-xs tabular-nums';
@@ -31,8 +32,68 @@ function TimeField({ label, value, onCommit, disabled }) {
   );
 }
 
+// A number field (dB or seconds) that commits on Enter or blur.
+function NumField({ label, value, onCommit, disabled, step = 0.1, suffix }) {
+  const [draft, setDraft] = useState(null);
+  const shown = draft ?? (Number.isFinite(value) ? String(Math.round(value * 100) / 100) : '-∞');
+  const commit = () => { if (draft != null) { const v = Number(draft); if (Number.isFinite(v)) onCommit(v); setDraft(null); } };
+  return (
+    <label className="flex flex-col gap-0.5 text-[10px] text-[var(--kt-faint)]">{label}
+      <span className="relative">
+        <input className={`${inputCls} pr-6`} value={shown} disabled={disabled} inputMode="decimal" step={step}
+          onChange={(e) => setDraft(e.target.value)} onBlur={commit}
+          onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); if (e.key === 'Escape') { setDraft(null); e.currentTarget.blur(); } }} />
+        {suffix ? <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-[var(--kt-faint)] pointer-events-none">{suffix}</span> : null}
+      </span>
+    </label>
+  );
+}
+
+// Clip volume: gain, fades and keyframes (the same values the volume line on the timeline edits).
+function VolumeSection({ clip, ctx, fps, editable, getTime, onLevels, onKeyframes }) {
+  const len = clipLength(clip, ctx);
+  const kfs = clip.keyframes || [];
+  return (
+    <div className="flex flex-col gap-2 border-t border-[var(--kt-s4)] pt-3">
+      <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--kt-faint)]">Volume</div>
+      <label className="flex items-center gap-2 text-[11px] text-[var(--kt-muted)]">Clip gain
+        <input type="range" min={-30} max={12} step="0.5" value={clip.gain || 0} disabled={!editable} aria-label="Clip gain in dB"
+          onChange={(e) => onLevels({ gain: Number(e.target.value) })} onDoubleClick={() => onLevels({ gain: 0 })} title="Double-click for 0 dB"
+          className="flex-1 accent-[var(--kt-accent)]" />
+        <span className="w-12 text-right tabular-nums" style={{ fontFamily: 'var(--kt-font-mono)' }}>{fmtDb(clip.gain || 0)} dB</span>
+      </label>
+      <div className="grid grid-cols-2 gap-2">
+        <NumField label="Fade in" suffix="s" value={clip.fade_in || 0} disabled={!editable} onCommit={(v) => onLevels({ fade_in: v })} />
+        <NumField label="Fade out" suffix="s" value={clip.fade_out || 0} disabled={!editable} onCommit={(v) => onLevels({ fade_out: v })} />
+      </div>
+      <div className="flex items-center justify-between">
+        <span className="text-[11px] text-[var(--kt-muted)]">Keyframes {kfs.length ? `(${kfs.length})` : ''}</span>
+        <span className="flex gap-1">
+          <button type="button" disabled={!editable} onClick={() => onKeyframes('add', getTime() - clip.start, len)} title="Add a keyframe at the playhead (the playhead must be over this clip)"
+            className="h-6 px-1.5 rounded text-[11px] flex items-center gap-1 cursor-pointer border border-[var(--kt-s5)] hover:bg-[var(--kt-s3)] disabled:opacity-40 disabled:cursor-not-allowed"><Plus size={11} />At playhead</button>
+          {kfs.length ? <button type="button" disabled={!editable} onClick={() => onKeyframes('clear')}
+            className="h-6 px-1.5 rounded text-[11px] cursor-pointer border border-[var(--kt-s5)] hover:bg-[var(--kt-s3)]">Clear</button> : null}
+        </span>
+      </div>
+      {kfs.map((k, i) => (
+        <div key={`${i}-${k.t}`} className="grid grid-cols-[1fr_72px_auto] gap-2 items-end">
+          <span className="text-[11px] text-[var(--kt-faint)] pb-1.5 tabular-nums" style={{ fontFamily: 'var(--kt-font-mono)' }}>{timecode(clip.start + k.t - clip.in, fps)}</span>
+          <NumField label="" suffix="dB" value={k.db} disabled={!editable} onCommit={(v) => onKeyframes('set', i, Math.max(MIN_DB, v))} />
+          <button type="button" aria-label="Remove keyframe" disabled={!editable} onClick={() => onKeyframes('remove', i)}
+            className="h-7 w-7 grid place-items-center rounded cursor-pointer text-[var(--kt-faint)] hover:text-[var(--kt-danger)] hover:bg-[var(--kt-s3)]"><X size={12} /></button>
+        </div>
+      ))}
+      <div className="text-[10px] text-[var(--kt-faint)] leading-snug">
+        Level at the clip start: {fmtDb(clipDb(clip, 0))} dB. On the timeline, drag the volume line up or down,
+        Ctrl+click it to add a keyframe, drag a keyframe to move it, Alt+click one to remove it, and drag the corner squares for fades.
+      </div>
+    </div>
+  );
+}
+
 export default function AssetsPanel({
   project, edit, ctx, fps, selection, palette, onPickClip, onClipTimes, onToggleClip, onRegenerate, busy, tab, setTab, removed, onPutBack,
+  mixer, getTime, onLevels, onKeyframes,
 }) {
   const [q, setQ] = useState('');
   const [open, setOpen] = useState({});
@@ -59,7 +120,7 @@ export default function AssetsPanel({
 
   return (
     <section className="h-full min-w-0 flex flex-col bg-[var(--kt-s1)]" aria-label="Assets">
-      <div className="h-8 shrink-0 flex border-b border-[var(--kt-s4)]">{tabBtn('project', 'Project')}{tabBtn('clip', 'Clip')}</div>
+      <div className="h-8 shrink-0 flex border-b border-[var(--kt-s4)]">{tabBtn('project', 'Project')}{tabBtn('clip', 'Clip')}{tabBtn('mixer', 'Mixer')}</div>
       {tab === 'project' ? (
         <div className="flex-1 min-h-0 flex flex-col">
           <div className="p-2 shrink-0">
@@ -113,6 +174,8 @@ export default function AssetsPanel({
             ) : null}
           </div>
         </div>
+      ) : tab === 'mixer' ? (
+        <div className="flex-1 min-h-0">{mixer}</div>
       ) : (
         <div className="flex-1 min-h-0 overflow-auto p-3 flex flex-col gap-3 text-xs">
           {!selectedClip ? <div className="text-[var(--kt-faint)]">Select a clip on the timeline to see and edit it here.</div> : null}
@@ -165,6 +228,10 @@ export default function AssetsPanel({
                   {selectedClip.disabled ? <Eye size={12} /> : <EyeOff size={12} />}{selectedClip.disabled ? 'Turn clip on' : 'Turn clip off'}</button>
               </div>
             </>
+          ) : null}
+          {selectedClip && selectedClip.track !== 'V1' ? (
+            <VolumeSection key={selectedClip.id} clip={selectedClip} ctx={ctx} fps={fps} editable={isEditable(selectedClip, edit)} getTime={getTime}
+              onLevels={(patch) => onLevels(selectedClip.id, patch)} onKeyframes={(action, ...args) => onKeyframes(action, selectedClip.id, ...args)} />
           ) : null}
           {selection.length > 1 && !isGroup ? <div className="text-[var(--kt-faint)]">{selection.length} clips selected. Drag one to move them together, Alt+Left or Right nudges them a frame, Shift+E turns them on or off, Delete removes them.</div> : null}
         </div>
