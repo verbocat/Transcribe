@@ -618,8 +618,9 @@ async def separate_background(pid: str, payload: dict = Body(default={}), curren
 
 @router.post("/{pid}/mix")
 async def mix(pid: str, payload: dict = Body(default={}), current_user: User = Depends(get_current_user_from_token)):
-    """Place every line on the timeline (respecting mute, gain and shift). Writes the dub (voices only), one file per speaker,
-    and, when the background has been separated, the dub over the background plus the video with that audio."""
+    """Render the edit: every line clip where the editor put it, the background and the video as cut in the editor.
+    Writes the dub (voices only), one file per speaker, and, when the background has been separated, the dub over the
+    background plus the video with that audio. The output is as long as the edit."""
     p = _get(pid, current_user)
     _idle(p)
     pdir = _dir(pid)
@@ -633,9 +634,17 @@ async def mix(pid: str, payload: dict = Body(default={}), current_user: User = D
             placed.append(dict(l, wav=str(f)))
     if not placed:
         raise HTTPException(status_code=400, detail="Generate some speech first.")
+    duration = float(p["duration"])
+    total = edits.sequence_end(p, edit, meta_all)
+    on = edits.audible(edit)
+    vol = {t["id"]: t.get("volume", 1.0) for t in edit["tracks"]}
     bg = pdir / "stems" / "background.wav"
-    if not edits.audible(edit).get("A2", True):
-        bg = pdir / "stems" / "-"  # the background track is muted (or another track is soloed) in the editor
+    bg_pieces = edits.media_placements(p, edit, "A2")
+    if not on.get("A2", True) or not bg_pieces:
+        bg = pdir / "stems" / "-"  # the background track is muted, soloed away or emptied in the editor
+    bg_level = bg_gain * float(vol.get("A2", 1.0))  # the Voice-over level times the Background track volume
+    v_pieces = edits.media_placements(p, edit, "V1")
+    plain_video = edits.is_identity(v_pieces, duration) and total <= duration + 0.05
 
     async def run():
         try:
@@ -643,13 +652,19 @@ async def mix(pid: str, payload: dict = Body(default={}), current_user: User = D
             out_dir = pdir / "out"
             out_dir.mkdir(exist_ok=True)
             tmp = out_dir / "dub.wav"
-            await asyncio.to_thread(eng.mix_timeline, placed, float(p["duration"]), str(tmp))
+            await asyncio.to_thread(eng.mix_timeline, placed, total, str(tmp))
             await asyncio.to_thread(eng.wav_to_mp3, str(tmp), str(out_dir / "dub.mp3"))
-            outputs: Dict[str, Any] = {"audio": "dub.mp3", "speakers": {}, "mixed_at": time.time(), "background_gain": bg_gain}
+            outputs: Dict[str, Any] = {"audio": "dub.mp3", "speakers": {}, "mixed_at": time.time(), "background_gain": bg_gain, "length": total}
             final_audio = out_dir / "dub.mp3"
             if bg.exists():
                 p.update(percent=40.0, detail="Mixing with the background")
-                await asyncio.to_thread(stems.mix_with_background, str(bg), str(tmp), bg_gain, str(out_dir / "mixed.mp3"))
+                bg_src = bg
+                if not (edits.is_identity(bg_pieces, duration) and abs(total - duration) < 0.05):
+                    bg_src = out_dir / "background_edit.wav"
+                    await asyncio.to_thread(stems.assemble_track, str(bg), edits.concat_plan(bg_pieces, total), str(bg_src))
+                await asyncio.to_thread(stems.mix_with_background, str(bg_src), str(tmp), bg_level, str(out_dir / "mixed.mp3"))
+                if bg_src != bg:
+                    bg_src.unlink(missing_ok=True)
                 outputs["mixed"] = "mixed.mp3"
                 final_audio = out_dir / "mixed.mp3"
             tmp.unlink(missing_ok=True)
@@ -659,13 +674,17 @@ async def mix(pid: str, payload: dict = Body(default={}), current_user: User = D
                     continue
                 stem = "".join(c if c.isalnum() else "_" for c in name)
                 w = out_dir / f"{stem}.wav"
-                await asyncio.to_thread(eng.mix_timeline, mine, float(p["duration"]), str(w))
+                await asyncio.to_thread(eng.mix_timeline, mine, total, str(w))
                 await asyncio.to_thread(eng.wav_to_mp3, str(w), str(out_dir / f"{stem}.mp3"))
                 w.unlink(missing_ok=True)
                 outputs["speakers"][name] = f"{stem}.mp3"
             if p["is_video"]:
-                p.update(percent=70.0, detail="Putting the new audio on the video")
-                await asyncio.to_thread(eng.mux_video, p["media_path"], str(final_audio), str(out_dir / "dub.mp4"))
+                if plain_video:
+                    p.update(percent=70.0, detail="Putting the new audio on the video")
+                    await asyncio.to_thread(eng.mux_video, p["media_path"], str(final_audio), str(out_dir / "dub.mp4"))
+                else:
+                    p.update(percent=70.0, detail="Rendering the edited video")
+                    await asyncio.to_thread(eng.render_video_track, p["media_path"], edits.concat_plan(v_pieces, total), str(final_audio), str(out_dir / "dub.mp4"))
                 outputs["video"] = "dub.mp4"
             p["outputs"] = outputs
             p.update(status="ready", stage="mixed", percent=100.0, detail="Dub mixed")

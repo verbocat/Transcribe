@@ -138,3 +138,91 @@ def test_edit_endpoints_and_mix_follow_the_edit(monkeypatch, tmp_path):
             assert c.delete(f"/api/dubbing/projects/{pid}/edit").json()["stored"] is False
     finally:
         app.dependency_overrides.clear()
+
+
+def test_media_links_seeding_removed_lines_and_split_lines():
+    p = _project()
+    e = ed.seed(p)
+    assert {c["link"] for c in e["clips"] if c["source"] != "line"} == {"m0"} and e["seeded"] == ["V1", "A1", "A2"]
+    # an edit saved before linking existed gets its media linked and marked as seeded
+    old = {"tracks": e["tracks"], "clips": [dict(c, link=None) if c["source"] != "line" else c for c in e["clips"]]}
+    old.pop("seeded", None)
+    assert all(c["link"] == "m0" for c in ed.reconcile(p, old)["clips"] if c["source"] != "line")
+    # emptying a media track keeps it empty; the line removed on purpose is not put back; a cut line keeps both pieces
+    l1 = next(c for c in e["clips"] if c.get("line") == 1)
+    e["clips"] = [c for c in e["clips"] if c["track"] != "A2" and c.get("line") != 2] + [dict(l1, id="L1b", start=5.0, **{"in": 1.0})]
+    e["removed_lines"] = [2, 99]
+    got = ed.reconcile(p, e)
+    assert not [c for c in got["clips"] if c["track"] == "A2"]
+    assert [c["id"] for c in got["clips"] if c.get("line") == 1] == ["L1", "L1b"] and not [c for c in got["clips"] if c.get("line") == 2]
+    assert got["removed_lines"] == [2]
+    p["segments"][0]["shift"] = 0.5  # retiming the line moves both of its pieces
+    assert [c["start"] for c in ed.reconcile(p, got)["clips"] if c.get("line") == 1] == [1.5, 5.5]
+
+
+def test_media_placements_plan_and_sequence_end():
+    p = _project()
+    e = ed.seed(p)
+    v = next(c for c in e["clips"] if c["id"] == "V1")
+    assert ed.is_identity(ed.media_placements(p, e, "V1"), 10.0)
+    v.update({"out": 4.0})
+    e["clips"].append({"id": "V1b", "track": "V1", "source": "media", "start": 4.0, "in": 6.0, "out": 10.0, "disabled": False})
+    e["clips"].append({"id": "V1c", "track": "V1", "source": "media", "start": 9.0, "in": 0.0, "out": 1.0, "disabled": True})
+    pieces = ed.media_placements(p, e, "V1")
+    assert pieces == [{"start": 0.0, "in": 0.0, "out": 4.0}, {"start": 4.0, "in": 6.0, "out": 10.0}] and not ed.is_identity(pieces, 10.0)
+    assert ed.concat_plan(pieces, 9.0) == [("clip", 0.0, 4.0), ("clip", 6.0, 10.0), ("gap", 1.0)]
+    assert ed.concat_plan([{"start": 2.0, "in": 0.0, "out": 1.0}], 3.0) == [("gap", 2.0), ("clip", 0.0, 1.0)]
+    meta = {"1": {"file": "1.wav", "duration": 2.0}, "2": {"file": "2.wav", "duration": 1.5}}
+    e["clips"] = [c for c in e["clips"] if c["source"] == "line" or c["id"] in ("V1", "V1b")]
+    assert ed.sequence_end(p, e, meta) == 8.0  # video 0-8, lines end at 3.0 and 6.0
+
+
+def test_mix_renders_cut_video_and_background(monkeypatch, tmp_path):
+    import subprocess
+    from app.video_processor import get_ffmpeg_path
+    monkeypatch.setattr(dp, "ROOT", tmp_path)
+    pid = "cut12345"
+    pdir = tmp_path / pid
+    (pdir / "lines").mkdir(parents=True)
+    (pdir / "stems").mkdir()
+    ff = get_ffmpeg_path()
+    subprocess.run([ff, "-y", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc2=size=320x240:rate=25:duration=6",
+                    "-f", "lavfi", "-i", "sine=frequency=300:duration=6", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
+                    "-shortest", str(pdir / "source.mp4")], check=True)
+    sf.write(str(pdir / "stems" / "background.wav"), np.full((44100 * 6, 2), 0.2, dtype="float32"), 44100)
+    sf.write(str(pdir / "lines" / "1.wav"), np.full(eng.SAMPLE_RATE, 0.3, dtype="float32"), eng.SAMPLE_RATE)
+    proj = {
+        "id": pid, "owner": "u1", "filename": "clip.mp4", "media_path": str(pdir / "source.mp4"), "is_video": True,
+        "duration": 6.0, "status": "ready", "stage": "speech", "percent": 100, "detail": "", "error": None,
+        "source_language": "Hindi", "target_language": "English", "created": 0, "stems": {"mode": "basic"},
+        "segments": [{"id": 1, "speaker": "A", "gender": "Male", "start": 0.5, "end": 1.5, "text": "x", "translation": "y"}],
+        "speakers": {"A": {"voice": {"voice_id": "va"}}},
+    }
+    proj["lines"] = {"1": {"file": "1.wav", "duration": 1.0, "rev": 1, "sig": dp._signature(proj, proj["segments"][0])}}
+    # ripple-deleted 2 s to 4 s on the video and background: 0-2 then 4-6 played back to back, so the edit is 4 s long
+    e = ed.seed(proj)
+    for c in list(e["clips"]):
+        if c["source"] != "line":
+            c["out"] = 2.0
+            e["clips"].append(dict(c, id=c["id"] + "b", start=2.0, **{"in": 4.0, "out": 6.0}))
+    proj["edit"] = e
+    dp._projects[pid] = proj
+    dp._save(proj)
+    app.dependency_overrides[get_current_user_from_token] = lambda: SimpleNamespace(id="u1", email="a@b.c")
+    try:
+        with TestClient(app) as c:
+            assert c.post(f"/api/dubbing/projects/{pid}/mix").status_code == 200
+            for _ in range(600):
+                j = c.get(f"/api/dubbing/projects/{pid}").json()
+                if j["status"] not in dp.BUSY:
+                    break
+                time.sleep(0.05)
+            assert j["outputs"]["video"] == "dub.mp4" and j["outputs"]["length"] == 4.0, j
+            mixed, sr = sf.read(str(pdir / "out" / "mixed.mp3"))
+            assert abs(len(mixed) / sr - 4.0) < 0.15
+            info = subprocess.run([ff, "-hide_banner", "-i", str(pdir / "out" / "dub.mp4")], capture_output=True, text=True).stderr
+            import re
+            h, m, s = re.search(r"Duration: (\d+):(\d+):([\d.]+)", info).groups()
+            assert abs(int(h) * 3600 + int(m) * 60 + float(s) - 4.0) < 0.2, info
+    finally:
+        app.dependency_overrides.clear()

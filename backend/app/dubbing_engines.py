@@ -486,3 +486,46 @@ def mux_video(video: str, dub_wav: str, out_mp4: str) -> None:
         raise DubbingError("Could not put the dubbed audio onto the video.")
 
 
+
+
+def probe_video(path: str) -> Dict[str, float]:
+    """Width, height and frame rate of the first video stream (defaults when they cannot be read)."""
+    r = subprocess.run([_ffmpeg(), "-hide_banner", "-i", path], capture_output=True, text=True, errors="replace", timeout=60)
+    line = next((l for l in (r.stderr or "").splitlines() if "Video:" in l), "")
+    size = re.search(r", (\d{2,5})x(\d{2,5})", line)
+    fps = re.search(r"(\d+(?:\.\d+)?) fps", line)
+    w, h = (int(size.group(1)), int(size.group(2))) if size else (1280, 720)
+    f = float(fps.group(1)) if fps else 25.0
+    return {"width": w - w % 2, "height": h - h % 2, "fps": f if 5.0 <= f <= 120.0 else 25.0}
+
+
+def render_video_track(video: str, plan: List[tuple], audio: str, out_mp4: str) -> None:
+    """Build the edited picture from `plan` (("clip", in, out) pieces of the source and ("gap", seconds) of black, back to
+    back, as made by dubbing_edit.concat_plan) and put `audio` under it."""
+    info = probe_video(video)
+    w, h, fps = info["width"], info["height"], info["fps"]
+    norm = f"scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={fps},format=yuv420p"
+    parts, labels = [], []
+    clips = [p for p in plan if p[0] == "clip"]
+    if clips:
+        parts.append(f"[0:v]split={len(clips)}" + "".join(f"[s{i}]" for i in range(len(clips))))
+    k = 0
+    for i, p in enumerate(plan):
+        if p[0] == "clip":
+            parts.append(f"[s{k}]trim=start={p[1]:.3f}:end={p[2]:.3f},setpts=PTS-STARTPTS,{norm}[v{i}]")
+            k += 1
+        else:
+            parts.append(f"color=c=black:s={w}x{h}:r={fps}:d={p[1]:.3f},setsar=1,format=yuv420p[v{i}]")
+        labels.append(f"[v{i}]")
+    parts.append("".join(labels) + f"concat=n={len(labels)}:v=1:a=0[vout]")
+    with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8") as f:
+        f.write(";\n".join(parts))
+        script = f.name
+    try:
+        r = _run([_ffmpeg(), "-y", "-loglevel", "error", "-i", video, "-i", audio, "-filter_complex_script", script,
+                  "-map", "[vout]", "-map", "1:a:0", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
+                  "-c:a", "aac", "-b:a", "192k", "-shortest", "-movflags", "+faststart", out_mp4], timeout=4 * 3600)
+    finally:
+        os.unlink(script)
+    if r.returncode != 0:
+        raise DubbingError("Could not render the edited video: " + r.stderr.decode("utf-8", "replace").strip()[-300:])

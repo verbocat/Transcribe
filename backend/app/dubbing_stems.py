@@ -95,3 +95,35 @@ def mix_with_background(bg_wav: str, dub_wav: str, gain: float, out_mp3: str) ->
     # older ffmpeg without amix normalize=0: amix halves each input, so double both to compensate
     if not run(pre.format(g=gain * 2, v="volume=2,") + chain.format(norm="")):
         raise DubbingError("Could not mix the dub with the background.")
+
+
+def assemble_track(src_wav: str, plan: list, out_wav: str) -> None:
+    """Build an edited audio track from `plan` (("clip", in, out) pieces of `src_wav` and ("gap", seconds) of silence, back
+    to back, as made by dubbing_edit.concat_plan)."""
+    import os
+    import tempfile
+    fmt = "aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo"
+    parts, labels = [], []
+    clips = [p for p in plan if p[0] == "clip"]
+    if clips:
+        parts.append(f"[0:a]asplit={len(clips)}" + "".join(f"[s{i}]" for i in range(len(clips))))
+    k = 0
+    for i, p in enumerate(plan):
+        if p[0] == "clip":
+            parts.append(f"[s{k}]atrim=start={p[1]:.3f}:end={p[2]:.3f},asetpts=PTS-STARTPTS,{fmt}[a{i}]")
+            k += 1
+        else:
+            parts.append(f"anullsrc=r=44100:cl=stereo,atrim=duration={p[1]:.3f},{fmt}[a{i}]")
+        labels.append(f"[a{i}]")
+    if not labels:
+        raise DubbingError("The background track is empty.")
+    parts.append("".join(labels) + f"concat=n={len(labels)}:v=0:a=1[o]")
+    with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8") as f:
+        f.write(";\n".join(parts))
+        script = f.name
+    try:
+        r = _run([_ffmpeg(), "-y", "-loglevel", "error", "-i", src_wav, "-filter_complex_script", script, "-map", "[o]", out_wav], timeout=3600)
+    finally:
+        os.unlink(script)
+    if r.returncode != 0:
+        raise DubbingError("Could not build the edited background: " + r.stderr.decode("utf-8", "replace").strip()[-300:])
