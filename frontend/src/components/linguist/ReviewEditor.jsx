@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, Download, Loader2, Save, AlertTriangle, Check } from 'lucide-react';
 import { API_BASE } from '../../config';
-import { buildSavedDraft, cps, cueAt, fmtTime, parseTime, toSrt, trackSet } from './reviewModel';
+import { buildSavedDraft, cps, cueAt, fmtTime, parseTime, qcIssues, suggestionText, toSrt, trackSet } from './reviewModel';
 
 // The linguist's editor: the shared video, every cue with editable text and timing, saved back to the shared project.
 // Everything here talks to /api/shares only; there is no upload, generation, translation or AI call in this file.
@@ -42,6 +42,7 @@ export default function ReviewEditor({ projectId, onBack }) {
   const [tracks, setTracks] = useState({});
   const [codes, setCodes] = useState([]);
   const [track, setTrack] = useState(null);
+  const [issues, setIssues] = useState([]); // the coordinator's QC findings; resolving one is saved with the project
   const [revision, setRevision] = useState(1);
   const [state, setState] = useState('loading'); // loading | saved | dirty | saving | conflict | error
   const [error, setError] = useState('');
@@ -51,14 +52,14 @@ export default function ReviewEditor({ projectId, onBack }) {
   const videoRef = useRef(null);
   const timerRef = useRef(null);
   const latest = useRef({});
-  latest.current = { draft, tracks, revision, state };
+  latest.current = { draft, tracks, revision, state, issues };
 
   const load = useCallback(async () => {
     setState('loading'); setError('');
     try {
       const data = await api(`/projects/${projectId}`);
       const t = trackSet(data.draft);
-      setMeta(data.project); setDraft(data.draft); setTracks(t.tracks); setCodes(t.codes); setTrack(t.active);
+      setMeta(data.project); setDraft(data.draft); setIssues(qcIssues(data.draft)); setTracks(t.tracks); setCodes(t.codes); setTrack(t.active);
       setRevision(data.project.revision); setState('saved');
       api(`/projects/${projectId}/video-link`).then((l) => setVideoUrl(l.available ? `${API_BASE}${l.url}` : null)).catch(() => setVideoUrl(null));
     } catch (e) { setError(e.message); setState('error'); }
@@ -66,22 +67,24 @@ export default function ReviewEditor({ projectId, onBack }) {
   useEffect(() => { load(); }, [load]);
 
   const save = useCallback(async () => {
-    const { draft: d, tracks: t, revision: r } = latest.current;
+    const { draft: d, tracks: t, revision: r, issues: qi } = latest.current;
     if (!d) return;
     clearTimeout(timerRef.current);
     setState('saving'); setError('');
     try {
-      const out = await api(`/projects/${projectId}/draft`, { method: 'PUT', body: JSON.stringify({ draft: buildSavedDraft(d, t), base_revision: r }) });
+      const out = await api(`/projects/${projectId}/draft`, { method: 'PUT', body: JSON.stringify({ draft: buildSavedDraft(d, t, qi), base_revision: r }) });
       setRevision(out.revision);
-      setState((s) => (latest.current.tracks === t ? 'saved' : 'dirty'));
-      if (latest.current.tracks !== t) timerRef.current = setTimeout(save, AUTOSAVE_MS);
+      const unchanged = latest.current.tracks === t && latest.current.issues === qi;
+      setState(unchanged ? 'saved' : 'dirty');
+      if (!unchanged) timerRef.current = setTimeout(save, AUTOSAVE_MS);
     } catch (e) {
       setError(e.message); setState(e.status === 409 ? 'conflict' : 'error');
     }
   }, [projectId]);
 
-  const touch = (next) => {
-    setTracks(next);
+  const touch = (next, nextIssues) => {
+    if (next) setTracks(next);
+    if (nextIssues) setIssues(nextIssues);
     setState('dirty');
     clearTimeout(timerRef.current);
     timerRef.current = setTimeout(save, AUTOSAVE_MS);
@@ -95,6 +98,15 @@ export default function ReviewEditor({ projectId, onBack }) {
 
   const events = useMemo(() => tracks[track] || [], [tracks, track]);
   const edit = (i, patch) => touch({ ...tracks, [track]: events.map((e, k) => (k === i ? { ...e, ...patch } : e)) });
+  const trackIssues = useMemo(() => issues.filter((q) => (q.track || '__main') === track), [issues, track]);
+  const openCount = trackIssues.filter((q) => q.status === 'open').length;
+  const resolve = (q, status) => touch(null, issues.map((x) => (x === q ? { ...x, status } : x)));
+  const useSuggestion = (q) => {
+    const i = q.index - 1;
+    if (!events[i]) return;
+    touch({ ...tracks, [track]: events.map((e, k) => (k === i ? { ...e, text: suggestionText(q), ...(q.suggestion_end != null ? { end_time: q.suggestion_end } : {}) } : e)) },
+      issues.map((x) => (x === q ? { ...x, status: 'resolved' } : x)));
+  };
   const setStart = (i, t) => {
     const end = events[i].end_time ?? events[i].end;
     if (t >= end) { setError('The start must be before the end.'); return; }
@@ -157,6 +169,11 @@ export default function ReviewEditor({ projectId, onBack }) {
             ))}
           </div>
         )}
+        {trackIssues.length > 0 && (
+          <span className={`text-[12px] px-2 py-1 rounded-md ${openCount ? 'bg-[var(--kt-warn)]/15 text-[var(--kt-warn)]' : 'bg-[var(--kt-success)]/15 text-[var(--kt-success)]'}`}>
+            {openCount ? `${openCount} QC finding${openCount === 1 ? '' : 's'} to check` : 'All QC findings resolved'}
+          </span>
+        )}
         <div className="ml-auto flex items-center gap-3">
           <span className={`text-[12px] inline-flex items-center gap-1 ${state === 'saved' ? 'text-[var(--kt-success)]' : state === 'conflict' || state === 'error' ? 'text-[var(--kt-danger)]' : 'text-[var(--kt-muted)]'}`}>
             {state === 'saved' ? <Check size={13} /> : state === 'saving' ? <Loader2 size={13} className="animate-spin" /> : state === 'conflict' || state === 'error' ? <AlertTriangle size={13} /> : null}{label}
@@ -211,6 +228,25 @@ export default function ReviewEditor({ projectId, onBack }) {
                         onChange={(ev) => edit(i, { text: ev.target.value })}
                         className="w-full rounded-lg border border-[var(--kt-s4)] bg-[var(--kt-s0)] px-3 py-2 text-[14px] leading-relaxed focus:outline-none focus:border-[var(--kt-accent)] resize-y"
                       />
+                      {trackIssues.filter((q) => q.index === i + 1).map((q, n) => (
+                        <div key={n} onClick={(ev) => ev.stopPropagation()}
+                          className={`rounded-lg border px-3 py-2 text-[12.5px] ${q.status === 'open' ? 'border-[var(--kt-warn)]/40 bg-[var(--kt-warn)]/5' : 'border-[var(--kt-s3)] opacity-60'}`}>
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="font-medium text-[var(--kt-text)]">{q.title}{q.severity === 'error' ? '' : ' (warning)'}</div>
+                              {q.description && <div className="text-[var(--kt-muted)]">{q.description}</div>}
+                              {q.source && <div className="mt-1 text-[var(--kt-faint)]">Source: <span className="whitespace-pre-wrap">{q.source}</span></div>}
+                              {suggestionText(q) && <div className="mt-1 text-[var(--kt-muted)]">Suggested: <span className="whitespace-pre-wrap text-[var(--kt-text)]">{suggestionText(q)}</span></div>}
+                            </div>
+                            <div className="flex gap-1.5 shrink-0">
+                              {q.status === 'open' && suggestionText(q) && <button type="button" onClick={() => useSuggestion(q)} className="h-7 px-2 rounded-md bg-[var(--kt-accent)] text-[var(--kt-accent-ink)] font-medium cursor-pointer">Use suggestion</button>}
+                              {q.status === 'open'
+                                ? <button type="button" onClick={() => resolve(q, 'resolved')} className="h-7 px-2 rounded-md bg-[var(--kt-s2)] hover:bg-[var(--kt-s3)] cursor-pointer">Mark checked</button>
+                                : <button type="button" onClick={() => resolve(q, 'open')} className="h-7 px-2 rounded-md bg-[var(--kt-s2)] cursor-pointer">Reopen</button>}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   </li>
                 );

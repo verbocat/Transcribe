@@ -5,7 +5,7 @@
 * linguist    - only reviews and edits subtitles that a coordinator shared with them. Cannot upload media, run any
                 transcription / generation / translation / AI action, and never spends hours.
 
-Every request passes `role_gate`: a linguist can reach only the paths in LINGUIST_PATHS (plus the shared-project
+Every request passes `role_gate`: a linguist can reach only the paths in LINGUIST_PATHS (sign-in and the shared-project
 routes, which check the individual share). Metered routes also refuse linguists in policy.check_job, so a
 route that is added later and forgotten here still cannot spend hours for a linguist.
 """
@@ -18,8 +18,9 @@ from .models import User
 ADMIN, COORDINATOR, LINGUIST = "admin", "coordinator", "linguist"
 ASSIGNABLE = (COORDINATOR, LINGUIST)
 
-# Everything a linguist may call. Local checks only: nothing here calls an AI provider or spends hours.
-LINGUIST_PATHS = ("/api/auth/", "/api/shares/", "/api/subtitle/lint", "/api/subtitle/qc", "/api/health", "/health")
+# Everything a linguist may call. Nothing here calls an AI provider or uses credit; the coordinator's QC findings
+# reach the linguist inside the shared project, so they never need to run a check themselves.
+LINGUIST_PATHS = ("/api/auth/", "/api/shares/", "/api/health", "/health")
 LINGUIST_EXACT = ("/", "/api/shares")
 
 

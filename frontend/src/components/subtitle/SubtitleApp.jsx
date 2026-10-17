@@ -2798,7 +2798,24 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
     handleGenerate();
   };
   // Shared with linguists: the draft on screen goes up; a linguist's saved version comes back through here.
-  const getShareDraft = useCallback(() => (autosaveDataRef.current ? buildDraft(autosaveDataRef.current) : null), []);
+  const centroidStateRef = useRef(null);
+  const getShareDraft = useCallback(() => {
+    const d = autosaveDataRef.current;
+    if (!d) return null;
+    const draft = buildDraft(d);
+    // The coordinator's Centroid QC findings go along, so linguists see what to fix without running (or paying for) any check.
+    const q = centroidStateRef.current?.()?.qc;
+    if (q && Array.isArray(q.issues)) {
+      const track = q.target === 'editor' || !q.target ? (d.activeTrack || '__main') : q.target;
+      const keep = (i) => ({
+        index: i.index, start: i.start, end: i.end, severity: i.severity, category: i.category, title: i.title,
+        description: i.description, source: i.source, target: i.target, suggestion: i.suggestion ?? null,
+        suggestion_end: i.suggestion_end ?? null, track, status: 'open',
+      });
+      draft.qc = { track, score: q.summary?.mqm_score ?? null, at: new Date().toISOString(), issues: q.issues.filter((i) => i.status === 'open').map(keep) };
+    }
+    return draft;
+  }, []);
   const applySharedDraft = useCallback((draft) => {
     const restored = readDraft(draft);
     setTracks(restored.tracks);
@@ -3559,6 +3576,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
         onOpenQc={() => openQc('centroid')}
         onOpenTranslate={() => { setShowQcDrawer(false); openCentroid(); }}
         onStateChange={setCentroidState}
+        stateRef={centroidStateRef}
         onJumpToEvent={(id) => { setActiveEventId(id); handlePlayEvent(id); }}
         events={events}
         glossaryTerms={glossaryTerms}

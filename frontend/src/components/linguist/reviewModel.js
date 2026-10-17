@@ -52,8 +52,19 @@ export const trackSet = (draft) => {
 };
 
 /** Put the edited tracks back into the draft the way the studio expects it (events = the active track). */
-export const buildSavedDraft = (draft, tracks) => {
-  if (tracks.__main) return { ...draft, events: tracks.__main, timestamp: new Date().toISOString() };
+export const buildSavedDraft = (draft, tracks, issues) => {
+  const qc = draft.qc && issues ? { ...draft.qc, issues } : draft.qc;
+  const base = qc ? { ...draft, qc } : draft;
+  if (tracks.__main) return { ...base, events: tracks.__main, timestamp: new Date().toISOString() };
   const active = draft.activeTrack && tracks[draft.activeTrack] ? draft.activeTrack : Object.keys(tracks)[0];
-  return { ...draft, tracks, events: tracks[active], activeTrack: active, timestamp: new Date().toISOString() };
+  return { ...base, tracks, events: tracks[active], activeTrack: active, timestamp: new Date().toISOString() };
 };
+
+/**
+ * The coordinator's QC findings that travel with a shared project: [{index, severity, title, ..., track, status}].
+ * `track` is the language track the finding is about ('__main' for a single-track draft).
+ */
+export const qcIssues = (draft) => (Array.isArray(draft?.qc?.issues) ? draft.qc.issues : []);
+
+/** Text a finding proposes for its cue, when it proposes one (the linguist decides whether to use it). */
+export const suggestionText = (issue) => (typeof issue?.suggestion === 'string' && issue.suggestion.trim() ? issue.suggestion : null);

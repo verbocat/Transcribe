@@ -94,7 +94,7 @@ export default function ShareDialog({ filename, videoId, getDraft, onLoadVersion
         <div className="p-5 space-y-4 overflow-y-auto text-xs">
           {loading ? <div className="py-8 text-center"><Loader2 className="animate-spin inline" size={18} /></div> : (
             <>
-              <p className="text-slate-400">Linguists open the subtitles in a review editor with the video, fix text and timing, and save back to the same project. They cannot upload, generate or translate, and they use none of your hours.</p>
+              <p className="text-slate-400">Linguists open the subtitles in a review editor with the video, fix text and timing, and save back to the same project. Your latest translation QC findings go along so they can work through them. They cannot upload, generate, translate or run any check, and they use no credit or hours.</p>
               <div>
                 <label className="block font-semibold mb-1">Project name</label>
                 <input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={120} className={field} />

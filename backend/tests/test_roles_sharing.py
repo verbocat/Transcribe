@@ -35,14 +35,13 @@ def test_linguist_is_locked_out_of_everything_but_review(main_app):
     client = TestClient(main_app.app)
     _, (_, lh) = _setup(client)
     for method, path in (("post", "/api/transcribe"), ("post", "/api/transcribe_async"), ("post", "/api/subtitle/generate"),
-                         ("post", "/api/subtitle/generate_stream"), ("post", "/api/centroid/translate"), ("post", "/api/centroid/qc"),
+                         ("post", "/api/subtitle/generate_stream"), ("post", "/api/centroid/translate"), ("post", "/api/centroid/qc"), ("post", "/api/subtitle/qc"), ("post", "/api/subtitle/lint"),
                          ("post", "/api/subtitle/gemini_fix"), ("post", "/api/subtitle/upload"), ("post", "/api/upload"),
                          ("post", "/api/subtitle/context_autofill"), ("post", "/api/subtitle/acoustic_sync"),
                          ("get", "/api/projects"), ("get", "/api/subtitle/projects"), ("post", "/api/export")):
         assert getattr(client, method)(path, headers=lh, **({"json": {}} if method == "post" else {})).status_code == 403, path
     assert client.get("/api/auth/me", headers=lh).json()["user"]["role"] == "linguist"
     assert client.get("/api/shares/with-me", headers=lh).status_code == 200
-    assert client.post("/api/subtitle/lint", headers=lh, json={}).status_code != 403  # free local check stays available
     assert client.get("/api/admin/users", headers=lh).status_code == 403
 
 

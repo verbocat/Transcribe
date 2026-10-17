@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { fmtTime, parseTime, toSrt, cps, cueAt, trackSet, buildSavedDraft } from './reviewModel.js';
+import { fmtTime, parseTime, toSrt, cps, cueAt, trackSet, buildSavedDraft, qcIssues, suggestionText } from './reviewModel.js';
 
 test('times round-trip', () => {
   assert.equal(fmtTime(62.5), '00:01:02.500');
@@ -30,4 +30,15 @@ test('single and multi track drafts save back in the studio shape', () => {
   const saved = buildSavedDraft({ activeTrack: 'en', tracks: {} }, { hi: [{ text: 'a2' }], en: [{ text: 'b2' }] });
   assert.deepEqual(saved.events, [{ text: 'b2' }]);
   assert.equal(saved.activeTrack, 'en');
+});
+
+test('qc findings travel with the draft and keep their resolved state', () => {
+  const draft = { events: [], qc: { target: 'hi', issues: [{ index: 1, status: 'open', suggestion: ' fix ' }] } };
+  assert.equal(qcIssues(draft).length, 1);
+  const saved = buildSavedDraft(draft, { __main: [] }, [{ index: 1, status: 'resolved' }]);
+  assert.equal(saved.qc.issues[0].status, 'resolved');
+  assert.equal(saved.qc.target, 'hi');
+  assert.deepEqual(qcIssues({}), []);
+  assert.equal(suggestionText({ suggestion: '  ' }), null);
+  assert.equal(suggestionText({ suggestion: 'x' }), 'x');
 });
