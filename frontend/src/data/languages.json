@@ -1,44 +1,8 @@
 [
  {
-  "name": "Afrikaans",
-  "translate": "af",
-  "scribe": "afr",
-  "native": null
- },
- {
-  "name": "Amharic",
-  "translate": "am",
-  "scribe": "amh",
-  "native": "አማርኛ"
- },
- {
-  "name": "Armenian",
-  "translate": "hy",
-  "scribe": "hye",
-  "native": null
- },
- {
   "name": "Assamese",
   "translate": "as",
   "scribe": "asm",
-  "native": null
- },
- {
-  "name": "Asturian",
-  "translate": null,
-  "scribe": "ast",
-  "native": null
- },
- {
-  "name": "Azerbaijani",
-  "translate": "az",
-  "scribe": "aze",
-  "native": null
- },
- {
-  "name": "Belarusian",
-  "translate": "be",
-  "scribe": "bel",
   "native": null
  },
  {
@@ -46,12 +10,6 @@
   "translate": "bn",
   "scribe": "ben",
   "native": "বাংলা"
- },
- {
-  "name": "Bosnian",
-  "translate": "bs",
-  "scribe": "bos",
-  "native": null
  },
  {
   "name": "Bulgarian",
@@ -66,30 +24,6 @@
   "native": null
  },
  {
-  "name": "Cantonese",
-  "translate": null,
-  "scribe": "yue",
-  "native": null
- },
- {
-  "name": "Catalan",
-  "translate": "ca",
-  "scribe": "cat",
-  "native": null
- },
- {
-  "name": "Cebuano",
-  "translate": null,
-  "scribe": "ceb",
-  "native": null
- },
- {
-  "name": "Chichewa",
-  "translate": "ny",
-  "scribe": "nya",
-  "native": null
- },
- {
   "name": "Chinese (Mandarin)",
   "translate": "zh",
   "scribe": "zho",
@@ -100,12 +34,6 @@
   "translate": "zht",
   "scribe": null,
   "native": "中文 繁體"
- },
- {
-  "name": "Croatian",
-  "translate": "hr",
-  "scribe": "hrv",
-  "native": null
  },
  {
   "name": "Czech",
@@ -132,18 +60,6 @@
   "native": null
  },
  {
-  "name": "Estonian",
-  "translate": "et",
-  "scribe": "est",
-  "native": null
- },
- {
-  "name": "Filipino",
-  "translate": "fil",
-  "scribe": "fil",
-  "native": null
- },
- {
   "name": "Finnish",
   "translate": "fi",
   "scribe": "fin",
@@ -153,30 +69,6 @@
   "name": "French",
   "translate": "fr",
   "scribe": "fra",
-  "native": null
- },
- {
-  "name": "Fulah",
-  "translate": "ff",
-  "scribe": "ful",
-  "native": null
- },
- {
-  "name": "Galician",
-  "translate": "gl",
-  "scribe": "glg",
-  "native": null
- },
- {
-  "name": "Ganda",
-  "translate": "lg",
-  "scribe": "lug",
-  "native": null
- },
- {
-  "name": "Georgian",
-  "translate": "ka",
-  "scribe": "kat",
   "native": null
  },
  {
@@ -198,12 +90,6 @@
   "native": "ગુજરાતી"
  },
  {
-  "name": "Hausa",
-  "translate": "ha",
-  "scribe": "hau",
-  "native": null
- },
- {
   "name": "Hindi",
   "translate": "hi",
   "scribe": "hin",
@@ -219,18 +105,6 @@
   "name": "Hungarian",
   "translate": "hu",
   "scribe": "hun",
-  "native": null
- },
- {
-  "name": "Icelandic",
-  "translate": "is",
-  "scribe": "isl",
-  "native": null
- },
- {
-  "name": "Igbo",
-  "translate": "ig",
-  "scribe": "ibo",
   "native": null
  },
  {
@@ -258,45 +132,15 @@
   "native": null
  },
  {
-  "name": "Javanese",
-  "translate": "jv",
-  "scribe": "jav",
-  "native": null
- },
- {
-  "name": "Kabuverdianu",
-  "translate": null,
-  "scribe": "kea",
-  "native": null
- },
- {
   "name": "Kannada",
   "translate": "kn",
   "scribe": "kan",
   "native": "ಕನ್ನಡ"
  },
  {
-  "name": "Kazakh",
-  "translate": "kk",
-  "scribe": "kaz",
-  "native": null
- },
- {
-  "name": "Khmer",
-  "translate": "km",
-  "scribe": "khm",
-  "native": null
- },
- {
   "name": "Korean",
   "translate": "ko",
   "scribe": "kor",
-  "native": null
- },
- {
-  "name": "Kyrgyz",
-  "translate": "ky",
-  "scribe": "kir",
   "native": null
  },
  {
@@ -312,36 +156,6 @@
   "native": null
  },
  {
-  "name": "Lingala",
-  "translate": "ln",
-  "scribe": "lin",
-  "native": null
- },
- {
-  "name": "Lithuanian",
-  "translate": "lt",
-  "scribe": "lit",
-  "native": null
- },
- {
-  "name": "Luo",
-  "translate": null,
-  "scribe": "luo",
-  "native": null
- },
- {
-  "name": "Luxembourgish",
-  "translate": "lb",
-  "scribe": "ltz",
-  "native": null
- },
- {
-  "name": "Macedonian",
-  "translate": "mk",
-  "scribe": "mkd",
-  "native": null
- },
- {
   "name": "Malay",
   "translate": "ms",
   "scribe": "msa",
@@ -354,28 +168,10 @@
   "native": null
  },
  {
-  "name": "Maltese",
-  "translate": "mt",
-  "scribe": "mlt",
-  "native": null
- },
- {
-  "name": "Maori",
-  "translate": "mi",
-  "scribe": "mri",
-  "native": null
- },
- {
   "name": "Marathi",
   "translate": "mr",
   "scribe": "mar",
   "native": "मराठी"
- },
- {
-  "name": "Mongolian",
-  "translate": "mn",
-  "scribe": "mon",
-  "native": null
  },
  {
   "name": "Nepali",
@@ -384,21 +180,9 @@
   "native": null
  },
  {
-  "name": "Northern Sotho",
-  "translate": null,
-  "scribe": "nso",
-  "native": null
- },
- {
   "name": "Norwegian",
   "translate": "no",
   "scribe": "nor",
-  "native": null
- },
- {
-  "name": "Occitan",
-  "translate": "oc",
-  "scribe": "oci",
   "native": null
  },
  {
@@ -456,57 +240,15 @@
   "native": null
  },
  {
-  "name": "Shona",
-  "translate": "sn",
-  "scribe": "sna",
-  "native": null
- },
- {
-  "name": "Sinhala",
-  "translate": "si",
-  "scribe": null,
-  "native": null
- },
- {
-  "name": "Slovak",
-  "translate": "sk",
-  "scribe": "slk",
-  "native": null
- },
- {
-  "name": "Slovenian",
-  "translate": "sl",
-  "scribe": "slv",
-  "native": null
- },
- {
-  "name": "Somali",
-  "translate": "so",
-  "scribe": "som",
-  "native": null
- },
- {
   "name": "Spanish",
   "translate": "es",
   "scribe": "spa",
   "native": null
  },
  {
-  "name": "Swahili",
-  "translate": "sw",
-  "scribe": "swa",
-  "native": null
- },
- {
   "name": "Swedish",
   "translate": "sv",
   "scribe": "swe",
-  "native": null
- },
- {
-  "name": "Tajik",
-  "translate": "tg",
-  "scribe": "tgk",
   "native": null
  },
  {
@@ -540,45 +282,9 @@
   "native": null
  },
  {
-  "name": "Umbundu",
-  "translate": null,
-  "scribe": "umb",
-  "native": null
- },
- {
-  "name": "Uzbek",
-  "translate": "uz",
-  "scribe": "uzb",
-  "native": null
- },
- {
   "name": "Vietnamese",
   "translate": "vi",
   "scribe": "vie",
-  "native": null
- },
- {
-  "name": "Welsh",
-  "translate": "cy",
-  "scribe": "cym",
-  "native": null
- },
- {
-  "name": "Wolof",
-  "translate": "wo",
-  "scribe": "wol",
-  "native": null
- },
- {
-  "name": "Xhosa",
-  "translate": "xh",
-  "scribe": "xho",
-  "native": null
- },
- {
-  "name": "Zulu",
-  "translate": "zu",
-  "scribe": "zul",
   "native": null
  }
 ]
