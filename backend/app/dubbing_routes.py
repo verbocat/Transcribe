@@ -43,7 +43,7 @@ MAX_WAIT_SEC = 3 * 3600
 
 LANGUAGES = {
     "English": "en", "Hindi": "hi", "Tamil": "ta", "Spanish": "es", "French": "fr", "German": "de", "Portuguese": "pt",
-    "Italian": "it", "Japanese": "ja", "Korean": "ko", "Chinese": "zh", "Arabic": "ar", "Russian": "ru", "Indonesian": "id",
+    "Italian": "it", "Japanese": "ja", "Korean": "ko", "Chinese": "zh", "Russian": "ru", "Indonesian": "id",
 }
 
 _jobs: Dict[str, Dict[str, Any]] = {}
