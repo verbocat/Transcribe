@@ -76,6 +76,8 @@ def jobs_last_24h(db: Session, user_id: str) -> int:
 def check_job(db: Session, user: User, kind: str, ms: int, route: str) -> None:
     """Everything except the hour budget: access window, studio/feature switches, file length, jobs per day."""
     ensure_active(user)
+    from .roles import forbid_linguist
+    forbid_linguist(user)  # linguists never run or spend anything
     if route in TRANSCRIBE_ROUTES:
         require(user, "can_transcribe_studio")
     elif route in SUBTITLE_ROUTES:

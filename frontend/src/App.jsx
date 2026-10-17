@@ -23,6 +23,7 @@ import ProjectNotesModal from './components/ProjectNotesModal';
 import HomePage from './components/HomePage';
 import { takeLaunchIntent } from './utils/launchIntent';
 import SubtitleApp from './components/subtitle/SubtitleApp';
+import LinguistWorkspace from './components/linguist/LinguistWorkspace';
 import DubbingStudio from './components/dubbing/DubbingStudio';
 import AdminDashboard from './components/admin/AdminDashboard';
 import NotFoundPage from './components/NotFoundPage';
@@ -455,6 +456,21 @@ function AppContent() {
               window.history.replaceState({ tool: null }, '', '/');
             }
           }}
+        />
+      </>
+    );
+  }
+
+  // Linguist accounts get only the shared-project workspace; the server refuses everything else for them anyway.
+  if (isAuthenticated && user?.role === 'linguist' && !user?.is_admin) {
+    return (
+      <>
+        <LinguistWorkspace user={user} onOpenLogoutModal={() => setShowLogoutModal(true)} />
+        <LogoutConfirmModal
+          isOpen={showLogoutModal}
+          onClose={() => setShowLogoutModal(false)}
+          onConfirm={handleLogout}
+          user={user}
         />
       </>
     );

@@ -65,6 +65,7 @@ from app.netflix_engine import (
 from app.export_service import export_netflix_srt, export_netflix_vtt, export_netflix_ttml
 from app.db import DBSubtitleProject, DBSubtitleEvent
 from app.auth_module.routes import get_current_user_from_token, get_optional_user_from_token
+from app.auth_module.roles import make_role_gate
 from app.auth_module import policy as access_policy
 from app.auth_module.models import User
 from app.auth_module import usage as usage_mod
@@ -303,10 +304,14 @@ app = FastAPI(
     title="Lower Third Transcription & Subtitle Studio",
     description="Automated verbatim transcription, speaker diarization, QA linter & batch pipeline",
     version="1.0.0",
-    lifespan=lifespan
+    lifespan=lifespan,
+    # Linguist accounts reach only auth + shared-project routes; everything else answers 403 (auth_module/roles.py).
+    dependencies=[Depends(make_role_gate(get_optional_user_from_token))],
 )
 app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
 app.include_router(admin_router)
+from app.shares_routes import router as shares_router
+app.include_router(shares_router)
 from app.dubbing_routes import router as dubbing_router
 app.include_router(dubbing_router)
 from app.dubbing_projects import router as dubbing_projects_router, voices_router as dubbing_voices_router

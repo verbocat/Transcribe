@@ -52,7 +52,7 @@ def init_auth_db():
             res_users = conn.execute(text("PRAGMA table_info(auth_users)")).fetchall()
             existing_user_cols = {row[1] for row in res_users}
             if "role" not in existing_user_cols:
-                conn.execute(text("ALTER TABLE auth_users ADD COLUMN role VARCHAR(32) DEFAULT 'editor'"))
+                conn.execute(text("ALTER TABLE auth_users ADD COLUMN role VARCHAR(32) DEFAULT 'coordinator'"))
             if "is_admin" not in existing_user_cols:
                 conn.execute(text("ALTER TABLE auth_users ADD COLUMN is_admin BOOLEAN DEFAULT 0"))
             if "total_spend_usd" not in existing_user_cols:
@@ -75,7 +75,7 @@ def init_auth_db():
             emails = sorted(admin_emails())
             marks = ", ".join(f":e{i}" for i in range(len(emails)))
             params = {f"e{i}": e for i, e in enumerate(emails)}
-            conn.execute(text(f"UPDATE auth_users SET is_admin = 0, role = 'editor' WHERE lower(email) NOT IN ({marks}) AND is_admin = 1"), params)
+            conn.execute(text(f"UPDATE auth_users SET is_admin = 0, role = 'coordinator' WHERE lower(email) NOT IN ({marks}) AND is_admin = 1"), params)
             conn.execute(text(f"UPDATE auth_users SET is_admin = 1, role = 'admin' WHERE lower(email) IN ({marks})"), params)
             conn.commit()
             logger.info("Migrated auth_users table: verified schema columns and enforced super-admin exclusivity.")
@@ -118,6 +118,8 @@ def _migrate_usage_schema():
                 "COALESCE(translate_limit_ms, translate_used_ms + translate_reserved_ms) "
                 "WHERE transcribe_limit_ms IS NOT NULL OR translate_limit_ms IS NOT NULL"
             ))
+        # Roles: admin | coordinator | linguist. Every account that was "editor" (or anything else) is a coordinator.
+        conn.execute(text("UPDATE auth_users SET role = 'coordinator' WHERE role IS NULL OR role NOT IN ('admin', 'coordinator', 'linguist')"))
         for name, ddl in int_cols.items():
             if name not in existing:
                 conn.execute(text(f"ALTER TABLE auth_users ADD COLUMN {name} {ddl}"))

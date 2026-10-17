@@ -9,7 +9,7 @@ import {
   Bold, Italic, Underline, Strikethrough, AlignLeft, AlignCenter, AlignRight,
   Highlighter, Palette, RotateCcw, User, Wand2, Languages, LayoutDashboard,
   Command, Keyboard, FolderOpen, Save, Replace, ListOrdered, ArrowRightLeft, CaseSensitive,
-  Eraser, SkipBack, SkipForward, Maximize, Users, BookText, StepBack, StepForward, AlignJustify, BadgeCheck
+  Eraser, SkipBack, SkipForward, Maximize, Users, BookText, StepBack, StepForward, AlignJustify, BadgeCheck, Share2
 } from 'lucide-react';
 import { API_BASE } from '../../config';
 import { publishPlayhead, getPlayhead, subscribePlayhead } from '../../utils/playheadBus';
@@ -51,6 +51,7 @@ import MediaProgress, { GenerateProgress, TaskStrip } from './MediaProgress';
 import { startJob, jobHeaders, isCancelError, CancelledError, sleepCancellable, useTaskRunner, abortable } from '../../utils/cancellable';
 import ContextPanel, { loadContext, saveContext, contextForRequest } from './ContextPanel';
 import { draftKey, buildDraft, readDraft } from './draftStorage';
+import ShareDialog from './ShareDialog';
 
 function formatTime(seconds) {
   if (isNaN(seconds) || seconds == null) return "00:00.000";
@@ -545,6 +546,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showSpeakerModal, setShowSpeakerModal] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
+  const [showShare, setShowShare] = useState(false);
   const [showCentroidModal, setShowCentroidModal] = useState(false);
   // Language tracks: after a translation each language is its own editable subtitle track
   const [tracks, setTracks] = useState({});          // { [languageCode]: events[] } (the active track is saved on switch)
@@ -2795,6 +2797,19 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
     if (hasEvents && prefs.confirmGenerate && !window.confirm('Generate new subtitles? This replaces the current subtitles (you can undo) and uses transcription credits.')) return;
     handleGenerate();
   };
+  // Shared with linguists: the draft on screen goes up; a linguist's saved version comes back through here.
+  const getShareDraft = useCallback(() => (autosaveDataRef.current ? buildDraft(autosaveDataRef.current) : null), []);
+  const applySharedDraft = useCallback((draft) => {
+    const restored = readDraft(draft);
+    setTracks(restored.tracks);
+    setActiveTrack(restored.activeTrack);
+    setSourceTrack(restored.sourceTrack);
+    setEvents(restored.events);
+    setComplianceScore(draft?.complianceScore || 100);
+    setTotalErrors(draft?.totalErrors || 0);
+    setTotalWarnings(draft?.totalWarnings || 0);
+    setActiveEventId(restored.events[0]?.id || null);
+  }, []);
   const exportSubs = () => { if (hasEvents) setShowExportModal(true); else flashStatus('Nothing to export yet. Generate or import subtitles first.'); };
   const saveDraftCmd = () => { flashStatus(saveDraftNow() ? 'Draft saved on this device.' : 'Nothing to save yet.'); };
   const toggleLayoutKey = (key, on, off) => patchLayout({ [key]: layout[key] === off ? on : off });
@@ -2820,6 +2835,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
         { type: 'separator' },
         { label: 'Export subtitles…', icon: Download, shortcut: 'Ctrl+E', disabled: !hasEvents, onSelect: exportSubs },
         { label: 'Save draft now', icon: Save, shortcut: 'Ctrl+S', disabled: !hasEvents, onSelect: saveDraftCmd },
+        { label: 'Share with linguist…', icon: Share2, disabled: !hasEvents, onSelect: () => setShowShare(true) },
         { type: 'separator' },
         { label: 'Settings…', icon: Settings, shortcut: 'Ctrl+,', onSelect: () => openSettings() },
         { type: 'separator' },
@@ -3575,6 +3591,16 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
       />
 
       {/* ── Export Deliverables Modal ── */}
+      {showShare && (
+        <ShareDialog
+          filename={selectedFile?.name}
+          videoId={currentVideoId}
+          getDraft={getShareDraft}
+          onLoadVersion={applySharedDraft}
+          onClose={() => setShowShare(false)}
+        />
+      )}
+
       {showExportModal && (
         <SubtitleExportModal
           isOpen={showExportModal}

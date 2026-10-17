@@ -282,7 +282,7 @@ def list_users(
             "name": u.name,
             "email": u.email,
             "employee_id": u.employee_id,
-            "role": u.role or "editor",
+            "role": u.role or "coordinator",
             "is_admin": is_super_admin(u.email),
             "is_blocked": bool(u.is_blocked),
             "is_verified": u.is_verified,
@@ -424,7 +424,7 @@ def get_user_dossier(
             "name": target_user.name,
             "email": target_user.email,
             "employee_id": target_user.employee_id,
-            "role": target_user.role or "editor",
+            "role": target_user.role or "coordinator",
             "is_admin": is_super_admin(target_user.email),
             "is_blocked": bool(target_user.is_blocked),
             "is_verified": target_user.is_verified,
@@ -498,6 +498,7 @@ def update_user_status(
 ):
     """Allows administrators to change user roles, block/unblock, verify/unverify, or adjust monthly budget."""
     target_user = db.query(User).filter(User.id == user_id).first()
+    role_before = (target_user.role if target_user else None) or "coordinator"
     if not target_user:
         raise HTTPException(status_code=404, detail="User not found.")
 
@@ -508,6 +509,12 @@ def update_user_status(
 
     if payload.role is not None:
         new_role = payload.role.strip().lower()
+        if new_role == "editor":
+            new_role = "coordinator"  # the old name
+        if new_role not in ("admin", "coordinator", "linguist"):
+            raise HTTPException(status_code=400, detail="Role must be coordinator or linguist.")
+        if is_super_admin(target_user.email) and new_role != "admin":
+            raise HTTPException(status_code=400, detail="Administrator accounts keep the admin role.")
         if new_role == "admin" and not is_super_admin(target_user.email):
             raise HTTPException(
                 status_code=400,
@@ -564,7 +571,7 @@ def update_user_status(
                 notification_type="quota_limit"
             ))
 
-    if payload.role is not None and payload.role != target_user.role:
+    if payload.role is not None and payload.role.strip().lower() != role_before:
         db.add(AdminNotification(
             user_id=target_user.id,
             admin_email=admin.email,
@@ -602,7 +609,7 @@ def approve_user_workflow(
     target_user.is_verified = True
     target_user.is_blocked = False
     if not target_user.role or target_user.role in ("pending", "viewer"):
-        target_user.role = "editor"
+        target_user.role = "coordinator"
 
     audit = AdminAuditLog(
         user_id=admin.id,
@@ -917,7 +924,7 @@ def _resolve_limit(hours: Optional[float], unlimited: bool, label: str) -> Optio
 
 def _user_row(u: User) -> Dict[str, Any]:
     return {
-        "id": u.id, "name": u.name, "email": u.email, "role": u.role or "editor",
+        "id": u.id, "name": u.name, "email": u.email, "role": u.role or "coordinator",
         "is_admin": is_super_admin(u.email), "is_blocked": bool(u.is_blocked),
         "is_verified": bool(u.is_verified), "usage": usage_summary(u), "access": policy.summary(u),
     }
@@ -929,6 +936,7 @@ class CreateUserRequest(BaseModel):
     password: Optional[str] = None  # omit to have the server generate one (returned once)
     hours: Optional[float] = None  # one shared pool for transcription and translation
     unlimited: bool = False
+    role: str = "coordinator"  # coordinator | linguist (linguists spend no hours)
 
 
 @admin_router.post("/users", status_code=201)
@@ -941,7 +949,11 @@ def create_user(payload: CreateUserRequest, request: Request, response: Response
     ok, err = validate_verbolabs_email(email)
     if not ok or len(email) > 255:
         raise HTTPException(status_code=400, detail=err or "Please enter a valid email address.")
-    pool_ms = _resolve_limit(payload.hours, payload.unlimited, "Hours")
+    role = (payload.role or "coordinator").strip().lower()
+    if role not in ("coordinator", "linguist"):
+        raise HTTPException(status_code=400, detail="Role must be coordinator or linguist.")
+    # A linguist never transcribes or translates, so no hours; 0 keeps it safe if the account is later made a coordinator.
+    pool_ms = 0 if role == "linguist" else _resolve_limit(payload.hours, payload.unlimited, "Hours")
     if db.query(User).filter(User.email == email).first():
         raise HTTPException(status_code=409, detail="An account with this email already exists.")
 
@@ -953,7 +965,7 @@ def create_user(payload: CreateUserRequest, request: Request, response: Response
             raise HTTPException(status_code=400, detail="Password does not satisfy requirements: " + "; ".join(errs))
     pwd_hash, salt = hash_password(password)
     user = User(
-        name=name, email=email, password_hash=pwd_hash, salt=salt, is_verified=True, role="editor", is_admin=False,
+        name=name, email=email, password_hash=pwd_hash, salt=salt, is_verified=True, role=role, is_admin=False,
         hours_limit_ms=pool_ms,
     )
     db.add(user)

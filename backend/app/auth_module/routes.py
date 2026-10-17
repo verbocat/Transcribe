@@ -470,7 +470,7 @@ def _complete_login(db: Session, user: User, request: Request) -> dict:
             "id": user.id,
             "name": user.name,
             "email": user.email,
-            "role": user.role or "editor",
+            "role": user.role or "coordinator",
             "is_admin": is_super_admin(user.email)
         }
     }
@@ -979,7 +979,7 @@ def get_current_user_profile(
             "id": user.id,
             "name": user.name,
             "email": user.email,
-            "role": user.role or "editor",
+            "role": user.role or "coordinator",
             "is_admin": is_super_admin(user.email),
             "total_spend_usd": getattr(user, "total_spend_usd", 0.0) or 0.0,
             "monthly_budget_usd": getattr(user, "monthly_budget_usd", 50.0) or 50.0,
@@ -1127,7 +1127,7 @@ def update_profile(
             "id": current_user.id,
             "name": current_user.name,
             "email": current_user.email,
-            "role": current_user.role or "editor",
+            "role": current_user.role or "coordinator",
             "is_admin": is_super_admin(current_user.email),
             "is_verified": current_user.is_verified
         }

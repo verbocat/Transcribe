@@ -63,6 +63,24 @@ function HoursField({ label, hours, unlimited, onHours, onUnlimited, isDark }) {
   );
 }
 
+function RoleField({ value, onChange, isDark }) {
+  const on = isDark ? 'bg-[var(--kt-accent)] text-[var(--kt-accent-ink)] border-transparent' : 'bg-blue-600 text-white border-transparent';
+  const off = isDark ? 'bg-[var(--kt-s2)] text-slate-300 border-[var(--kt-s4)]' : 'bg-white text-slate-700 border-slate-300';
+  return (
+    <div>
+      <label className={`block font-semibold mb-1 ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>Role</label>
+      <div className="grid grid-cols-2 gap-2">
+        {[['coordinator', 'Project coordinator', 'Transcribes and translates (uses hours), shares projects with linguists.'],
+          ['linguist', 'Linguist', 'Only reviews and edits subtitles shared with them. No hours.']].map(([v, t, d]) => (
+          <button key={v} type="button" onClick={() => onChange(v)} className={`text-left p-2.5 rounded-lg border cursor-pointer ${value === v ? on : off}`}>
+            <div className="font-bold">{t}</div><div className="text-[11px] opacity-80">{d}</div>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function Modal({ title, onClose, children, isDark }) {
   return (
     <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
@@ -143,15 +161,15 @@ export default function AdminAccounts({ refreshKey = 0, onOpenDossier }) {
     return users.filter((u) => !q || (u.name || '').toLowerCase().includes(q) || (u.email || '').toLowerCase().includes(q));
   }, [users, search]);
 
-  const hoursBody = (f) => (f.unl ? { unlimited: true } : { hours: f.hours === '' ? null : Number(f.hours) });
+  const hoursBody = (f) => (f.role === 'linguist' ? {} : f.unl ? { unlimited: true } : { hours: f.hours === '' ? null : Number(f.hours) });
 
   const run = async (fn) => {
     setBusy(true); setError('');
     try { await fn(); await load(); } catch (e) { setError(e.message); } finally { setBusy(false); }
   };
 
-  const openCreate = () => { setForm({ name: '', email: '', password: '', hours: '10', unl: false }); setDialog({ type: 'create' }); setError(''); };
-  const openEdit = (u) => { setForm({ name: u.name, email: u.email, newPassword: '' }); setDialog({ type: 'edit', user: u }); setError(''); };
+  const openCreate = () => { setForm({ name: '', email: '', password: '', hours: '10', unl: false, role: 'coordinator' }); setDialog({ type: 'create' }); setError(''); };
+  const openEdit = (u) => { setForm({ name: u.name, email: u.email, newPassword: '', role: u.role === 'linguist' ? 'linguist' : 'coordinator' }); setDialog({ type: 'edit', user: u }); setError(''); };
   const openLedger = (u) => run(async () => {
     const data = await api(token, `/users/${u.id}/usage?limit=200`);
     setLedger(data.ledger || []); setDialog({ type: 'ledger', user: u });
@@ -160,7 +178,7 @@ export default function AdminAccounts({ refreshKey = 0, onOpenDossier }) {
   const submitCreate = (e) => {
     e.preventDefault();
     run(async () => {
-      const data = await api(token, '/users', { method: 'POST', body: { name: form.name, email: form.email, password: form.password || null, ...hoursBody(form) } });
+      const data = await api(token, '/users', { method: 'POST', body: { name: form.name, email: form.email, password: form.password || null, role: form.role, ...hoursBody(form) } });
       setDialog(data.generated_password ? { type: 'secret', user: data.user, password: data.generated_password } : null);
     });
   };
@@ -169,6 +187,8 @@ export default function AdminAccounts({ refreshKey = 0, onOpenDossier }) {
     run(async () => {
       const body = { name: form.name, email: form.email, ...(reset ? { reset_password: true } : form.newPassword ? { new_password: form.newPassword } : {}) };
       const data = await api(token, `/users/${dialog.user.id}/profile`, { method: 'PATCH', body });
+      const roleBefore = dialog.user.role === 'linguist' ? 'linguist' : 'coordinator';
+      if (!dialog.user.is_admin && form.role && form.role !== roleBefore) await api(token, `/users/${dialog.user.id}/status`, { method: 'PATCH', body: { role: form.role } });
       setDialog(data.generated_password ? { type: 'secret', user: data.user, password: data.generated_password } : null);
     });
   };
@@ -217,11 +237,11 @@ export default function AdminAccounts({ refreshKey = 0, onOpenDossier }) {
             {shown.map((u) => (
               <tr key={u.id} className={`border-b last:border-0 ${isDark ? 'border-[var(--kt-s3)]' : 'border-slate-100'}`}>
                 <td className="p-3">
-                  <div className={`font-semibold ${strong}`}>{u.name} {u.is_admin && <span className="ml-1 text-[9px] px-1.5 py-0.5 rounded bg-[var(--kt-accent)]/20 text-[var(--kt-accent)] font-bold">ADMIN</span>} {u.is_blocked && <span className="ml-1 text-[9px] px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-400 font-bold">DISABLED</span>}</div>
+                  <div className={`font-semibold ${strong}`}>{u.name} {u.is_admin && <span className="ml-1 text-[9px] px-1.5 py-0.5 rounded bg-[var(--kt-accent)]/20 text-[var(--kt-accent)] font-bold">ADMIN</span>} {u.is_blocked && <span className="ml-1 text-[9px] px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-400 font-bold">DISABLED</span>} {!u.is_admin && <span className={`ml-1 text-[9px] px-1.5 py-0.5 rounded font-bold ${u.role === 'linguist' ? 'bg-violet-500/20 text-violet-400' : 'bg-sky-500/20 text-sky-400'}`}>{u.role === 'linguist' ? 'LINGUIST' : 'COORDINATOR'}</span>}</div>
                   <AccessBadges a={u.access} />
                   <div className={`font-mono ${muted}`}>{u.email}</div>
                 </td>
-                <td className="p-3"><Meter b={u.usage.pool} split={u.usage} isDark={isDark} /></td>
+                <td className="p-3">{u.role === 'linguist' ? <span className={muted}>No hours (review only)</span> : <Meter b={u.usage.pool} split={u.usage} isDark={isDark} />}</td>
                 <td className="p-3">
                   <div className="flex justify-end gap-1.5">
                     <button type="button" onClick={() => setLimitsFor(u.id)} className={`px-2 py-1.5 rounded-lg border flex items-center gap-1 cursor-pointer ${btn}`} title="Usage time, job limits, feature access and end date"><SlidersHorizontal size={12} /> Limits</button>
@@ -251,7 +271,10 @@ export default function AdminAccounts({ refreshKey = 0, onOpenDossier }) {
               <div><label className={`block font-semibold mb-1 ${strong}`}>Email (any domain)</label><input required type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} className={`w-full px-3 py-1.5 rounded-lg border ${input}`} /></div>
             </div>
             <div><label className={`block font-semibold mb-1 ${strong}`}>Password <span className={`font-normal ${muted}`}>(leave empty to generate one)</span></label><input type="text" autoComplete="off" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} className={`w-full px-3 py-1.5 rounded-lg border font-mono ${input}`} placeholder="Generated if empty" /></div>
-            <HoursField label="Hours (shared by transcription and translation)" hours={form.hours} unlimited={form.unl} onHours={(v) => setForm({ ...form, hours: v })} onUnlimited={(v) => setForm({ ...form, unl: v })} isDark={isDark} />
+            <RoleField value={form.role} onChange={(role) => setForm({ ...form, role })} isDark={isDark} />
+            {form.role === 'linguist'
+              ? <p className={muted}>Linguists spend no hours. They only see projects a coordinator shares with them.</p>
+              : <HoursField label="Hours (shared by transcription and translation)" hours={form.hours} unlimited={form.unl} onHours={(v) => setForm({ ...form, hours: v })} onUnlimited={(v) => setForm({ ...form, unl: v })} isDark={isDark} />}
             {error && <div className="text-rose-400">{error}</div>}
             <div className="flex justify-end gap-2"><button type="button" onClick={() => setDialog(null)} className={`px-3 py-2 rounded-lg border cursor-pointer ${btn}`}>Cancel</button><button disabled={busy} className={`px-4 py-2 rounded-lg font-bold cursor-pointer disabled:opacity-50 ${primary}`}>Create account</button></div>
           </form>
@@ -264,6 +287,8 @@ export default function AdminAccounts({ refreshKey = 0, onOpenDossier }) {
           <form onSubmit={submitEdit} className="space-y-4">
             <div><label className={`block font-semibold mb-1 ${strong}`}>Name</label><input required minLength={2} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className={`w-full px-3 py-1.5 rounded-lg border ${input}`} /></div>
             <div><label className={`block font-semibold mb-1 ${strong}`}>Email</label><input required type="email" disabled={dialog.user.is_admin} value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} className={`w-full px-3 py-1.5 rounded-lg border disabled:opacity-50 ${input}`} /></div>
+            {!dialog.user.is_admin && <RoleField value={form.role} onChange={(role) => setForm({ ...form, role })} isDark={isDark} />}
+            {!dialog.user.is_admin && dialog.user.role === 'linguist' && form.role === 'coordinator' && <p className={muted}>This account has no hours yet. Set them under Limits after saving.</p>}
             {!(dialog.user.is_admin && dialog.user.id !== me?.id) && (
               <div><label className={`block font-semibold mb-1 ${strong}`}>New password <span className={`font-normal ${muted}`}>(optional; signs the person out everywhere)</span></label>
                 <div className="flex gap-2"><input type="text" autoComplete="off" value={form.newPassword} onChange={(e) => setForm({ ...form, newPassword: e.target.value })} className={`flex-1 px-3 py-1.5 rounded-lg border font-mono ${input}`} placeholder="Leave empty to keep the current one" />

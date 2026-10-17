@@ -112,7 +112,7 @@ export default function AccountMenuDropdown({ user, onOpenLogoutModal, compact =
             </div>
 
             {/* Hours left */}
-            {usage && (
+            {usage && user.role !== 'linguist' && (
               <div className="mb-2 p-2.5 rounded-xl bg-[var(--kt-s0)] border border-[var(--kt-s3)] text-[11px] space-y-1" data-testid="usage-menu">
                 <div className="text-slate-400 font-medium">Your hours (transcription and translation share them)</div>
                 <div className="flex items-center justify-between">

@@ -13,7 +13,7 @@ class User(AuthBase):
     password_hash = Column(String(256), nullable=False)
     salt = Column(String(64), nullable=False)
     employee_id = Column(String(64), nullable=True)
-    role = Column(String(32), default="editor", nullable=False)
+    role = Column(String(32), default="coordinator", nullable=False)  # admin | coordinator | linguist (roles.py)
     is_admin = Column(Boolean, default=False, nullable=False)
     total_spend_usd = Column(Float, default=0.0, nullable=False)
     monthly_budget_usd = Column(Float, default=50.0, nullable=False)
@@ -298,3 +298,31 @@ class UsageLedger(AuthBase):
     note = Column(Text, nullable=True)
     actor_id = Column(String(64), nullable=True)  # admin who made a limit_change
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
+
+
+class SharedProject(AuthBase):
+    """A subtitle project a coordinator has shared. `draft` is the Subtitle Studio draft (all language tracks);
+    `revision` goes up on every save so two people never overwrite each other unnoticed."""
+    __tablename__ = "shared_projects"
+
+    id = Column(String(64), primary_key=True, default=lambda: str(uuid.uuid4()))
+    owner_id = Column(String(64), ForeignKey("auth_users.id", ondelete="CASCADE"), nullable=False, index=True)
+    title = Column(String(255), nullable=False)
+    filename = Column(String(255), nullable=True)
+    video_id = Column(String(128), nullable=True)  # the owner's uploaded media, streamed to people it is shared with
+    draft = Column(Text, nullable=False)  # JSON
+    revision = Column(Integer, default=1, nullable=False)
+    updated_by_id = Column(String(64), nullable=True)
+    updated_by_name = Column(String(120), nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+
+
+class ProjectShare(AuthBase):
+    """Access of one linguist to one shared project. Removing the row revokes the access at once."""
+    __tablename__ = "project_shares"
+
+    project_id = Column(String(64), ForeignKey("shared_projects.id", ondelete="CASCADE"), primary_key=True)
+    linguist_id = Column(String(64), ForeignKey("auth_users.id", ondelete="CASCADE"), primary_key=True, index=True)
+    shared_by_id = Column(String(64), nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
