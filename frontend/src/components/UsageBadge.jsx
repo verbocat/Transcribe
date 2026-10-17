@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Clock } from 'lucide-react';
 import { getApiBase } from '../config';
 
-/** Remaining hours for the signed-in account: transcription and translation budgets. */
+/** Remaining hours for the signed-in account: one pool of hours shared by transcription and translation. */
 export function useUsage(enabled = true) {
   const [usage, setUsage] = useState(null);
   const refresh = useCallback(async () => {
@@ -35,24 +35,21 @@ export function formatHours(h) {
   return hh > 0 ? `${hh}h ${String(mm).padStart(2, '0')}m` : `${mm}m`;
 }
 
-/** Compact header chip. Hidden when both budgets are unlimited. */
+/** Compact header chip: the one shared pool of hours. Hidden when the account is unlimited. */
 export default function UsageBadge({ className = '' }) {
   const usage = useUsage(true);
-  if (!usage || (usage.transcribe.unlimited && usage.translate.unlimited)) return null;
-  const low = (b) => !b.unlimited && b.remaining_hours <= 0.25;
-  const tone = (b) => (b.unlimited ? 'text-slate-300' : b.remaining_hours <= 0 ? 'text-rose-400' : low(b) ? 'text-amber-400' : 'text-emerald-400');
+  if (!usage || usage.pool.unlimited) return null;
+  const b = usage.pool;
+  const tone = b.remaining_hours <= 0 ? 'text-rose-400' : b.remaining_hours <= 0.25 ? 'text-amber-400' : 'text-emerald-400';
   return (
     <div
       className={`hidden min-[1600px]:flex items-center gap-2 h-8 px-2.5 rounded-lg border border-[var(--kt-s4)] bg-[var(--kt-s1)] text-[11px] font-mono ${className}`}
-      title="Hours left on your account"
+      title="Hours left on your account (transcription and translation share them)"
       data-testid="usage-badge"
     >
       <Clock size={12} className="text-slate-400" />
-      <span className="text-slate-400">Transcribe</span>
-      <span className={`font-bold ${tone(usage.transcribe)}`}>{formatHours(usage.transcribe.remaining_hours)}</span>
-      <span className="text-slate-600">·</span>
-      <span className="text-slate-400">Translate</span>
-      <span className={`font-bold ${tone(usage.translate)}`}>{formatHours(usage.translate.remaining_hours)}</span>
+      <span className="text-slate-400">Hours left</span>
+      <span className={`font-bold ${tone}`}>{formatHours(b.remaining_hours)}</span>
     </div>
   );
 }

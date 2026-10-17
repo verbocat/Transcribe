@@ -24,7 +24,7 @@ export default function OutOfHoursNotice() {
         </div>
         <p className="mt-3 text-sm leading-relaxed text-slate-300">
           This {what} needs <strong className="text-white">{formatHours(info.needed_hours)}</strong>, but your account has only{' '}
-          <strong className="text-white">{formatHours(info.remaining_hours)}</strong> of {what} time left. Nothing was started and nothing was charged.
+          <strong className="text-white">{formatHours(info.remaining_hours)}</strong> left. Nothing was started and nothing was charged.
         </p>
         <p className="mt-2 text-xs text-slate-400">Ask your administrator to add hours to your account.</p>
         <div className="mt-4 flex justify-end">

@@ -107,6 +107,17 @@ def _migrate_usage_schema():
     }
     with engine.begin() as conn:
         existing = {row[1] for row in conn.execute(text("PRAGMA table_info(auth_users)")).fetchall()}
+        if "hours_limit_ms" not in existing:
+            # One shared pool replaces the two per-kind limits. Runs exactly once, when the column is created:
+            # both unlimited -> unlimited; otherwise old transcription limit + old translation limit (a kind that
+            # was unlimited contributes only what it has already used, so nobody gains hours from the change).
+            conn.execute(text("ALTER TABLE auth_users ADD COLUMN hours_limit_ms INTEGER"))
+            conn.execute(text(
+                "UPDATE auth_users SET hours_limit_ms = "
+                "COALESCE(transcribe_limit_ms, transcribe_used_ms + transcribe_reserved_ms) + "
+                "COALESCE(translate_limit_ms, translate_used_ms + translate_reserved_ms) "
+                "WHERE transcribe_limit_ms IS NOT NULL OR translate_limit_ms IS NOT NULL"
+            ))
         for name, ddl in int_cols.items():
             if name not in existing:
                 conn.execute(text(f"ALTER TABLE auth_users ADD COLUMN {name} {ddl}"))

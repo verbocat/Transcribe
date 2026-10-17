@@ -114,16 +114,17 @@ export default function AccountMenuDropdown({ user, onOpenLogoutModal, compact =
             {/* Hours left */}
             {usage && (
               <div className="mb-2 p-2.5 rounded-xl bg-[var(--kt-s0)] border border-[var(--kt-s3)] text-[11px] space-y-1" data-testid="usage-menu">
-                <div className="text-slate-400 font-medium">Hours left on your account</div>
-                {[['Transcription', usage.transcribe], ['Translation', usage.translate]].map(([label, b]) => (
-                  <div key={label} className="flex items-center justify-between">
-                    <span className="text-slate-300">{label}</span>
-                    <span className="font-mono font-bold text-white">
-                      {formatHours(b.remaining_hours)}
-                      {!b.unlimited && <span className="text-slate-500 font-normal"> of {formatHours(b.limit_hours)}</span>}
-                    </span>
-                  </div>
-                ))}
+                <div className="text-slate-400 font-medium">Your hours (transcription and translation share them)</div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-300">Remaining</span>
+                  <span className="font-mono font-bold text-white">
+                    {formatHours(usage.pool.remaining_hours)}
+                    {!usage.pool.unlimited && <span className="text-slate-500 font-normal"> of {formatHours(usage.pool.limit_hours)}</span>}
+                  </span>
+                </div>
+                <div className="text-[10px] text-slate-500">
+                  Used {formatHours(usage.pool.used_hours)}: transcription {formatHours(usage.transcribe.used_hours)}, translation {formatHours(usage.translate.used_hours)}
+                </div>
               </div>
             )}
 

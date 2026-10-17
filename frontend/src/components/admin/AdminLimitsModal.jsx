@@ -1,12 +1,12 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { X, AudioLines, Languages, Timer, CalendarClock, Loader2, Check, ShieldCheck } from 'lucide-react';
+import { X, Timer, CalendarClock, Loader2, Check, ShieldCheck } from 'lucide-react';
 import { API_BASE } from '../../config';
 import { useAuth } from '../../auth_views/AuthContext';
 import { hrs, exact } from './adminUi';
 
 /**
  * Limits & access for one account, all enforced on the server:
- *  - usage time (transcription / translation) entered as hours + minutes, or unlimited
+ *  - one shared hours limit (transcription and translation both spend from it) entered as hours + minutes, or unlimited
  *  - longest file per job and jobs per 24 hours
  *  - studio and feature switches
  *  - last day the account can be used
@@ -54,7 +54,7 @@ function Section({ icon: Icon, title, hint, children }) {
   );
 }
 
-function TimeBudget({ icon, label, usage, value, onChange }) {
+function TimeBudget({ icon, label, usage, breakdown, value, onChange }) {
   const used = usage.used_hours + usage.reserved_hours;
   const limit = value.unlimited ? null : fromHM(value);
   const pct = limit ? Math.min(100, (used / limit) * 100) : 0;
@@ -86,6 +86,11 @@ function TimeBudget({ icon, label, usage, value, onChange }) {
           Used {exact(usage.used_hours, { fromHours: true })}{usage.reserved_hours > 0 ? ` · ${exact(usage.reserved_hours, { fromHours: true })} in progress` : ''}
           {value.unlimited ? ' · no limit' : ` · ${exact(Math.max(0, (limit || 0) - used), { fromHours: true })} left of ${hrs(limit || 0)}`}
         </div>
+        {breakdown && (
+          <div className="mt-1 text-[12px] text-[var(--kt-faint)] tabular-nums">
+            Spent so far: transcription {exact(breakdown.transcribe.used_hours, { fromHours: true })} · translation {exact(breakdown.translate.used_hours, { fromHours: true })}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -135,8 +140,7 @@ export default function AdminLimitsModal({ userId, onClose, onSaved }) {
         if (!alive) return;
         const u = data.user, a = u.access;
         const f = {
-          t: { unlimited: u.usage.transcribe.unlimited, ...toHM(u.usage.transcribe.limit_hours) },
-          l: { unlimited: u.usage.translate.unlimited, ...toHM(u.usage.translate.limit_hours) },
+          t: { unlimited: u.usage.pool.unlimited, ...toHM(u.usage.pool.limit_hours) },
           maxFile: a.max_file_minutes == null ? '' : String(a.max_file_minutes),
           perDay: a.max_jobs_per_day == null ? '' : String(a.max_jobs_per_day),
           until: a.access_until || '',
@@ -158,8 +162,7 @@ export default function AdminLimitsModal({ userId, onClose, onSaved }) {
     if (!form || !initial) return {};
     const out = {};
     const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-    if (!same(form.t, initial.t)) Object.assign(out, form.t.unlimited ? { transcribe_unlimited: true } : { transcribe_hours: fromHM(form.t) });
-    if (!same(form.l, initial.l)) Object.assign(out, form.l.unlimited ? { translate_unlimited: true } : { translate_hours: fromHM(form.l) });
+    if (!same(form.t, initial.t)) Object.assign(out, form.t.unlimited ? { unlimited: true } : { hours: fromHM(form.t) });
     if (form.maxFile !== initial.maxFile) out.max_file_minutes = form.maxFile === '' ? null : Number(form.maxFile);
     if (form.perDay !== initial.perDay) out.max_jobs_per_day = form.perDay === '' ? null : Number(form.perDay);
     if (form.until !== initial.until) out.access_until = form.until || null;
@@ -169,8 +172,7 @@ export default function AdminLimitsModal({ userId, onClose, onSaved }) {
   const dirty = Object.keys(body).length > 0;
 
   const save = async () => {
-    if (!form.t.unlimited && fromHM(form.t) <= 0) { setError('Enter transcription time, or turn on Unlimited.'); return; }
-    if (!form.l.unlimited && fromHM(form.l) <= 0) { setError('Enter translation time, or turn on Unlimited.'); return; }
+    if (!form.t.unlimited && form.t.h === '' && form.t.m === '') { setError('Enter the hours, or turn on Unlimited.'); return; }
     setBusy(true); setError('');
     try {
       const res = await fetch(`${API_BASE}/api/admin/users/${userId}/access`, {
@@ -205,9 +207,8 @@ export default function AdminLimitsModal({ userId, onClose, onSaved }) {
             <div className="py-10 text-center text-[13px] text-[var(--kt-muted)]">{error || <Loader2 size={18} className="animate-spin inline" />}</div>
           ) : (
             <>
-              <Section icon={Timer} title="Usage time" hint="Measured from the length of the media on the server. Translation counts subtitle time × number of languages.">
-                <TimeBudget icon={AudioLines} label="Transcription" usage={user.usage.transcribe} value={form.t} onChange={(t) => set({ t })} />
-                <TimeBudget icon={Languages} label="Translation" usage={user.usage.translate} value={form.l} onChange={(l) => set({ l })} />
+              <Section icon={Timer} title="Hours" hint="One pool for everything. Transcription and translation both spend from it, in any mix. Measured on the server from the length of the media; translation counts the full video length × number of languages.">
+                <TimeBudget icon={Timer} label="Total hours" usage={user.usage.pool} breakdown={user.usage} value={form.t} onChange={(t) => set({ t })} />
               </Section>
 
               <Section icon={Timer} title="Job limits" hint={`Jobs in the last 24 hours: ${user.access.jobs_last_24h ?? 0}`}>

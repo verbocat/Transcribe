@@ -79,9 +79,9 @@ Upload an audio or video file, pick the language and script, and run the transcr
 
 ## Accounts and hour limits (admin)
 
-Admins open **/admin → Accounts & Hours** to create accounts on any email domain (public sign-up stays `@verbolabs.com` only), set separate **transcription** and **translation** hour budgets, edit, disable or delete accounts, and read each person's usage history.
+Admins open **/admin → Accounts & Hours** to create accounts on any email domain (public sign-up stays `@verbolabs.com` only), give each person **one pool of hours** that transcription and translation both spend from (e.g. 1 hour = 10 min transcription + 50 min translation, or 30 + 30), edit, disable or delete accounts, and read each person's usage history.
 
 * Admins are the addresses in the `ADMIN_EMAILS` environment variable (comma separated, any domain) plus the built-in one. Nothing in the app can promote an account.
 * First admin: set `ADMIN_EMAILS=you@example.com` in the backend environment, restart, then run `cd backend && python -m app.manage_admin you@example.com` (asks for a password; there is no default one).
-* Limits are enforced on the server only: hours are reserved atomically before a job starts (length measured with ffmpeg on the stored file, never taken from the client), then charged or refunded. Translation is billed as subtitle time × target languages. Every step is written to the append-only `usage_ledger` table.
-* Existing accounts keep **unlimited** hours until an admin sets a limit.
+* Limits are enforced on the server only: hours are reserved atomically before a job starts (length measured with ffmpeg on the stored file, never taken from the client), then charged or refunded. Transcription is billed at the media length; translation at the full media length × target languages. Every step is written to the append-only `usage_ledger` table.
+* Existing accounts keep **unlimited** hours until an admin sets a limit. On first start after the one-pool update, an account that had separate limits gets their sum as its pool (an unlimited kind counts only what it had already used); the old columns are kept untouched.

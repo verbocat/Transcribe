@@ -22,7 +22,7 @@ def _job(uid, kind, seconds, route, ref, outcome):
 def test_jobs_and_overview_report_real_usage(main_app, admin_env):
     client = TestClient(main_app.app)
     admin = _admin(main_app, client)
-    uid, email = _make_user(transcribe_h=None, translate_h=None)
+    uid, email = _make_user(hours=None)
     _job(uid, usage.TRANSCRIBE, 1800, "/api/transcribe_async", "episode_01.wav", "settle")
     _job(uid, usage.TRANSCRIBE, 600, "/api/subtitle/generate_stream", "vid123", "refund")
     _job(uid, usage.TRANSLATE, 360, "/api/centroid/translate", "2 language(s)", "settle")

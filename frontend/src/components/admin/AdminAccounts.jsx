@@ -20,8 +20,13 @@ const api = async (token, path, { method = 'GET', body } = {}) => {
   return data;
 };
 
-function Meter({ b, isDark }) {
-  if (b.unlimited) return <span className={isDark ? 'text-slate-300' : 'text-slate-600'}>Unlimited · used {formatHours(b.used_hours)}</span>;
+function Meter({ b, split, isDark }) {
+  const sub = split && (
+    <div className={`mt-1 text-[10.5px] ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
+      Transcription {formatHours(split.transcribe.used_hours)} · Translation {formatHours(split.translate.used_hours)}
+    </div>
+  );
+  if (b.unlimited) return <div><span className={isDark ? 'text-slate-300' : 'text-slate-600'}>Unlimited · used {formatHours(b.used_hours)}</span>{sub}</div>;
   const total = b.limit_hours || 0;
   const pct = total > 0 ? Math.min(100, ((b.used_hours + b.reserved_hours) / total) * 100) : 100;
   const bar = pct >= 100 ? 'bg-rose-500' : pct >= 80 ? 'bg-amber-500' : 'bg-emerald-500';
@@ -34,6 +39,7 @@ function Meter({ b, isDark }) {
       <div className={`h-1.5 rounded-full overflow-hidden ${isDark ? 'bg-[var(--kt-s3)]' : 'bg-slate-200'}`}>
         <div className={`h-full ${bar}`} style={{ width: `${pct}%` }} />
       </div>
+      {sub}
     </div>
   );
 }
@@ -137,17 +143,14 @@ export default function AdminAccounts({ refreshKey = 0, onOpenDossier }) {
     return users.filter((u) => !q || (u.name || '').toLowerCase().includes(q) || (u.email || '').toLowerCase().includes(q));
   }, [users, search]);
 
-  const hoursBody = (f) => ({
-    ...(f.tUnl ? { transcribe_unlimited: true } : { transcribe_hours: f.tHours === '' ? null : Number(f.tHours) }),
-    ...(f.lUnl ? { translate_unlimited: true } : { translate_hours: f.lHours === '' ? null : Number(f.lHours) }),
-  });
+  const hoursBody = (f) => (f.unl ? { unlimited: true } : { hours: f.hours === '' ? null : Number(f.hours) });
 
   const run = async (fn) => {
     setBusy(true); setError('');
     try { await fn(); await load(); } catch (e) { setError(e.message); } finally { setBusy(false); }
   };
 
-  const openCreate = () => { setForm({ name: '', email: '', password: '', tHours: '10', lHours: '10', tUnl: false, lUnl: false }); setDialog({ type: 'create' }); setError(''); };
+  const openCreate = () => { setForm({ name: '', email: '', password: '', hours: '10', unl: false }); setDialog({ type: 'create' }); setError(''); };
   const openEdit = (u) => { setForm({ name: u.name, email: u.email, newPassword: '' }); setDialog({ type: 'edit', user: u }); setError(''); };
   const openLedger = (u) => run(async () => {
     const data = await api(token, `/users/${u.id}/usage?limit=200`);
@@ -206,8 +209,7 @@ export default function AdminAccounts({ refreshKey = 0, onOpenDossier }) {
           <thead>
             <tr className={`text-left ${muted} border-b ${isDark ? 'border-[var(--kt-s3)]' : 'border-slate-200'}`}>
               <th className="p-3 font-semibold">Account</th>
-              <th className="p-3 font-semibold">Transcription</th>
-              <th className="p-3 font-semibold">Translation</th>
+              <th className="p-3 font-semibold">Hours</th>
               <th className="p-3 font-semibold text-right">Actions</th>
             </tr>
           </thead>
@@ -219,8 +221,7 @@ export default function AdminAccounts({ refreshKey = 0, onOpenDossier }) {
                   <AccessBadges a={u.access} />
                   <div className={`font-mono ${muted}`}>{u.email}</div>
                 </td>
-                <td className="p-3"><Meter b={u.usage.transcribe} isDark={isDark} /></td>
-                <td className="p-3"><Meter b={u.usage.translate} isDark={isDark} /></td>
+                <td className="p-3"><Meter b={u.usage.pool} split={u.usage} isDark={isDark} /></td>
                 <td className="p-3">
                   <div className="flex justify-end gap-1.5">
                     <button type="button" onClick={() => setLimitsFor(u.id)} className={`px-2 py-1.5 rounded-lg border flex items-center gap-1 cursor-pointer ${btn}`} title="Usage time, job limits, feature access and end date"><SlidersHorizontal size={12} /> Limits</button>
@@ -250,8 +251,7 @@ export default function AdminAccounts({ refreshKey = 0, onOpenDossier }) {
               <div><label className={`block font-semibold mb-1 ${strong}`}>Email (any domain)</label><input required type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} className={`w-full px-3 py-1.5 rounded-lg border ${input}`} /></div>
             </div>
             <div><label className={`block font-semibold mb-1 ${strong}`}>Password <span className={`font-normal ${muted}`}>(leave empty to generate one)</span></label><input type="text" autoComplete="off" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} className={`w-full px-3 py-1.5 rounded-lg border font-mono ${input}`} placeholder="Generated if empty" /></div>
-            <HoursField label="Transcription hours" hours={form.tHours} unlimited={form.tUnl} onHours={(v) => setForm({ ...form, tHours: v })} onUnlimited={(v) => setForm({ ...form, tUnl: v })} isDark={isDark} />
-            <HoursField label="Translation hours" hours={form.lHours} unlimited={form.lUnl} onHours={(v) => setForm({ ...form, lHours: v })} onUnlimited={(v) => setForm({ ...form, lUnl: v })} isDark={isDark} />
+            <HoursField label="Hours (shared by transcription and translation)" hours={form.hours} unlimited={form.unl} onHours={(v) => setForm({ ...form, hours: v })} onUnlimited={(v) => setForm({ ...form, unl: v })} isDark={isDark} />
             {error && <div className="text-rose-400">{error}</div>}
             <div className="flex justify-end gap-2"><button type="button" onClick={() => setDialog(null)} className={`px-3 py-2 rounded-lg border cursor-pointer ${btn}`}>Cancel</button><button disabled={busy} className={`px-4 py-2 rounded-lg font-bold cursor-pointer disabled:opacity-50 ${primary}`}>Create account</button></div>
           </form>
@@ -303,7 +303,7 @@ export default function AdminAccounts({ refreshKey = 0, onOpenDossier }) {
                 <tbody>{ledgerRows(ledger).map((r) => (
                   <tr key={r.id} className="border-t border-[var(--kt-s3)] text-[var(--kt-text)]">
                     <td className="py-2 px-1 whitespace-nowrap text-[var(--kt-muted)]">{r.at ? new Date(r.at + (r.at.endsWith('Z') ? '' : 'Z')).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : ''}</td>
-                    <td className="px-1 whitespace-nowrap">{r.kind === 'transcribe' ? 'Transcription' : 'Translation'}</td>
+                    <td className="px-1 whitespace-nowrap">{r.kind === 'transcribe' ? 'Transcription' : r.kind === 'translate' ? 'Translation' : 'Hours limit'}</td>
                     <td className="px-1 font-mono whitespace-nowrap">{r.event === 'limit_change' ? '—' : exact(r.ms)}</td>
                     <td className="px-1 whitespace-nowrap"><span className={LEDGER_TONE[r.status]}>{r.status}</span></td>
                     <td className="px-1 max-w-[220px] truncate text-[var(--kt-muted)]" title={r.what}>{r.what}</td>

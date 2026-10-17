@@ -31,6 +31,9 @@ class User(AuthBase):
     # Hour budgets, stored as whole milliseconds so reserve/settle/refund arithmetic is exact.
     # *_limit_ms NULL means unlimited. used = finished work, reserved = jobs in flight; the
     # server only lets a job start when used + reserved + job <= limit (see usage.py).
+    # One shared pool: transcription and translation both spend from hours_limit_ms (NULL = unlimited).
+    # transcribe_/translate_limit_ms are the retired per-kind limits, kept only as a record of the old setup.
+    hours_limit_ms = Column(Integer, nullable=True)
     transcribe_limit_ms = Column(Integer, nullable=True)
     translate_limit_ms = Column(Integer, nullable=True)
     transcribe_used_ms = Column(Integer, default=0, nullable=False)

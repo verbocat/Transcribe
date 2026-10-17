@@ -21,15 +21,18 @@ logger = logging.getLogger(__name__)
 TRANSCRIBE = "transcribe"
 TRANSLATE = "translate"
 KINDS = (TRANSCRIBE, TRANSLATE)
+POOL = "pool"  # ledger kind for limit changes: the limit belongs to the shared pool, not to one kind
 MS_PER_HOUR = 3_600_000
 MAX_HOURS = 100_000  # sanity cap for an admin-entered limit
 STALE_AFTER = timedelta(hours=6)  # a reservation this old belongs to a job that can no longer be running
 
+# Per kind: (used, reserved) columns. The limit is one shared pool, auth_users.hours_limit_ms.
 _COLS = {
-    TRANSCRIBE: ("transcribe_limit_ms", "transcribe_used_ms", "transcribe_reserved_ms"),
-    TRANSLATE: ("translate_limit_ms", "translate_used_ms", "translate_reserved_ms"),
+    TRANSCRIBE: ("transcribe_used_ms", "transcribe_reserved_ms"),
+    TRANSLATE: ("translate_used_ms", "translate_reserved_ms"),
 }
 _LABEL = {TRANSCRIBE: "transcription", TRANSLATE: "translation"}
+_SPENT = "(transcribe_used_ms + translate_used_ms + transcribe_reserved_ms + translate_reserved_ms)"
 
 
 class OutOfHours(HTTPException):
@@ -40,7 +43,7 @@ class OutOfHours(HTTPException):
             status_code=402,
             detail=(
                 f"Out of hours: this {_LABEL[kind]} needs {_fmt(needed_ms)} but only "
-                f"{_fmt(remaining_ms)} of {_LABEL[kind]} time is left on your account. "
+                f"{_fmt(remaining_ms)} is left in your hours. "
                 "Ask your administrator for more hours."
             ),
         )
@@ -70,19 +73,27 @@ def hours_to_ms(hours: Optional[float]) -> Optional[int]:
     return int(round(h * MS_PER_HOUR))
 
 
+def _h(ms: int) -> float:
+    return round(ms / MS_PER_HOUR, 4)
+
+
 def usage_summary(user: User) -> Dict[str, Any]:
-    """What the UI shows: limits, used, in-flight and remaining hours per budget (None = unlimited)."""
-    out: Dict[str, Any] = {}
-    for kind, (lim_c, used_c, res_c) in _COLS.items():
-        limit, used, reserved = getattr(user, lim_c), getattr(user, used_c) or 0, getattr(user, res_c) or 0
-        out[kind] = {
-            "limit_hours": None if limit is None else round(limit / MS_PER_HOUR, 4),
-            "used_hours": round(used / MS_PER_HOUR, 4),
-            "reserved_hours": round(reserved / MS_PER_HOUR, 4),
-            "remaining_hours": None if limit is None else round(max(0, limit - used - reserved) / MS_PER_HOUR, 4),
+    """What the UI shows. `pool` is the single limit (None = unlimited) with everything spent from it;
+    `transcribe` / `translate` are only the breakdown of what was spent on each."""
+    t_used, l_used = user.transcribe_used_ms or 0, user.translate_used_ms or 0
+    reserved = (user.transcribe_reserved_ms or 0) + (user.translate_reserved_ms or 0)
+    limit = user.hours_limit_ms
+    return {
+        "pool": {
+            "limit_hours": None if limit is None else _h(limit),
+            "used_hours": _h(t_used + l_used),
+            "reserved_hours": _h(reserved),
+            "remaining_hours": None if limit is None else _h(max(0, limit - t_used - l_used - reserved)),
             "unlimited": limit is None,
-        }
-    return out
+        },
+        "transcribe": {"used_hours": _h(t_used), "reserved_hours": _h(user.transcribe_reserved_ms or 0)},
+        "translate": {"used_hours": _h(l_used), "reserved_hours": _h(user.translate_reserved_ms or 0)},
+    }
 
 
 def _ledger(db: Session, user_id: str, email: Optional[str], kind: str, event_name: str, ms: int,
@@ -105,12 +116,12 @@ def reserve(db: Session, user_id: str, kind: str, ms: int, route: str, ref: Opti
     if account is not None and not account.is_blocked:
         from .policy import check_job
         check_job(db, account, kind, ms, route)  # access window, studio switches, file length, jobs per day
-    lim_c, used_c, res_c = _COLS[kind]
+    used_c, res_c = _COLS[kind]
     # One statement: the check and the increment cannot be separated by another request.
     done = db.execute(
         text(
             f"UPDATE auth_users SET {res_c} = {res_c} + :ms "
-            f"WHERE id = :uid AND is_blocked = 0 AND ({lim_c} IS NULL OR {used_c} + {res_c} + :ms <= {lim_c})"
+            f"WHERE id = :uid AND is_blocked = 0 AND (hours_limit_ms IS NULL OR {_SPENT} + :ms <= hours_limit_ms)"
         ),
         {"ms": ms, "uid": user_id},
     )
@@ -119,7 +130,8 @@ def reserve(db: Session, user_id: str, kind: str, ms: int, route: str, ref: Opti
         user = db.query(User).filter(User.id == user_id).first()
         if user is None or user.is_blocked:
             raise HTTPException(status_code=403, detail="Your account has been suspended by an administrator.")
-        remaining = max(0, getattr(user, _COLS[kind][0]) - (getattr(user, used_c) or 0) - (getattr(user, res_c) or 0))
+        remaining = max(0, user.hours_limit_ms - (user.transcribe_used_ms or 0) - (user.translate_used_ms or 0)
+                        - (user.transcribe_reserved_ms or 0) - (user.translate_reserved_ms or 0))
         raise OutOfHours(kind, ms, remaining)
     user = db.query(User).filter(User.id == user_id).first()
     rid = None
@@ -148,7 +160,7 @@ def _close(db: Session, rid: str, outcome: str, note: Optional[str]) -> bool:
     if flipped.rowcount != 1:
         db.rollback()
         return False  # already settled or refunded
-    _, used_c, res_c = _COLS[res.kind]
+    used_c, res_c = _COLS[res.kind]
     add_used = f", {used_c} = {used_c} + :ms" if outcome == "settled" else ""
     db.execute(
         text(f"UPDATE auth_users SET {res_c} = MAX(0, {res_c} - :ms){add_used} WHERE id = :uid"),

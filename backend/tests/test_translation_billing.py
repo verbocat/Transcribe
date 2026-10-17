@@ -33,7 +33,7 @@ def _last_ref(uid):
 def test_full_translation_costs_the_whole_video_times_languages(main_app, tmp_path, monkeypatch):
     _fake_centroid(monkeypatch)
     client = TestClient(main_app.app)
-    uid, email = _make_user(translate_h=1)
+    uid, email = _make_user(hours=1)
     headers = _login(client, email)
     vid = f"bill_{uuid.uuid4().hex[:8]}"
     shutil.copy(_wav(tmp_path, 30), UPLOAD_DIR / f"{vid}.wav")  # a 30 s video whose subtitles cover only 4 s
@@ -49,7 +49,7 @@ def test_full_translation_costs_the_whole_video_times_languages(main_app, tmp_pa
 def test_without_media_the_subtitle_timeline_is_billed(main_app, monkeypatch):
     _fake_centroid(monkeypatch)
     client = TestClient(main_app.app)
-    uid, email = _make_user(translate_h=1)
+    uid, email = _make_user(hours=1)
     headers = _login(client, email)
     # gaps between lines are still part of the programme: billed to where the last line ends (95 s), not 4 s
     body = {"events": _cues([(1, 3), (93, 95)]), "source_lang": "hi", "target_langs": ["en"]}
@@ -64,7 +64,7 @@ def test_without_media_the_subtitle_timeline_is_billed(main_app, monkeypatch):
 def test_qc_fix_bills_only_the_lines_it_redoes(main_app, monkeypatch):
     _fake_centroid(monkeypatch)
     client = TestClient(main_app.app)
-    uid, email = _make_user(translate_h=1)
+    uid, email = _make_user(hours=1)
     headers = _login(client, email)
     body = {"events": _cues([(600, 603), (900, 902)]), "source_lang": "hi", "target_langs": ["en"], "purpose": "fix"}
     assert client.post("/api/centroid/translate", json=body, headers=headers).status_code == 200
@@ -76,7 +76,7 @@ def test_missing_media_id_falls_back_to_the_media_the_user_last_transcribed(main
     import time
     _fake_centroid(monkeypatch)
     client = TestClient(main_app.app)
-    uid, email = _make_user(translate_h=1)
+    uid, email = _make_user(hours=1)
     headers = _login(client, email)
     wav = _wav(tmp_path, 40)
     main_app._last_media_by_user[uid] = (str(wav), time.time())  # set by every metered transcription/generation

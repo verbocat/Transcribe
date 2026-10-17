@@ -23,7 +23,7 @@ from app.auth_module.security import (
     validate_verbolabs_email, validate_password, hash_password, generate_token,
 )
 from app.auth_module.usage import (
-    usage_summary, hours_to_ms, record_limit_change, list_ledger, TRANSCRIBE, TRANSLATE,
+    usage_summary, hours_to_ms, record_limit_change, list_ledger, TRANSCRIBE, TRANSLATE, POOL,
 )
 from app.config import UPLOAD_DIR
 from app.auth_module import policy
@@ -927,10 +927,8 @@ class CreateUserRequest(BaseModel):
     name: str
     email: str
     password: Optional[str] = None  # omit to have the server generate one (returned once)
-    transcribe_hours: Optional[float] = None
-    transcribe_unlimited: bool = False
-    translate_hours: Optional[float] = None
-    translate_unlimited: bool = False
+    hours: Optional[float] = None  # one shared pool for transcription and translation
+    unlimited: bool = False
 
 
 @admin_router.post("/users", status_code=201)
@@ -943,8 +941,7 @@ def create_user(payload: CreateUserRequest, request: Request, response: Response
     ok, err = validate_verbolabs_email(email)
     if not ok or len(email) > 255:
         raise HTTPException(status_code=400, detail=err or "Please enter a valid email address.")
-    t_ms = _resolve_limit(payload.transcribe_hours, payload.transcribe_unlimited, "Transcription hours")
-    l_ms = _resolve_limit(payload.translate_hours, payload.translate_unlimited, "Translation hours")
+    pool_ms = _resolve_limit(payload.hours, payload.unlimited, "Hours")
     if db.query(User).filter(User.email == email).first():
         raise HTTPException(status_code=409, detail="An account with this email already exists.")
 
@@ -957,12 +954,11 @@ def create_user(payload: CreateUserRequest, request: Request, response: Response
     pwd_hash, salt = hash_password(password)
     user = User(
         name=name, email=email, password_hash=pwd_hash, salt=salt, is_verified=True, role="editor", is_admin=False,
-        transcribe_limit_ms=t_ms, translate_limit_ms=l_ms,
+        hours_limit_ms=pool_ms,
     )
     db.add(user)
     db.flush()
-    record_limit_change(db, user, TRANSCRIBE, None, t_ms, admin.id)
-    record_limit_change(db, user, TRANSLATE, None, l_ms, admin.id)
+    record_limit_change(db, user, POOL, None, pool_ms, admin.id)
     _audit(db, admin, "user_created", f"{admin.email} created {email}", request)
     db.commit()
     out = {"success": True, "user": _user_row(user)}
@@ -1028,10 +1024,8 @@ def edit_user(user_id: str, payload: UpdateUserRequest, request: Request, respon
 
 
 class HoursRequest(BaseModel):
-    transcribe_hours: Optional[float] = None
-    transcribe_unlimited: Optional[bool] = None
-    translate_hours: Optional[float] = None
-    translate_unlimited: Optional[bool] = None
+    hours: Optional[float] = None
+    unlimited: Optional[bool] = None
 
 
 class AccessRequest(HoursRequest):
@@ -1066,18 +1060,13 @@ def set_user_access(user_id: str, payload: AccessRequest, request: Request, admi
     sent = payload.model_fields_set
     changes: List[str] = []
 
-    for kind, hours, unlimited, col, label in (
-        (TRANSCRIBE, payload.transcribe_hours, payload.transcribe_unlimited, "transcribe_limit_ms", "Transcription time"),
-        (TRANSLATE, payload.translate_hours, payload.translate_unlimited, "translate_limit_ms", "Translation time"),
-    ):
-        if hours is None and not unlimited:
-            continue
-        new_ms, old_ms = _resolve_limit(hours, bool(unlimited), label), getattr(target, col)
+    if payload.hours is not None or payload.unlimited:
+        new_ms, old_ms = _resolve_limit(payload.hours, bool(payload.unlimited), "Hours"), target.hours_limit_ms
         if new_ms != old_ms:
-            setattr(target, col, new_ms)
-            record_limit_change(db, target, kind, old_ms, new_ms, admin.id)
+            target.hours_limit_ms = new_ms
+            record_limit_change(db, target, POOL, old_ms, new_ms, admin.id)
             mins = None if new_ms is None else round(new_ms / 60_000)
-            changes.append(f"{label}: " + ("unlimited" if mins is None else f"{mins // 60}h {mins % 60:02d}m"))
+            changes.append("Hours: " + ("unlimited" if mins is None else f"{mins // 60}h {mins % 60:02d}m"))
 
     for field, label, unit, top in (("max_file_minutes", "Longest file per job", "min", 24 * 60), ("max_jobs_per_day", "Jobs per day", "", 10_000)):
         if field in sent:

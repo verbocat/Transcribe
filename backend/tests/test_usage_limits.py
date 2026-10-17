@@ -31,13 +31,12 @@ def admin_env(monkeypatch):
     monkeypatch.setenv("ADMIN_EMAILS", ADMIN_EMAIL)
 
 
-def _make_user(email=None, transcribe_h=1.0, translate_h=1.0, **kw):
+def _make_user(email=None, hours=1.0, **kw):
     email = email or f"u_{uuid.uuid4().hex[:8]}@example.com"
     h, s = hash_password(PASSWORD)
     db = SessionLocal()
     u = User(name="Test User", email=email, password_hash=h, salt=s, is_verified=True,
-             transcribe_limit_ms=None if transcribe_h is None else int(transcribe_h * 3_600_000),
-             translate_limit_ms=None if translate_h is None else int(translate_h * 3_600_000), **kw)
+             hours_limit_ms=None if hours is None else int(hours * 3_600_000), **kw)
     db.add(u)
     db.commit()
     uid = u.id
@@ -77,7 +76,7 @@ def _cues(n, each=2.0):
 
 def test_transcribe_over_limit_is_rejected_before_any_work(main_app, tmp_path, monkeypatch):
     client = TestClient(main_app.app)
-    uid, email = _make_user(transcribe_h=5 / 3600)  # 5 seconds of budget
+    uid, email = _make_user(hours=5 / 3600)  # 5 seconds of budget
     headers = _login(client, email)
     called = []
     monkeypatch.setattr(main_app, "process_audio_file", lambda **k: called.append(1))
@@ -91,7 +90,7 @@ def test_transcribe_over_limit_is_rejected_before_any_work(main_app, tmp_path, m
 
 def test_client_supplied_duration_is_ignored(main_app, tmp_path):
     client = TestClient(main_app.app)
-    uid, email = _make_user(transcribe_h=5 / 3600)
+    uid, email = _make_user(hours=5 / 3600)
     headers = _login(client, email)
     with open(_wav(tmp_path, 10), "rb") as f:
         res = client.post("/api/transcribe_async", headers=headers,
@@ -102,7 +101,7 @@ def test_client_supplied_duration_is_ignored(main_app, tmp_path):
 def test_translation_over_limit_rejected_and_falsified_timings_do_not_help(main_app, monkeypatch):
     from app import centroid_client
     client = TestClient(main_app.app)
-    uid, email = _make_user(translate_h=10 / 3600)  # 10 s of translation
+    uid, email = _make_user(hours=10 / 3600)  # 10 s of translation
     headers = _login(client, email)
     posted = []
 
@@ -146,7 +145,7 @@ def test_blocked_user_cannot_reserve():
 # ---- concurrency -------------------------------------------------------------------------------------
 
 def test_concurrent_requests_cannot_overshoot():
-    uid, _ = _make_user(transcribe_h=10)  # room for exactly 10 one-hour jobs
+    uid, _ = _make_user(hours=10)  # room for exactly 10 one-hour jobs
     results, barrier = [], threading.Barrier(40)
 
     def worker():
@@ -170,7 +169,7 @@ def test_concurrent_requests_cannot_overshoot():
 
 
 def test_reserved_hours_count_against_the_limit_until_refunded():
-    uid, _ = _make_user(transcribe_h=1)
+    uid, _ = _make_user(hours=1)
     db = SessionLocal()
     rid = usage.reserve(db, uid, usage.TRANSCRIBE, 3_600_000, "a")
     with pytest.raises(usage.OutOfHours):
@@ -186,7 +185,7 @@ def test_reserved_hours_count_against_the_limit_until_refunded():
 def test_success_is_charged_and_failure_is_refunded(main_app, monkeypatch):
     from app import centroid_client
     client = TestClient(main_app.app)
-    uid, email = _make_user(translate_h=1)
+    uid, email = _make_user(hours=1)
     headers = _login(client, email)
     body = {"events": _cues(5), "source_lang": "hi", "target_langs": ["en"]}  # 10 s
 
@@ -206,7 +205,7 @@ def test_success_is_charged_and_failure_is_refunded(main_app, monkeypatch):
 
 def test_failed_transcription_is_refunded(main_app, tmp_path, monkeypatch):
     client = TestClient(main_app.app)
-    uid, email = _make_user(transcribe_h=1)
+    uid, email = _make_user(hours=1)
     headers = _login(client, email)
 
     async def fail(**kw):
@@ -222,7 +221,7 @@ def test_failed_transcription_is_refunded(main_app, tmp_path, monkeypatch):
 
 def test_cancel_after_the_paid_call_started_is_still_charged(tmp_path):
     from app import metering
-    uid, _ = _make_user(transcribe_h=1)
+    uid, _ = _make_user(hours=1)
     ref = {"id": uid, "email": "x"}
     m = metering.Metered(ref, usage.TRANSCRIBE, 5000, "t").reserve()
     m.note_stage("transcribing")
@@ -236,7 +235,7 @@ def test_cancel_after_the_paid_call_started_is_still_charged(tmp_path):
 def test_stream_settles_on_complete_and_refunds_on_early_error(main_app, tmp_path, monkeypatch):
     import json
     client = TestClient(main_app.app)
-    uid, email = _make_user(transcribe_h=1)
+    uid, email = _make_user(hours=1)
     headers = _login(client, email)
     wav = _wav(tmp_path, 10)
     monkeypatch.setattr(main_app, "resolve_active_session_video", lambda vid: str(wav))
@@ -260,7 +259,7 @@ def test_stream_settles_on_complete_and_refunds_on_early_error(main_app, tmp_pat
 
 
 def test_stale_reservations_are_charged_not_leaked():
-    uid, _ = _make_user(transcribe_h=1)
+    uid, _ = _make_user(hours=1)
     db = SessionLocal()
     usage.reserve(db, uid, usage.TRANSCRIBE, 7000, "orphan")
     assert usage.reap_stale(db, older_than=None) >= 1
@@ -297,19 +296,19 @@ def _admin(main_app, client):
     exists = db.query(User).filter(User.email == ADMIN_EMAIL).first()
     db.close()
     if not exists:
-        _make_user(email=ADMIN_EMAIL, transcribe_h=None, translate_h=None)
+        _make_user(email=ADMIN_EMAIL, hours=None)
     init_auth_db()  # applies admin status from ADMIN_EMAILS
     return _login(client, ADMIN_EMAIL)
 
 
 def test_non_admin_cannot_use_admin_routes_or_change_own_limits(main_app, admin_env):
     client = TestClient(main_app.app)
-    uid, email = _make_user(transcribe_h=1)
+    uid, email = _make_user(hours=1)
     headers = _login(client, email)
     calls = [
         ("get", "/api/admin/users", None),
-        ("post", "/api/admin/users", {"name": "Eve", "email": "eve@example.com", "transcribe_unlimited": True, "translate_unlimited": True}),
-        ("put", f"/api/admin/users/{uid}/access", {"transcribe_unlimited": True}),
+        ("post", "/api/admin/users", {"name": "Eve", "email": "eve@example.com", "unlimited": True}),
+        ("put", f"/api/admin/users/{uid}/access", {"unlimited": True}),
         ("patch", f"/api/admin/users/{uid}/profile", {"name": "Hacker"}),
         ("patch", f"/api/admin/users/{uid}/status", {"role": "admin", "is_admin": True}),
         ("delete", f"/api/admin/users/{uid}", None),
@@ -321,10 +320,10 @@ def test_non_admin_cannot_use_admin_routes_or_change_own_limits(main_app, admin_
         assert getattr(client, method)(path, **({"json": body} if body is not None else {})).status_code == 401
     # extra fields on the self-service profile endpoint do nothing
     client.patch("/api/auth/profile", headers=headers,
-                 json={"name": "Me", "transcribe_limit_ms": None, "transcribe_hours": 999, "is_admin": True, "role": "admin"})
+                 json={"name": "Me", "hours_limit_ms": None, "hours": 999, "is_admin": True, "role": "admin"})
     db = SessionLocal()
     u = db.query(User).filter(User.id == uid).first()
-    assert u.transcribe_limit_ms == 3_600_000 and not u.is_admin and u.role != "admin"
+    assert u.hours_limit_ms == 3_600_000 and not u.is_admin and u.role != "admin"
     db.close()
     assert client.get("/api/auth/me", headers=headers).json()["user"]["is_admin"] is False
 
@@ -337,25 +336,25 @@ def test_admin_creates_user_on_any_domain_sets_hours_and_user_sees_them(main_app
     assert client.post("/api/auth/signup", json={"name": "Pub Lic", "email": email, "password": PASSWORD, "confirm_password": PASSWORD}).status_code == 400
     # hours must be explicit
     assert client.post("/api/admin/users", headers=admin, json={"name": "New Person", "email": email}).status_code == 400
-    assert client.post("/api/admin/users", headers=admin, json={"name": "New Person", "email": email, "transcribe_hours": -1, "translate_hours": 1}).status_code == 400
-    res = client.post("/api/admin/users", headers=admin, json={"name": "New Person", "email": email, "transcribe_hours": 2.5, "translate_hours": 0})
+    assert client.post("/api/admin/users", headers=admin, json={"name": "New Person", "email": email, "hours": -1}).status_code == 400
+    res = client.post("/api/admin/users", headers=admin, json={"name": "New Person", "email": email, "hours": 2.5})
     assert res.status_code == 201, res.text
     body = res.json()
     pwd = body["generated_password"]
-    assert body["user"]["usage"]["transcribe"]["limit_hours"] == 2.5
-    assert body["user"]["usage"]["translate"]["remaining_hours"] == 0
-    assert client.post("/api/admin/users", headers=admin, json={"name": "Dupe", "email": email.upper(), "transcribe_unlimited": True, "translate_unlimited": True}).status_code == 409
+    assert body["user"]["usage"]["pool"]["limit_hours"] == 2.5
+    assert client.post("/api/admin/users", headers=admin, json={"name": "Dupe", "email": email.upper(), "unlimited": True}).status_code == 409
     login = client.post("/api/auth/login", json={"email": email, "password": pwd})
     assert login.status_code == 200
     me = client.get("/api/auth/me", headers={"Authorization": f"Bearer {login.json()['token']}"}).json()["user"]
-    assert me["usage"]["transcribe"]["remaining_hours"] == 2.5 and not me["is_admin"]
-    # zero translation hours: translation is refused
+    assert me["usage"]["pool"]["remaining_hours"] == 2.5 and not me["is_admin"]
+    # zero hours: translation is refused
     h = {"Authorization": f"Bearer {login.json()['token']}"}
+    assert client.put(f"/api/admin/users/{body['user']['id']}/access", headers=admin, json={"hours": 0}).status_code == 200
     r = client.post("/api/centroid/translate", headers=h, json={"events": _cues(1), "source_lang": "hi", "target_langs": ["en"]})
     assert r.status_code == 402
     # admin edits hours; ledger records the change; delete keeps the ledger
     uid = body["user"]["id"]
-    assert client.put(f"/api/admin/users/{uid}/access", headers=admin, json={"translate_hours": 3}).json()["user"]["usage"]["translate"]["limit_hours"] == 3
+    assert client.put(f"/api/admin/users/{uid}/access", headers=admin, json={"hours": 3}).json()["user"]["usage"]["pool"]["limit_hours"] == 3
     led = client.get(f"/api/admin/users/{uid}/usage", headers=admin).json()["ledger"]
     assert any(r["event"] == "limit_change" for r in led)
     assert client.delete(f"/api/admin/users/{uid}", headers=admin).status_code == 200
@@ -379,11 +378,11 @@ def test_admin_accounts_are_protected(main_app, admin_env):
 
 
 def test_migration_is_idempotent_and_leaves_existing_accounts_unlimited():
-    uid, _ = _make_user(transcribe_h=None, translate_h=None)
+    uid, _ = _make_user(hours=None)
     init_auth_db(); init_auth_db()
     db = SessionLocal()
     u = db.query(User).filter(User.id == uid).first()
-    assert u.transcribe_limit_ms is None and u.transcribe_used_ms == 0
+    assert u.hours_limit_ms is None and u.transcribe_used_ms == 0
     db.close()
 
 
@@ -401,7 +400,7 @@ def test_duration_comes_from_the_decoded_audio(tmp_path):
 def test_fix_purpose_cannot_discount_a_whole_track(main_app, monkeypatch):
     from app import centroid_client
     client = TestClient(main_app.app)
-    uid, email = _make_user(translate_h=1)
+    uid, email = _make_user(hours=1)
     headers = _login(client, email)
 
     async def ok(path, b):
@@ -414,3 +413,52 @@ def test_fix_purpose_cannot_discount_a_whole_track(main_app, monkeypatch):
     assert _state(uid)["translate_used_ms"] == 6_000          # only the three lines' time
     assert client.post("/api/centroid/translate", json=many, headers=headers).status_code == 200
     assert _state(uid)["translate_used_ms"] >= 6_000 + 495_000  # a 100-line "fix" is billed up to the last subtitle's end
+
+
+# ---- one shared pool -----------------------------------------------------------------------------------
+
+def test_transcription_and_translation_spend_from_one_pool():
+    from app.auth_module import usage
+    uid, _ = _make_user(hours=60 / 3600)  # a 60 s pool
+    db = SessionLocal()
+    try:
+        r1 = usage.reserve(db, uid, usage.TRANSCRIBE, 10_000, "/t")
+        usage.settle(db, r1)                                   # 10 s of transcription
+        r2 = usage.reserve(db, uid, usage.TRANSLATE, 50_000, "/x")  # 50 s of translation: exactly fills the pool
+        with pytest.raises(HTTPException) as e:
+            usage.reserve(db, uid, usage.TRANSCRIBE, 1_000, "/t")  # nothing left for either kind
+        assert e.value.status_code == 402 and e.value.extra["remaining_hours"] == 0
+        usage.refund(db, r2)
+        r3 = usage.reserve(db, uid, usage.TRANSCRIBE, 50_000, "/t")  # the refunded part is usable by the other kind
+        with pytest.raises(HTTPException):
+            usage.reserve(db, uid, usage.TRANSLATE, 1_000, "/x")
+        usage.settle(db, r3)
+        s = usage.usage_summary(db.query(User).filter(User.id == uid).first())
+        assert s["pool"]["used_hours"] == round(60 / 3600, 4) and s["pool"]["remaining_hours"] == 0
+        assert s["transcribe"]["used_hours"] == round(60 / 3600, 4) and s["translate"]["used_hours"] == 0
+    finally:
+        db.close()
+
+
+def test_old_per_kind_limits_become_one_pool_once():
+    from sqlalchemy import text
+    from app.auth_module.database import engine
+    ids = {}
+    db = SessionLocal()
+    for name, t, l in (("both", 3_600_000, 7_200_000), ("t_only", 3_600_000, None), ("none", None, None)):
+        _, email = _make_user(hours=None)
+        u = db.query(User).filter(User.email == email).first()
+        u.transcribe_limit_ms, u.translate_limit_ms = t, l
+        u.translate_used_ms = 600_000
+        ids[name] = u.id
+    db.commit()
+    db.close()
+    with engine.begin() as conn:  # simulate the database as it was before this change
+        conn.execute(text("ALTER TABLE auth_users DROP COLUMN hours_limit_ms"))
+    init_auth_db(); init_auth_db()
+    db = SessionLocal()
+    got = {k: db.query(User).filter(User.id == v).first().hours_limit_ms for k, v in ids.items()}
+    db.close()
+    assert got["both"] == 3 * 3_600_000                  # 1h + 2h
+    assert got["t_only"] == 3_600_000 + 600_000          # unlimited translation counts only what it already used
+    assert got["none"] is None                           # unlimited stays unlimited

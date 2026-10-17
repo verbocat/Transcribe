@@ -31,13 +31,13 @@ def test_admin_sets_and_reads_back_every_limit(main_app, admin_env):
     admin = _admin(main_app, client)
     uid, _ = _make_user()
     until = (date.today() + timedelta(days=30)).isoformat()
-    out = _put(client, admin, uid, transcribe_hours=12.5, translate_unlimited=True, max_file_minutes=90, max_jobs_per_day=5,
+    out = _put(client, admin, uid, hours=12.5, max_file_minutes=90, max_jobs_per_day=5,
                access_until=until, can_subtitle_studio=False, can_export=False)
     a = out["user"]["access"]
     assert a["max_file_minutes"] == 90 and a["max_jobs_per_day"] == 5 and a["access_until"] == until
     assert a["can_subtitle_studio"] is False and a["can_export"] is False and a["can_transcribe_studio"] is True
-    assert out["user"]["usage"]["transcribe"]["limit_hours"] == 12.5 and out["user"]["usage"]["translate"]["unlimited"]
-    assert len(out["changes"]) == 7
+    assert out["user"]["usage"]["pool"]["limit_hours"] == 12.5
+    assert len(out["changes"]) == 6
     # null clears a limit; fields that are not sent stay as they were
     a = _put(client, admin, uid, max_file_minutes=None, access_until=None)["user"]["access"]
     assert a["max_file_minutes"] is None and a["access_until"] is None and a["max_jobs_per_day"] == 5
@@ -51,7 +51,7 @@ def test_admin_sets_and_reads_back_every_limit(main_app, admin_env):
 def test_studio_and_translation_switches_block_jobs(main_app, admin_env):
     client = TestClient(main_app.app)
     admin = _admin(main_app, client)
-    uid, _ = _make_user(transcribe_h=None, translate_h=None)
+    uid, _ = _make_user(hours=None)
     _put(client, admin, uid, can_transcribe_studio=False, can_translate=False)
     for kind, route in ((usage.TRANSCRIBE, "/api/transcribe_async"), (usage.TRANSLATE, "/api/centroid/translate")):
         with pytest.raises(HTTPException) as e:
@@ -63,7 +63,7 @@ def test_studio_and_translation_switches_block_jobs(main_app, admin_env):
 def test_file_length_and_jobs_per_day(main_app, admin_env):
     client = TestClient(main_app.app)
     admin = _admin(main_app, client)
-    uid, _ = _make_user(transcribe_h=None, translate_h=None)
+    uid, _ = _make_user(hours=None)
     _put(client, admin, uid, max_file_minutes=30, max_jobs_per_day=2)
     with pytest.raises(HTTPException) as e:
         _reserve(uid, usage.TRANSCRIBE, 31 * 60, "/api/transcribe")
