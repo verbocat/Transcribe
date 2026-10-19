@@ -29,10 +29,8 @@ export function useUsage(enabled = true) {
 export function formatHours(h) {
   if (h === null || h === undefined) return 'Unlimited';
   const total = Math.max(0, Math.round(h * 3600));
-  const hh = Math.floor(total / 3600);
-  const mm = Math.floor((total % 3600) / 60);
-  if (hh === 0 && mm === 0) return total > 0 ? `${total}s` : '0h';
-  return hh > 0 ? `${hh}h ${String(mm).padStart(2, '0')}m` : `${mm}m`;
+  if (total > 0 && total < 60) return `${total}s`;
+  return `${Math.round(total / 60).toLocaleString('en-US')} min`;
 }
 
 /** Compact header chip: the one shared pool of hours. Hidden when the account is unlimited. */
@@ -48,7 +46,7 @@ export default function UsageBadge({ className = '' }) {
       data-testid="usage-badge"
     >
       <Clock size={12} className="text-slate-400" />
-      <span className="text-slate-400">Hours left</span>
+      <span className="text-slate-400">Minutes left</span>
       <span className={`font-bold ${tone}`}>{formatHours(b.remaining_hours)}</span>
     </div>
   );

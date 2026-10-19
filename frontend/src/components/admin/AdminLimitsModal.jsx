@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { X, Timer, CalendarClock, Loader2, Check, ShieldCheck } from 'lucide-react';
 import { API_BASE } from '../../config';
 import { useAuth } from '../../auth_views/AuthContext';
-import { hrs, exact } from './adminUi';
+import { mins } from './adminUi';
 
 /**
  * Limits & access for one account, all enforced on the server:
@@ -21,12 +21,9 @@ const SWITCHES = [
   ['can_audio_peaks', 'Audio waveform', 'Draw the audio waveform on the timeline.'],
 ];
 
-const toHM = (hours) => {
-  if (hours == null) return { h: '', m: '' };
-  const total = Math.round(hours * 60);
-  return { h: String(Math.floor(total / 60)), m: String(total % 60) };
-};
-const fromHM = ({ h, m }) => (Number(h || 0) * 60 + Number(m || 0)) / 60;
+// One number, in minutes. Transcription and translation both spend from it.
+const toMin = (hours) => (hours == null ? '' : String(Math.round(hours * 60)));
+const fromMin = (m) => Number(m || 0) / 60;
 
 const field = 'h-9 rounded-lg border border-[var(--kt-s4)] bg-[var(--kt-s0)] px-3 text-[13px] text-[var(--kt-text)] tabular-nums placeholder:text-[var(--kt-faint)] focus:outline-none focus:border-[var(--kt-accent)] disabled:opacity-40';
 const chip = (on) => `h-7 px-2.5 rounded-md text-[12px] font-medium cursor-pointer transition-colors ${on ? 'bg-[var(--kt-accent)] text-[var(--kt-accent-ink)]' : 'bg-[var(--kt-s2)] text-[var(--kt-muted)] hover:text-[var(--kt-text)]'}`;
@@ -56,7 +53,7 @@ function Section({ icon: Icon, title, hint, children }) {
 
 function TimeBudget({ icon, label, usage, breakdown, value, onChange }) {
   const used = usage.used_hours + usage.reserved_hours;
-  const limit = value.unlimited ? null : fromHM(value);
+  const limit = value.unlimited ? null : fromMin(value.min);
   const pct = limit ? Math.min(100, (used / limit) * 100) : 0;
   const Icon = icon;
   return (
@@ -68,27 +65,24 @@ function TimeBudget({ icon, label, usage, breakdown, value, onChange }) {
         </label>
       </div>
       <div className="mt-3 flex items-center gap-2">
-        <input type="number" min="0" inputMode="numeric" aria-label={`${label} hours`} disabled={value.unlimited} value={value.unlimited ? '' : value.h}
-          onChange={(e) => onChange({ ...value, h: e.target.value })} placeholder="0" className={`${field} w-20`} />
-        <span className="text-[12px] text-[var(--kt-muted)]">hours</span>
-        <input type="number" min="0" max="59" inputMode="numeric" aria-label={`${label} minutes`} disabled={value.unlimited} value={value.unlimited ? '' : value.m}
-          onChange={(e) => onChange({ ...value, m: e.target.value })} placeholder="0" className={`${field} w-16`} />
+        <input type="number" min="0" step="1" inputMode="numeric" aria-label="Total minutes" disabled={value.unlimited} value={value.unlimited ? '' : value.min}
+          onChange={(e) => onChange({ ...value, min: e.target.value })} placeholder="0" className={`${field} w-28`} />
         <span className="text-[12px] text-[var(--kt-muted)]">minutes</span>
         <div className="ml-auto flex gap-1">
-          {[1, 5, 10, 50].map((h) => (
-            <button key={h} type="button" disabled={value.unlimited} className={`${chip(!value.unlimited && limit === h)} disabled:opacity-40`} onClick={() => onChange({ unlimited: false, h: String(h), m: '0' })}>{h}h</button>
+          {[30, 60, 120, 300, 600].map((m) => (
+            <button key={m} type="button" disabled={value.unlimited} className={`${chip(!value.unlimited && Number(value.min) === m)} disabled:opacity-40`} onClick={() => onChange({ unlimited: false, min: String(m) })}>{m}</button>
           ))}
         </div>
       </div>
       <div className="mt-3">
         {!value.unlimited && <div className="h-1.5 rounded-full bg-[var(--kt-s3)] overflow-hidden mb-1.5"><div className={`h-full rounded-full ${pct >= 100 ? 'bg-[var(--kt-danger)]' : pct >= 80 ? 'bg-[var(--kt-warn)]' : 'bg-[var(--kt-accent)]'}`} style={{ width: `${pct}%` }} /></div>}
         <div className="text-[12px] text-[var(--kt-muted)] tabular-nums">
-          Used {exact(usage.used_hours, { fromHours: true })}{usage.reserved_hours > 0 ? ` · ${exact(usage.reserved_hours, { fromHours: true })} in progress` : ''}
-          {value.unlimited ? ' · no limit' : ` · ${exact(Math.max(0, (limit || 0) - used), { fromHours: true })} left of ${hrs(limit || 0)}`}
+          Used {mins(usage.used_hours)}{usage.reserved_hours > 0 ? ` · ${mins(usage.reserved_hours)} in progress` : ''}
+          {value.unlimited ? ' · no limit' : ` · ${mins(Math.max(0, (limit || 0) - used))} left of ${mins(limit || 0)}`}
         </div>
         {breakdown && (
           <div className="mt-1 text-[12px] text-[var(--kt-faint)] tabular-nums">
-            Spent so far: transcription {exact(breakdown.transcribe.used_hours, { fromHours: true })} · translation {exact(breakdown.translate.used_hours, { fromHours: true })}
+            Spent so far: transcription {mins(breakdown.transcribe.used_hours)} · translation {mins(breakdown.translate.used_hours)}
           </div>
         )}
       </div>
@@ -140,7 +134,7 @@ export default function AdminLimitsModal({ userId, onClose, onSaved }) {
         if (!alive) return;
         const u = data.user, a = u.access;
         const f = {
-          t: { unlimited: u.usage.pool.unlimited, ...toHM(u.usage.pool.limit_hours) },
+          t: { unlimited: u.usage.pool.unlimited, min: toMin(u.usage.pool.limit_hours) },
           maxFile: a.max_file_minutes == null ? '' : String(a.max_file_minutes),
           perDay: a.max_jobs_per_day == null ? '' : String(a.max_jobs_per_day),
           until: a.access_until || '',
@@ -162,7 +156,7 @@ export default function AdminLimitsModal({ userId, onClose, onSaved }) {
     if (!form || !initial) return {};
     const out = {};
     const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-    if (!same(form.t, initial.t)) Object.assign(out, form.t.unlimited ? { unlimited: true } : { hours: fromHM(form.t) });
+    if (!same(form.t, initial.t)) Object.assign(out, form.t.unlimited ? { unlimited: true } : { hours: fromMin(form.t.min) });
     if (form.maxFile !== initial.maxFile) out.max_file_minutes = form.maxFile === '' ? null : Number(form.maxFile);
     if (form.perDay !== initial.perDay) out.max_jobs_per_day = form.perDay === '' ? null : Number(form.perDay);
     if (form.until !== initial.until) out.access_until = form.until || null;
@@ -172,7 +166,7 @@ export default function AdminLimitsModal({ userId, onClose, onSaved }) {
   const dirty = Object.keys(body).length > 0;
 
   const save = async () => {
-    if (!form.t.unlimited && form.t.h === '' && form.t.m === '') { setError('Enter the hours, or turn on Unlimited.'); return; }
+    if (!form.t.unlimited && form.t.min === '') { setError('Enter the hours, or turn on Unlimited.'); return; }
     setBusy(true); setError('');
     try {
       const res = await fetch(`${API_BASE}/api/admin/users/${userId}/access`, {
@@ -207,8 +201,8 @@ export default function AdminLimitsModal({ userId, onClose, onSaved }) {
             <div className="py-10 text-center text-[13px] text-[var(--kt-muted)]">{error || <Loader2 size={18} className="animate-spin inline" />}</div>
           ) : (
             <>
-              <Section icon={Timer} title="Hours" hint="One pool for everything. Transcription and translation both spend from it, in any mix. Measured on the server from the length of the media; translation counts the full video length × number of languages.">
-                <TimeBudget icon={Timer} label="Total hours" usage={user.usage.pool} breakdown={user.usage} value={form.t} onChange={(t) => set({ t })} />
+              <Section icon={Timer} title="Minutes" hint="One number for everything. Transcription and translation both spend from it, in any mix, e.g. 60 minutes = 5 transcribing + 55 translating. Measured on the server from the length of the media; translation counts the full video length × number of languages.">
+                <TimeBudget icon={Timer} label="Minutes (transcription and translation share them)" usage={user.usage.pool} breakdown={user.usage} value={form.t} onChange={(t) => set({ t })} />
               </Section>
 
               <Section icon={Timer} title="Job limits" hint={`Jobs in the last 24 hours: ${user.access.jobs_last_24h ?? 0}`}>

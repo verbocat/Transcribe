@@ -232,7 +232,7 @@ export default function AdminDashboard({ onBackToStudio, onOpenStudio, user: cur
 
   const TABS = [
     { id: 'overview', label: 'Overview', icon: Activity },
-    { id: 'users', label: 'Users & Hours', icon: Users, badge: overview?.users?.total },
+    { id: 'users', label: 'Users & Minutes', icon: Users, badge: overview?.users?.total },
     { id: 'jobs', label: 'Jobs', icon: Layers },
     { id: 'media', label: 'Media', icon: Film },
     { id: 'hardware', label: 'Server', icon: Cpu },

@@ -18,6 +18,14 @@ export function hrs(h) {
   return h >= 100 ? `${Math.round(h)}h` : `${h.toFixed(1).replace(/\.0$/, '')}h`;
 }
 
+/** Minutes only: "55 min", "1,250 min", "40s" for under a minute. */
+export function mins(h) {
+  if (h == null) return '—';
+  const total = Math.max(0, Math.round(h * 3600));
+  if (total > 0 && total < 60) return `${total}s`;
+  return `${Math.round(total / 60).toLocaleString('en-US')} min`;
+}
+
 /** Exact duration from milliseconds (or hours): "1h 02m 05s", "3m 12s", "45s". */
 export function exact(ms, { fromHours = false } = {}) {
   if (ms == null) return '—';
