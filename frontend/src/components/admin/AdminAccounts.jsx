@@ -106,8 +106,6 @@ function AccessBadges({ a }) {
   const chips = [];
   if (a.expired) chips.push(['Access ended', true]);
   else if (a.access_until) chips.push([`Until ${new Date(`${a.access_until}T00:00:00`).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}`, false]);
-  if (a.max_file_minutes) chips.push([`Files ≤ ${a.max_file_minutes} min`, false]);
-  if (a.max_jobs_per_day != null) chips.push([`${a.max_jobs_per_day} jobs/day`, false]);
   Object.entries(OFF_LABELS).forEach(([k, l]) => { if (a[k] === false) chips.push([l, true]); });
   if (!chips.length) return null;
   return (

@@ -2,8 +2,8 @@
 
 * Access window: `access_expires_at` (NULL = never). After it passes the account cannot sign in or use the API.
 * Studio / feature switches: Transcribe Studio, Subtitle Studio, AI translation, AI assistance, exports, waveforms.
-* Job limits: longest file per transcription job (`max_file_minutes`) and jobs per rolling 24 hours (`max_jobs_per_day`).
-  NULL means no limit.
+* There are no per-job limits: the single minutes pool (usage.py) is the only cap on usage. The old
+  `max_file_minutes` / `max_jobs_per_day` columns are kept in the database but no longer read.
 
 Hour budgets live in usage.py; `check_job` runs inside usage.reserve, so every metered route gets these checks
 before any hours are held or any provider is called.
@@ -64,17 +64,8 @@ def require(user: Optional[User], name: str) -> None:
         raise HTTPException(status_code=403, detail=FLAGS[name][1] + _ASK)
 
 
-def jobs_last_24h(db: Session, user_id: str) -> int:
-    since = (datetime.now(timezone.utc) - timedelta(hours=24)).replace(tzinfo=None)
-    return db.query(UsageReservation).filter(
-        UsageReservation.user_id == user_id,
-        UsageReservation.created_at >= since,
-        UsageReservation.status != "refunded",
-    ).count()
-
-
 def check_job(db: Session, user: User, kind: str, ms: int, route: str) -> None:
-    """Everything except the hour budget: access window, studio/feature switches, file length, jobs per day."""
+    """Everything except the minutes pool: access window, role and studio/feature switches."""
     ensure_active(user)
     from .roles import forbid_linguist
     forbid_linguist(user)  # linguists never run or spend anything
@@ -85,33 +76,15 @@ def check_job(db: Session, user: User, kind: str, ms: int, route: str) -> None:
     elif route in TRANSLATE_ROUTES:
         require(user, "can_translate")
 
-    max_min = getattr(user, "max_file_minutes", None)
-    if kind == "transcribe" and max_min and ms > max_min * 60_000:
-        raise HTTPException(
-            status_code=403,
-            detail=f"This file is {ms / 60_000:.0f} min long; your account allows files up to {max_min} min." + _ASK,
-        )
-
-    per_day = getattr(user, "max_jobs_per_day", None)
-    if per_day is not None and jobs_last_24h(db, user.id) >= per_day:
-        raise HTTPException(
-            status_code=429,
-            detail=f"Daily limit reached: your account allows {per_day} job{'s' if per_day != 1 else ''} per 24 hours." + _ASK,
-        )
-
 
 def summary(user: User, db: Optional[Session] = None) -> Dict[str, Any]:
     exp = _utc(getattr(user, "access_expires_at", None))
     out: Dict[str, Any] = {name: flag(user, name) for name in FLAGS}
     out.update({
-        "max_file_minutes": getattr(user, "max_file_minutes", None),
-        "max_jobs_per_day": getattr(user, "max_jobs_per_day", None),
         # the last day the account can still be used, as YYYY-MM-DD (stored as the midnight after it)
         "access_until": (exp - timedelta(seconds=1)).date().isoformat() if exp else None,
         "expired": is_expired(user),
     })
-    if db is not None:
-        out["jobs_last_24h"] = jobs_last_24h(db, user.id)
     return out
 
 

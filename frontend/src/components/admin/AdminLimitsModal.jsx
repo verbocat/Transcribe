@@ -7,7 +7,6 @@ import { mins } from './adminUi';
 /**
  * Limits & access for one account, all enforced on the server:
  *  - one shared hours limit (transcription and translation both spend from it) entered as hours + minutes, or unlimited
- *  - longest file per job and jobs per 24 hours
  *  - studio and feature switches
  *  - last day the account can be used
  */
@@ -90,31 +89,6 @@ function TimeBudget({ icon, label, usage, breakdown, value, onChange }) {
   );
 }
 
-function NumberLimit({ label, hint, unit, value, onChange, presets }) {
-  const none = value === '';
-  return (
-    <div className="rounded-xl border border-[var(--kt-s3)] bg-[var(--kt-s0)]/50 p-4">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <div className="text-[13px] font-medium text-[var(--kt-text)]">{label}</div>
-          <div className="mt-0.5 text-[12px] text-[var(--kt-muted)]">{hint}</div>
-        </div>
-        <label className="flex items-center gap-2 text-[12px] text-[var(--kt-muted)] cursor-pointer shrink-0">
-          No limit <Toggle on={none} label={`${label}: no limit`} onChange={(n) => onChange(n ? '' : String(presets[1]))} />
-        </label>
-      </div>
-      <div className="mt-3 flex items-center gap-2">
-        <input type="number" min="1" inputMode="numeric" aria-label={label} disabled={none} value={value} placeholder="—"
-          onChange={(e) => onChange(e.target.value)} className={`${field} w-24`} />
-        <span className="text-[12px] text-[var(--kt-muted)]">{unit}</span>
-        <div className="ml-auto flex gap-1">
-          {presets.map((p) => <button key={p} type="button" className={chip(String(p) === value)} onClick={() => onChange(String(p))}>{p}</button>)}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 export default function AdminLimitsModal({ userId, onClose, onSaved }) {
   const { token } = useAuth();
   const [user, setUser] = useState(null);
@@ -135,8 +109,6 @@ export default function AdminLimitsModal({ userId, onClose, onSaved }) {
         const u = data.user, a = u.access;
         const f = {
           t: { unlimited: u.usage.pool.unlimited, min: toMin(u.usage.pool.limit_hours) },
-          maxFile: a.max_file_minutes == null ? '' : String(a.max_file_minutes),
-          perDay: a.max_jobs_per_day == null ? '' : String(a.max_jobs_per_day),
           until: a.access_until || '',
           ...Object.fromEntries(SWITCHES.map(([k]) => [k, a[k]])),
         };
@@ -157,8 +129,6 @@ export default function AdminLimitsModal({ userId, onClose, onSaved }) {
     const out = {};
     const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
     if (!same(form.t, initial.t)) Object.assign(out, form.t.unlimited ? { unlimited: true } : { hours: fromMin(form.t.min) });
-    if (form.maxFile !== initial.maxFile) out.max_file_minutes = form.maxFile === '' ? null : Number(form.maxFile);
-    if (form.perDay !== initial.perDay) out.max_jobs_per_day = form.perDay === '' ? null : Number(form.perDay);
     if (form.until !== initial.until) out.access_until = form.until || null;
     SWITCHES.forEach(([k]) => { if (form[k] !== initial[k]) out[k] = form[k]; });
     return out;
@@ -203,13 +173,6 @@ export default function AdminLimitsModal({ userId, onClose, onSaved }) {
             <>
               <Section icon={Timer} title="Minutes" hint="One number for everything. Transcription and translation both spend from it, in any mix, e.g. 60 minutes = 5 transcribing + 55 translating. Measured on the server from the length of the media; translation counts the full video length × number of languages.">
                 <TimeBudget icon={Timer} label="Minutes (transcription and translation share them)" usage={user.usage.pool} breakdown={user.usage} value={form.t} onChange={(t) => set({ t })} />
-              </Section>
-
-              <Section icon={Timer} title="Job limits" hint={`Jobs in the last 24 hours: ${user.access.jobs_last_24h ?? 0}`}>
-                <NumberLimit label="Longest file per job" hint="Files longer than this are refused before any work starts." unit="minutes"
-                  value={form.maxFile} onChange={(maxFile) => set({ maxFile })} presets={[30, 60, 90, 180]} />
-                <NumberLimit label="Jobs per day" hint="Transcriptions, subtitle runs and translations in any 24 hours. Refunded jobs don't count." unit="jobs"
-                  value={form.perDay} onChange={(perDay) => set({ perDay })} presets={[5, 10, 25, 50]} />
               </Section>
 
               <Section icon={ShieldCheck} title="Access" hint={protectedAdmin ? 'Administrator accounts always keep every feature.' : 'Switched-off features are refused by the server with a clear message.'}>

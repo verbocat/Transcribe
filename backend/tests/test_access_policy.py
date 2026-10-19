@@ -31,20 +31,19 @@ def test_admin_sets_and_reads_back_every_limit(main_app, admin_env):
     admin = _admin(main_app, client)
     uid, _ = _make_user()
     until = (date.today() + timedelta(days=30)).isoformat()
-    out = _put(client, admin, uid, hours=12.5, max_file_minutes=90, max_jobs_per_day=5,
+    out = _put(client, admin, uid, hours=12.5,
                access_until=until, can_subtitle_studio=False, can_export=False)
     a = out["user"]["access"]
-    assert a["max_file_minutes"] == 90 and a["max_jobs_per_day"] == 5 and a["access_until"] == until
+    assert a["access_until"] == until and "max_file_minutes" not in a
     assert a["can_subtitle_studio"] is False and a["can_export"] is False and a["can_transcribe_studio"] is True
     assert out["user"]["usage"]["pool"]["limit_hours"] == 12.5
-    assert len(out["changes"]) == 6
-    # null clears a limit; fields that are not sent stay as they were
-    a = _put(client, admin, uid, max_file_minutes=None, access_until=None)["user"]["access"]
-    assert a["max_file_minutes"] is None and a["access_until"] is None and a["max_jobs_per_day"] == 5
+    assert len(out["changes"]) == 4
+    # null clears the end date; fields that are not sent stay as they were
+    a = _put(client, admin, uid, access_until=None)["user"]["access"]
+    assert a["access_until"] is None and a["can_export"] is False
     got = client.get(f"/api/admin/users/{uid}/access", headers=admin).json()["user"]["access"]
-    assert got["jobs_last_24h"] == 0 and got["can_export"] is False
+    assert got["can_export"] is False
     # bad values are refused
-    assert client.put(f"/api/admin/users/{uid}/access", headers=admin, json={"max_jobs_per_day": 0}).status_code == 400
     assert client.put(f"/api/admin/users/{uid}/access", headers=admin, json={"access_until": "next week"}).status_code == 400
 
 
@@ -60,24 +59,15 @@ def test_studio_and_translation_switches_block_jobs(main_app, admin_env):
     _reserve(uid, usage.TRANSCRIBE, 10, "/api/subtitle/generate_stream")  # Subtitle Studio is still on
 
 
-def test_file_length_and_jobs_per_day(main_app, admin_env):
+def test_there_are_no_per_job_limits(main_app, admin_env):
+    """Only the minutes pool limits usage: long files and any number of jobs per day are fine while minutes remain."""
     client = TestClient(main_app.app)
     admin = _admin(main_app, client)
     uid, _ = _make_user(hours=None)
-    _put(client, admin, uid, max_file_minutes=30, max_jobs_per_day=2)
-    with pytest.raises(HTTPException) as e:
+    # old settings sent by an out-of-date page are ignored
+    _put(client, admin, uid, max_file_minutes=30, max_jobs_per_day=1)
+    for _ in range(3):
         _reserve(uid, usage.TRANSCRIBE, 31 * 60, "/api/transcribe")
-    assert e.value.status_code == 403 and "30 min" in e.value.detail
-
-    db = SessionLocal()
-    rids = [usage.reserve(db, uid, usage.TRANSCRIBE, 60_000, "/api/transcribe", "a.wav") for _ in range(2)]
-    with pytest.raises(HTTPException) as e:
-        usage.reserve(db, uid, usage.TRANSCRIBE, 60_000, "/api/transcribe", "b.wav")
-    assert e.value.status_code == 429
-    usage.refund(db, rids[0])  # refunded jobs do not count
-    usage.refund(db, usage.reserve(db, uid, usage.TRANSCRIBE, 60_000, "/api/transcribe", "c.wav"))
-    usage.refund(db, rids[1])
-    db.close()
 
 
 def test_exports_and_ai_assistance_switches(main_app, admin_env):

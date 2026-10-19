@@ -1042,8 +1042,6 @@ class HoursRequest(BaseModel):
 
 class AccessRequest(HoursRequest):
     """Everything on the Limits & access dialog. Only the fields you send change; send null to clear a limit."""
-    max_file_minutes: Optional[int] = None
-    max_jobs_per_day: Optional[int] = None
     access_until: Optional[str] = None  # last day the account works, YYYY-MM-DD; null = never ends
     can_transcribe_studio: Optional[bool] = None
     can_subtitle_studio: Optional[bool] = None
@@ -1079,15 +1077,6 @@ def set_user_access(user_id: str, payload: AccessRequest, request: Request, admi
             record_limit_change(db, target, POOL, old_ms, new_ms, admin.id)
             mins = None if new_ms is None else round(new_ms / 60_000)
             changes.append("Hours: " + ("unlimited" if mins is None else f"{mins // 60}h {mins % 60:02d}m"))
-
-    for field, label, unit, top in (("max_file_minutes", "Longest file per job", "min", 24 * 60), ("max_jobs_per_day", "Jobs per day", "", 10_000)):
-        if field in sent:
-            v = getattr(payload, field)
-            if v is not None and not (1 <= v <= top):
-                raise HTTPException(status_code=400, detail=f"{label} must be between 1 and {top}, or empty for no limit.")
-            if v != getattr(target, field):
-                setattr(target, field, v)
-                changes.append(f"{label}: " + ("no limit" if v is None else f"{v} {unit}".strip()))
 
     protected = is_super_admin(target.email)
     if "access_until" in sent:
