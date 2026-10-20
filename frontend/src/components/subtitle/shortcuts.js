@@ -32,7 +32,6 @@ export const SHORTCUT_GROUPS = [
   {
     title: 'Workspace',
     items: [
-      { keys: 'Ctrl+K', label: 'Command palette: search every command' },
       { keys: 'Ctrl+,', label: 'Open Settings' },
       { keys: 'Ctrl+Shift+L', label: 'Open Settings → Layout' },
       { keys: 'Alt+1 … Alt+9', label: 'Switch to a layout preset' },

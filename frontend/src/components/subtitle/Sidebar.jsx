@@ -5,13 +5,15 @@ import {
   ShieldCheck,
   Loader2,
   BookText,
+  Download,
+  Settings,
 } from 'lucide-react';
 
 /**
  * Left tool rail: a slim, quiet strip for the working tools. Each tool is a compact icon tile with
  * its name underneath. Generate is the one solid accent tile; Context, AI Translate and QC are
  * flat and take a soft accent tint while their panel is open. Hover/focus shows a tooltip with a one-line hint.
- * File actions (open, import, export), layout and shortcuts live in the top menu bar only.
+ * Export, Settings and the account menu sit at the foot of the rail (the end of the row when docked top or bottom).
  * "QC" opens one view with Guideline and Translation tabs; the badge counts translation issues.
  * When docked top or bottom it becomes a compact row with labels.
  */
@@ -27,6 +29,11 @@ export default function Sidebar({
   qcOpen = false,
   position = 'left',
   showLabels = true,
+  onExport = null,
+  exportDisabled = false,
+  onSettings = null,
+  settingsOpen = false,
+  account = null,
 }) {
   const horizontal = position === 'top' || position === 'bottom';
   // vertical rails always name each tool under its icon; the toggle only applies to the horizontal row
@@ -71,6 +78,11 @@ export default function Sidebar({
       },
     ],
   ];
+
+  const footer = [
+    onExport && { id: 'export', label: 'Export', primary: true, icon: Download, title: exportDisabled ? 'Export subtitles (generate or import subtitles first)' : 'Export subtitles (Ctrl+E)', disabled: exportDisabled, onClick: onExport },
+    onSettings && { id: 'settings', label: 'Settings', icon: Settings, title: 'Settings (Ctrl+,)', active: settingsOpen, onClick: onSettings },
+  ].filter(Boolean);
 
   const edge = { left: 'border-r', right: 'border-l', top: 'border-b', bottom: 'border-t' }[position] || 'border-r';
   // tooltip side: away from the rail, towards the workspace
@@ -132,17 +144,21 @@ export default function Sidebar({
     <aside
       aria-label="Tools"
       style={{ order: first ? 0 : 3 }}
-      className={`shrink-0 bg-[var(--ss-bg)] ${edge} border-[var(--ss-line)] flex justify-between select-none z-30 ${
-        horizontal ? 'flex-row items-center w-full px-2 h-10' : 'flex-col items-center justify-center h-full w-[68px] py-3 rail-aside'
+      className={`shrink-0 bg-[var(--ss-bg)] ${edge} border-[var(--ss-line)] flex justify-between select-none z-[45] ${
+        horizontal ? 'flex-row items-center w-full px-2 h-10' : 'flex-col items-center justify-between h-full w-[68px] py-3 rail-aside'
       }`}
     >
-      <div className={`flex ${horizontal ? 'flex-row items-center gap-1.5' : 'flex-col items-center gap-3'}`}>
+      <div className={`flex ${horizontal ? 'flex-row items-center gap-1.5' : 'flex-col items-center gap-3 my-auto'}`}>
         {groups.map((group, gi) => (
           <React.Fragment key={gi}>
             {gi > 0 && <span aria-hidden="true" className={horizontal ? 'w-px h-4 mx-1.5 bg-[var(--ss-line)]' : 'rail-sep'} />}
             {group.map((item) => btn(item))}
           </React.Fragment>
         ))}
+      </div>
+      <div className={`rail-foot flex ${horizontal ? 'flex-row items-center gap-1.5' : 'flex-col items-center gap-2'}`}>
+        {footer.map((item) => btn(item))}
+        {account}
       </div>
     </aside>
   );

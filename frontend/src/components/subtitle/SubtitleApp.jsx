@@ -8,7 +8,7 @@ import {
   MessageSquare, ChevronRight, Music,
   Bold, Italic, Underline, Strikethrough, AlignLeft, AlignCenter, AlignRight,
   Highlighter, Palette, RotateCcw, User, Wand2, Languages, LayoutDashboard,
-  Command, Keyboard, FolderOpen, Save, Replace, ListOrdered, ArrowRightLeft, CaseSensitive,
+  Keyboard, FolderOpen, Save, Replace, ListOrdered, ArrowRightLeft, CaseSensitive,
   Eraser, SkipBack, SkipForward, Maximize, Users, BookText, StepBack, StepForward, AlignJustify, BadgeCheck, Share2
 } from 'lucide-react';
 import { API_BASE } from '../../config';
@@ -27,12 +27,11 @@ import SubtitleSettingsModal from './SubtitleSettingsModal';
 import StudioStage from './layout/StudioStage';
 import { useStudioLayout, BUILTIN_PRESETS } from './layout/layoutModel';
 import StudioMenuBar from './StudioMenuBar';
-import CommandPalette from './CommandPalette';
 import LanguageTracks from './LanguageTracks';
 import { langName } from './languages';
 import { SUBTITLE_SOURCE_LANGUAGES, AUTO_DETECT, engineLanguage, spokenVariantCode, translateCodeForName } from '../../data/languageCatalog';
 import { ShiftTimingsDialog, GoToDialog, FindReplaceDialog } from './ToolDialogs';
-import { Button, IconButton, Kbd, Segmented } from './ui/controls';
+import { Button, IconButton, Segmented } from './ui/controls';
 import BrandLogo from '../BrandLogo';
 import { useStudioPrefs, formatTimecode, loadPrefs } from './prefs';
 import { SETTINGS_GROUPS } from './SubtitleSettingsModal';
@@ -681,7 +680,6 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
   const { prefs, setPref, resetPrefs } = useStudioPrefs();
   const [settingsPage, setSettingsPage] = useState('qc');
   const [dialog, setDialog] = useState(null); // 'shift' | 'goto' | 'find'
-  const [showPalette, setShowPalette] = useState(false);
   const openSettings = useCallback((page) => {
     if (page) setSettingsPage(page);
     setShowSettingsModal(true);
@@ -1017,7 +1015,6 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
       const mod = e.ctrlKey || e.metaKey;
       const k = (e.key || '').toLowerCase();
       if (mod && e.shiftKey && e.code === 'KeyL') { e.preventDefault(); a.openLayout?.(); }
-      else if (mod && !e.shiftKey && !e.altKey && k === 'k') { e.preventDefault(); a.palette?.(); }
       else if (mod && !e.shiftKey && !e.altKey && e.key === ',') { e.preventDefault(); a.settings?.(); }
       else if (mod && !e.shiftKey && !e.altKey && k === 'h') { e.preventDefault(); a.find?.(); }
       else if (mod && !e.shiftKey && !e.altKey && k === 'g') { e.preventDefault(); a.goTo?.(); }
@@ -2788,7 +2785,6 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
       }
     }
   };
-  const sendKey = (key) => window.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
   const toggleFullscreen = () => {
     if (document.fullscreenElement) document.exitFullscreen?.();
     else document.documentElement.requestFullscreen?.().catch(() => {});
@@ -2833,7 +2829,6 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
 
   shortcutRef.current = {
     openLayout: () => openSettings('layout'),
-    palette: () => setShowPalette(true),
     settings: () => openSettings(),
     find: () => { if (hasEvents) setDialog('find'); },
     goTo: () => { if (hasEvents) setDialog('goto'); },
@@ -2956,7 +2951,6 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
       id: 'help',
       label: 'Help',
       items: [
-        { label: 'Command palette…', icon: Command, shortcut: 'Ctrl+K', onSelect: () => setShowPalette(true) },
         { label: 'Keyboard shortcuts', icon: Keyboard, onSelect: () => openSettings('shortcuts') },
         { type: 'separator' },
         { label: 'Reset layout to Classic', icon: RotateCcw, onSelect: () => studioLayout.reset() },
@@ -2965,18 +2959,14 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
     },
   ];
 
-  // Command palette = every menu command + every settings page + playback
-  const paletteCommands = [
-    ...menus.flatMap((m) => m.items
-      .filter((i) => i.onSelect)
-      .map((i) => ({ id: `${m.id}:${i.label}`, label: i.label.replace(/…$/, ''), group: m.label, icon: i.icon, shortcut: i.shortcut, disabled: i.disabled, onSelect: i.onSelect }))),
-    ...SETTINGS_GROUPS.flatMap((g) => g.pages.map((pg) => ({ id: `settings:${pg.id}`, label: `Settings: ${pg.label}`, group: 'Settings', icon: pg.icon, keywords: pg.desc, onSelect: () => openSettings(pg.id) }))),
-    { id: 'play:toggle', label: 'Play / pause', group: 'Playback', icon: Play, shortcut: 'Space', onSelect: () => sendKey(' ') },
-    { id: 'play:back', label: 'Seek back', group: 'Playback', icon: StepBack, shortcut: '←', onSelect: () => sendKey('ArrowLeft') },
-    { id: 'play:fwd', label: 'Seek forward', group: 'Playback', icon: StepForward, shortcut: '→', onSelect: () => sendKey('ArrowRight') },
-    { id: 'play:frame-', label: 'Previous frame', group: 'Playback', icon: StepBack, shortcut: ',', onSelect: () => sendKey(',') },
-    { id: 'play:frame+', label: 'Next frame', group: 'Playback', icon: StepForward, shortcut: '.', onSelect: () => sendKey('.') },
-  ];
+  // Export, Settings and the account live at the foot of the tool rail (in the header only when the rail is hidden)
+  const accountActions = (
+    <>
+      <Button variant="primary" icon={Download} onClick={exportSubs} disabled={!hasEvents} title="Export subtitles (Ctrl+E)">Export</Button>
+      <IconButton icon={Settings} label="Settings (Ctrl+,)" onClick={() => openSettings()} active={showSettingsModal} variant="secondary" />
+      {user ? <AccountMenuDropdown user={user} onOpenLogoutModal={onOpenLogoutModal || onLogout} /> : null}
+    </>
+  );
 
   return (
     <div className={`subtitle-studio h-screen w-screen overflow-hidden flex flex-col select-none animate-studio-entrance bg-[var(--ss-bg)] text-[var(--ss-text)]`}>
@@ -3088,18 +3078,8 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
           <IconButton icon={Undo2} label="Undo (Ctrl+Z)" onClick={handleUndo} disabled={historyIndex <= 0} />
           <IconButton icon={Redo2} label="Redo (Ctrl+Y)" onClick={handleRedo} disabled={historyIndex >= history.length - 1} />
           <span className="h-5 w-px bg-[var(--ss-line)] mx-0.5" aria-hidden="true" />
-          <div className="hidden md:block">
-            <Button onClick={() => setShowPalette(true)} icon={Search} title="Search every command (Ctrl+K)">
-              <span className="hidden xl:inline">Commands</span>
-              <span className="hidden xl:inline-flex"><Kbd>Ctrl K</Kbd></span>
-            </Button>
-          </div>
-          <Button variant="primary" icon={Download} onClick={exportSubs} disabled={!hasEvents} title="Export subtitles (Ctrl+E)">
-            <span className="hidden sm:inline">Export</span>
-          </Button>
-          <IconButton icon={Settings} label="Settings (Ctrl+,)" onClick={() => openSettings()} active={showSettingsModal} variant="secondary" />
+          {layout.sidebar === 'hidden' && accountActions}
           <NotificationBellDropdown />
-          {user ? <AccountMenuDropdown user={user} onOpenLogoutModal={onOpenLogoutModal || onLogout} /> : null}
         </div>
       </header>
       )}
@@ -3200,6 +3180,11 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
           centroidQcCount={centroidState.qcIssues}
           position={layout.sidebar}
           showLabels={layout.sidebarLabels}
+          onExport={exportSubs}
+          exportDisabled={!hasEvents}
+          onSettings={() => openSettings()}
+          settingsOpen={showSettingsModal}
+          account={user ? <AccountMenuDropdown user={user} compact placement={{ left: 'rail', right: 'rail-right', bottom: 'rail-right', top: 'rail-bar' }[layout.sidebar]} onOpenLogoutModal={onOpenLogoutModal || onLogout} /> : null}
         />
         )}
 
@@ -3406,7 +3391,6 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
           }}
         />
       )}
-      {showPalette && <CommandPalette commands={paletteCommands} onClose={() => setShowPalette(false)} />}
 
       {/* ── Broadcast Studio Status Bar / Footer (44px SMPTE Timecode & QC Telemetry) ── */}
       {layout.showFooter && (
