@@ -71,7 +71,6 @@ export default function VideoPlayer({
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [videoDims, setVideoDims] = useState(null); // real width × height from metadata
   const [currentSubtitle, setCurrentSubtitle] = useState(null);
-  const [showTitleSafe, setShowTitleSafe] = useState(false);
   const [subtitlePosition, setSubtitlePosition] = useState('bottom'); // 'bottom' | 'top'
   const [subtitleFontSize, setSubtitleFontSize] = useState(24); // px relative
 
@@ -592,22 +591,6 @@ export default function VideoPlayer({
             </span>
           )}
         </div>
-
-        {/* Right side: Safe Areas Toggle switch & Fit dropdown */}
-        <div className="flex items-center gap-3">
-          {/* Safe Areas Switch Toggle */}
-          <button
-            type="button"
-            onClick={() => setShowTitleSafe(v => !v)}
-            className="flex items-center gap-2 cursor-pointer"
-            title="Show the action-safe / title-safe guides"
-          >
-            <div className={`w-8 h-4 rounded-full p-0.5 transition-colors ${showTitleSafe ? 'bg-[var(--ss-accent)]' : 'bg-[var(--ss-line)]'}`}>
-              <div className={`w-3 h-3 rounded-full bg-white transition-transform ${showTitleSafe ? 'translate-x-4' : 'translate-x-0'}`} />
-            </div>
-            <span className="text-[11px] font-semibold text-slate-300">Safe Areas</span>
-          </button>
-        </div>
       </div>
 
       {/* Center Video / Audio Stage */}
@@ -777,24 +760,6 @@ export default function VideoPlayer({
             <ArrowUpDown size={14} />
           </button>
         </div>
-
-        {/* Netflix Title-Safe Grid Box Overlay */}
-        {showTitleSafe && (
-          <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
-            {/* 90% Action Safe */}
-            <div className="w-[90%] h-[90%] border border-[var(--ss-accent)]/30 border-dashed rounded-lg flex items-center justify-center relative">
-              <span className="absolute top-1 left-1.5 text-[8px] font-mono text-[var(--ss-accent)]/60 bg-black/50 px-1 rounded">
-                90% ACTION SAFE
-              </span>
-              {/* 80% Title Safe */}
-              <div className="w-[88%] h-[88%] border border-amber-400/40 border-dashed rounded-md relative">
-                <span className="absolute bottom-1 right-1.5 text-[8px] font-mono text-amber-400/70 bg-black/50 px-1 rounded">
-                  80% NETFLIX TITLE SAFE
-                </span>
-              </div>
-            </div>
-          </div>
-        )}
 
         {/* Live Subtitle Overlay - Modern Pill Card Style matching reference */}
         {(() => {
