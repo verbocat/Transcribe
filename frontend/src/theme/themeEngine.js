@@ -1,5 +1,5 @@
 /**
- * Lower Third appearance engine.
+ * Noun appearance engine.
  *
  * A theme is a small JSON object. `applyTheme` turns it into CSS variables on <html>:
  *   --kt-*            colours, fonts and shape used by index.css, studio.css and transcribe.css
@@ -79,7 +79,7 @@ export const COLOR_KEYS = [
 ];
 
 export const DEFAULT_THEME = {
-  name: 'Lower Third',
+  name: 'Noun',
   colors: {
     accent: '#5b6cff', accent2: '#8a3ffc',
     bg: '#060919', panel: '#0a0e24', raised: '#10162f', hover: '#171e3d', border: '#1d2547', borderStrong: '#2b3563',
@@ -100,7 +100,7 @@ export const DEFAULT_THEME = {
 const surfaces = (bg, panel, raised, hover, border, borderStrong) => ({ bg, panel, raised, hover, border, borderStrong });
 
 export const PRESETS = [
-  { id: 'lowerthird', name: 'Lower Third', note: 'Default. Brand blue-violet on deep navy.', theme: {} },
+  { id: 'lowerthird', name: 'Noun', note: 'Default. Brand blue-violet on deep navy.', theme: {} },
   { id: 'azure', name: 'Azure', note: 'Previous default. Clean blue.',
     theme: { colors: { accent: '#4d8dff', accent2: '#7a70ff', ...surfaces('#0b0d12', '#10131a', '#171b25', '#1e2330', '#252b3a', '#323a4f') } } },
   { id: 'midnight', name: 'Midnight', note: 'Deeper navy, brighter blue.',
@@ -275,7 +275,7 @@ export function exportThemeJson() {
 export function importThemeJson(text) {
   let data;
   try { data = JSON.parse(text); } catch { throw new Error('That file is not valid JSON.'); }
-  if (!data || typeof data !== 'object' || !data.colors) throw new Error('This does not look like a Lower Third theme file.');
+  if (!data || typeof data !== 'object' || !data.colors) throw new Error('This does not look like a Noun theme file.');
   return normalizeTheme(data);
 }
 

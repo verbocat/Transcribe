@@ -50,7 +50,7 @@ def is_expired(user: User, now: Optional[datetime] = None) -> bool:
 def expiry_message(user: User) -> str:
     exp = _utc(user.access_expires_at)
     last_day = (exp - timedelta(seconds=1)).strftime("%d %b %Y")
-    return f"Your access to Lower Third ended on {last_day}." + _ASK
+    return f"Your access to Noun ended on {last_day}." + _ASK
 
 
 def ensure_active(user: User) -> None:

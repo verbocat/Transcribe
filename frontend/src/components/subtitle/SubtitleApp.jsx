@@ -3018,7 +3018,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
           <IconButton icon={ArrowLeft} label="Back to hub" onClick={onBackToHome} />
           <div className="flex items-center gap-2 pl-1 pr-2">
             <BrandLogo size={24} />
-            <span className="text-[13px] font-semibold tracking-tight text-[var(--ss-text)] whitespace-nowrap hidden sm:inline">Lower Third <span className="font-medium text-[var(--ss-muted,var(--kt-muted))]">Subtitle</span></span>
+            <span className="text-[13px] font-semibold tracking-tight text-[var(--ss-text)] whitespace-nowrap hidden sm:inline">Noun <span className="font-medium text-[var(--ss-muted,var(--kt-muted))]">Subtitle</span></span>
             <span className="h-[18px] px-1.5 rounded-full hidden md:inline-flex items-center text-[10px] font-bold text-[var(--ss-accent)] border border-[var(--ss-accent)]/40 bg-[var(--ss-accent)]/10">PRO</span>
           </div>
           <span className="h-5 w-px bg-[var(--ss-line)] mx-0.5" aria-hidden="true" />

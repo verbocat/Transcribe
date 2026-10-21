@@ -32,7 +32,7 @@ export default function LinguistWorkspace({ user, onOpenLogoutModal }) {
     <div className="min-h-screen bg-[var(--kt-s0)] text-[var(--kt-text)]">
       <header className="flex items-center justify-between px-6 py-3 border-b border-[var(--kt-s3)] bg-[var(--kt-s1)]">
         <div>
-          <div className="text-[15px] font-semibold">Lower Third</div>
+          <div className="text-[15px] font-semibold">Noun</div>
           <div className="text-[12px] text-[var(--kt-muted)]">Linguist · {user?.name}</div>
         </div>
         <AccountMenuDropdown user={user} onOpenLogoutModal={onOpenLogoutModal} />

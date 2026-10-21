@@ -43,7 +43,7 @@ async def post(path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     return res.json()
 
 
-# Centroid turns on its Lower Third behaviour (speaker/gender/language per line, the rule book, gender-aware review
+# Centroid turns on its Noun behaviour (speaker/gender/language per line, the rule book, gender-aware review
 # and QC) only for requests that carry this client name.
 CLIENT = "lowerthird"
 

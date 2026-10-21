@@ -2,7 +2,7 @@
 
 @layer base {
   :root {
-    /* ===== Lower Third theme tokens: every colour, font and shape the Appearance dashboard can change ===== */
+    /* ===== Noun theme tokens: every colour, font and shape the Appearance dashboard can change ===== */
     --kt-s0: #060919;      /* app background */
     --kt-s1: #0a0e24;      /* panels */
     --kt-s2: #10162f;      /* cards, raised surfaces */

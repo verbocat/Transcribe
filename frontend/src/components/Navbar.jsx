@@ -48,7 +48,7 @@ export default function Navbar({
           <BrandLogo size={28} />
           <div>
             <div className="flex items-center gap-1.5">
-              <span className="font-extrabold text-xs text-white uppercase tracking-wider font-mono">Lower Third</span>
+              <span className="font-extrabold text-xs text-white uppercase tracking-wider font-mono">Noun</span>
               <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-[var(--kt-accent)]/15 text-[var(--kt-accent)] border border-[var(--kt-accent)]/30 uppercase">
                 Verbatim AI
               </span>

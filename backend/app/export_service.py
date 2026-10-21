@@ -81,7 +81,7 @@ def export_to_txt(result: TranscriptionResult) -> str:
     dur = result.audio_info.duration if result.audio_info else (result.segments[-1].end_time if result.segments else 0.0)
     lines = []
     lines.append(f"================================================================================")
-    lines.append(f"LOWER THIRD TRANSCRIPTION DELIVERABLE: {result.filename}")
+    lines.append(f"NOUN TRANSCRIPTION DELIVERABLE: {result.filename}")
     lines.append(f"Language: {result.language} | Script: {result.script}")
     lines.append(f"Duration: {_hms_ms(dur)} | Compliance Score: {result.compliance_score}%")
     lines.append(f"================================================================================\n")
@@ -206,7 +206,7 @@ def export_to_docx(result: TranscriptionResult, output_path: str) -> str:
 
     title = doc.add_paragraph()
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    style_run(title.add_run("Lower Third Transcription Deliverable"), 20, bold=True)
+    style_run(title.add_run("Noun Transcription Deliverable"), 20, bold=True)
 
     dur = result.audio_info.duration if result.audio_info else (result.segments[-1].end_time if result.segments else 0.0)
     meta_lines = [

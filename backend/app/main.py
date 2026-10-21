@@ -301,7 +301,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Lower Third Transcription & Subtitle Studio",
+    title="Noun Transcription & Subtitle Studio",
     description="Automated verbatim transcription, speaker diarization, QA linter & batch pipeline",
     version="1.0.0",
     lifespan=lifespan,
@@ -421,7 +421,7 @@ def root_endpoint():
     """Root health check for UptimeRobot, Render health checks & load balancers."""
     return {
         "status": "healthy",
-        "service": "Lower Third Transcription Studio",
+        "service": "Noun Transcription Studio",
         "version": "1.0.0",
         "docs": "/docs",
         "health": "/api/health"

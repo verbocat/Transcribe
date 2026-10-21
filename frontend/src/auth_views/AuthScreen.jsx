@@ -318,7 +318,7 @@ export default function AuthScreen({ onBackToHome, initialView = 'login' }) {
 
       {/* Footer Branding */}
       <footer className="relative z-30 w-full text-center py-3 text-[11px] font-mono text-slate-500 shrink-0">
-        Lower Third &copy; {new Date().getFullYear()} &middot; Verbatim Audio Intelligence
+        Noun &copy; {new Date().getFullYear()} &middot; Verbatim Audio Intelligence
       </footer>
 
 

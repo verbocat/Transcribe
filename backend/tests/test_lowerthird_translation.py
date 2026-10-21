@@ -1,5 +1,5 @@
 """
-What Lower Third sends to Centroid for translation (speaker, voice gender and language of every line), and the rule
+What Noun sends to Centroid for translation (speaker, voice gender and language of every line), and the rule
 that AI proofreading may only change words ElevenLabs Scribe itself scored as low-confidence.
 """
 import asyncio

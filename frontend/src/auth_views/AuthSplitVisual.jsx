@@ -60,7 +60,7 @@ export default function AuthSplitVisual({ activeView = 'login' }) {
             : 'bg-white/80 border-[#cbd5e1] text-blue-700 shadow-xs'
         }`}>
           <Sparkles size={13} className={isDark ? 'text-[var(--kt-accent)]' : 'text-blue-600'} />
-          <span>Lower Third</span>
+          <span>Noun</span>
         </div>
         <span className={`text-[11px] font-mono ${isDark ? 'text-slate-500' : 'text-slate-500'}`}>Subtitle & Transcription Studio</span>
       </div>

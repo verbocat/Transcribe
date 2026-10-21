@@ -249,7 +249,7 @@ export default function AdminDashboard({ onBackToStudio, onOpenStudio, user: cur
           <div className="flex items-center gap-3 min-w-0">
             <BrandLogo size={26} />
             <div className="flex items-center gap-2 min-w-0">
-              <span className="text-[14px] font-semibold tracking-tight">Lower Third</span>
+              <span className="text-[14px] font-semibold tracking-tight">Noun</span>
               <span className="text-[11px] font-medium px-1.5 py-0.5 rounded-md bg-[var(--kt-s2)] border border-[var(--kt-s3)] text-[var(--kt-muted)]">Admin</span>
             </div>
           </div>

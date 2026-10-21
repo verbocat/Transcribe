@@ -1,6 +1,6 @@
-# Lower Third: Transcription & Subtitle Studio
+# Noun: Transcription & Subtitle Studio
 
-Lower Third is the product name; internal identifiers, API routes, storage keys and the repository name still use the earlier "Karya"/"Transcribe" naming.
+Noun is the product name (formerly Lower Third); internal identifiers, API routes, storage keys and the repository name still use the earlier "Karya"/"Transcribe"/"lowerthird" naming.
 
 A web studio for transcribing speech and building broadcast-grade subtitles, with a focus on Hindi, Hinglish and other Indic languages. Word timings, speaker diarization and audio-event tags come from **ElevenLabs Scribe v2**. A local **Netflix engine** turns those words into subtitle cards that follow the **Netflix Timed Text Style Guide**, and **Google Gemini** is used for optional proofreading, QC fixes and context helpers.
 

@@ -4,7 +4,7 @@ import { Languages, ShieldCheck, Download, Loader2, Check, Square, Clapperboard 
 
 const FORMATS = [
   { id: 'xlsx', label: 'Excel', ext: '.xlsx', note: 'Data and audit summary' },
-  { id: 'csv', label: 'CSV', ext: '.csv', note: 'Lower Third deliverable columns' },
+  { id: 'csv', label: 'CSV', ext: '.csv', note: 'Noun deliverable columns' },
   { id: 'docx', label: 'Word', ext: '.docx', note: 'Readable transcript table' },
   { id: 'srt', label: 'SubRip', ext: '.srt', note: 'Subtitle file with speaker tags' },
   { id: 'vtt', label: 'WebVTT', ext: '.vtt', note: 'Web subtitle file' },

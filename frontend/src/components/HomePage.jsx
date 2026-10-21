@@ -258,8 +258,8 @@ export default function HomePage({ onSelect, user, onLogout, onOpenAuth }) {
       </main>
 
       <footer className="relative z-10 px-6 py-4 text-[11px] text-[var(--kt-faint)] flex items-center justify-between">
-        <span>Lower Third &middot; VerboLabs</span>
-        <span className="hidden sm:inline">Next-gen AI subtitling platform</span>
+        <span>Noun &middot; VerboLabs</span>
+        <span className="hidden sm:inline">Next-gen AI media localization</span>
       </footer>
     </div>
   );
