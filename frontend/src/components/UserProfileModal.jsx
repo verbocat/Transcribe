@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   User, Settings, BookOpen, X, Check, CheckCircle2, Shield,
   Sliders, Keyboard, Sparkles, Volume2, Save, MapPin, Mail,
@@ -33,6 +34,13 @@ export default function UserProfileModal({ isOpen, onClose, initialTab = 'profil
     };
   });
   const [settingsSaved, setSettingsSaved] = useState(false);
+
+  useEffect(() => {
+    if (!isOpen) return undefined;
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isOpen, onClose]);
 
   if (!isOpen || !user) return null;
 
@@ -80,9 +88,14 @@ export default function UserProfileModal({ isOpen, onClose, initialTab = 'profil
     }
   };
 
-  return (
-    <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
-      <div className="bg-[var(--kt-s1)] border border-[var(--kt-s4)] rounded-2xl max-w-2xl w-full max-h-[90vh] flex flex-col shadow-[0_25px_60px_rgba(0,0,0,0.9)] overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+  // Portaled to <body>: the account menu lives inside a header with its own stacking context, which trapped the modal behind the page.
+  return createPortal(
+    <div
+      data-lenis-prevent
+      className="fixed inset-0 z-[1000] bg-black/80 backdrop-blur-xs flex items-center justify-center p-4"
+      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div role="dialog" aria-modal="true" aria-label="Account and settings" className="bg-[var(--kt-s1)] border border-[var(--kt-s4)] rounded-2xl max-w-2xl w-full max-h-[90vh] flex flex-col shadow-[0_25px_60px_rgba(0,0,0,0.9)] overflow-hidden animate-in fade-in zoom-in-95 duration-150">
         {/* Modal Header */}
         <div className="p-4 px-5 bg-[var(--kt-s2)] border-b border-[var(--kt-s4)] flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -368,6 +381,7 @@ export default function UserProfileModal({ isOpen, onClose, initialTab = 'profil
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

@@ -133,3 +133,4 @@
 .kt-embedded .kt-nav button[aria-current='page'] { box-shadow: inset 0 -2px 0 var(--kt-accent); }
 .kt-embedded .kt-main { overflow: visible; padding: 0; }
 .kt-embedded .kt-grid-3 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.kt-btn:disabled{opacity:.45;cursor:not-allowed}

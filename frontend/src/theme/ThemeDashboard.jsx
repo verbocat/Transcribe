@@ -5,7 +5,7 @@ import {
 } from 'lucide-react';
 import './appearance.css';
 import {
-  DEFAULT_THEME, PRESETS, FONT_CHOICES, applyTheme, resetTheme, themeFromPreset, normalizeTheme,
+  DEFAULT_THEME, PRESETS, FONT_CHOICES, applyTheme, themeFromPreset, normalizeTheme,
   exportThemeJson, importThemeJson, contrast, mix, bestInk, isHex, getTheme,
 } from './themeEngine';
 
@@ -173,17 +173,30 @@ export default function ThemeDashboard({ onClose, embedded = false }) {
 
   useEffect(() => {
     if (embedded) return undefined; // the host (Settings) owns Escape and focus
-    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    const onKey = (e) => { if (e.key === 'Escape') cancel(); };
     window.addEventListener('keydown', onKey);
     dialogRef.current?.focus();
     return () => window.removeEventListener('keydown', onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onClose, embedded]);
 
-  // Keep in step if the theme changes elsewhere (another tab, reset)
+  // Edits are previewed live but only written to storage by Apply; closing or cancelling reverts to what was saved.
+  const savedRef = useRef(clone(getTheme()));
+  const [saved, setSaved] = useState(() => clone(getTheme()));
+  const dirty = JSON.stringify(normalizeTheme(theme)) !== JSON.stringify(saved);
+  const preview = (next) => { setTheme(next); applyTheme(next, { persist: false }); };
+  const revert = () => { const t = clone(savedRef.current); setTheme(t); applyTheme(t, { persist: false }); return t; };
+  const apply = () => {
+    const t = applyTheme(theme);
+    savedRef.current = clone(t); setSaved(clone(t)); setTheme(clone(t));
+    say('Theme applied and saved on this device.');
+  };
+  const cancel = () => { revert(); onClose?.(); };
+  useEffect(() => () => { applyTheme(clone(savedRef.current), { persist: false }); }, []);
+
   const commit = (next, rename = true) => {
     const n = normalizeTheme({ ...next, name: rename ? 'Custom' : next.name });
-    setTheme(n);
-    applyTheme(n);
+    preview(n);
   };
   const setColor = (key) => (value) => commit({ ...theme, colors: { ...theme.colors, [key]: value } });
   const say = (text, ok = true) => { setMessage({ text, ok }); window.setTimeout(() => setMessage((m) => (m.text === text ? { text: '', ok: true } : m)), 3500); };
@@ -214,7 +227,7 @@ export default function ThemeDashboard({ onClose, embedded = false }) {
   const tryImport = (text) => {
     try {
       const next = importThemeJson(text);
-      setTheme(next); applyTheme(next); say(`Applied theme "${next.name}".`);
+      preview(next); say(`Previewing "${next.name}". Press Apply to save it.`);
       setPaste('');
     } catch (e) { say(e.message, false); }
   };
@@ -230,7 +243,7 @@ export default function ThemeDashboard({ onClose, embedded = false }) {
               {PRESETS.map((p) => {
                 const t = themeFromPreset(p.id);
                 return (
-                  <button key={p.id} type="button" className="kt-preset" aria-pressed={activePreset === p.id} onClick={() => { setTheme(t); applyTheme(t); say(`${p.name} applied.`); }}>
+                  <button key={p.id} type="button" className="kt-preset" aria-pressed={activePreset === p.id} onClick={() => { preview(t); say(`${p.name} previewed. Press Apply to save it.`); }}>
                     <div className="kt-chipbar" aria-hidden="true">
                       {[t.colors.bg, t.colors.raised, t.colors.accent, t.colors.accent2, t.colors.text].map((col, i) => <i key={i} style={{ background: col }} />)}
                     </div>
@@ -389,7 +402,7 @@ export default function ThemeDashboard({ onClose, embedded = false }) {
               <div className="kt-h3">Legibility</div>
               <p className="kt-hint">One click to the highest-contrast colours, then larger text if you need it.</p>
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                <button type="button" className="kt-btn" onClick={() => { const t = themeFromPreset('contrast'); setTheme(t); applyTheme(t); say('High contrast applied.'); }}>
+                <button type="button" className="kt-btn" onClick={() => { preview(themeFromPreset('contrast')); say('High contrast previewed. Press Apply to save it.'); }}>
                   <Contrast size={14} /> Apply high contrast
                 </button>
                 <button type="button" className="kt-btn" onClick={() => commit({ ...theme, textScale: 115, transcriptSize: 18 }, false)}>
@@ -419,7 +432,7 @@ export default function ThemeDashboard({ onClose, embedded = false }) {
                 <button type="button" className="kt-btn" onClick={() => fileRef.current?.click()}><Upload size={14} /> Choose theme file</button>
               </div>
               <textarea className="kt-textarea" placeholder="…or paste theme JSON here" value={paste} onChange={(e) => setPaste(e.target.value)} aria-label="Theme JSON" />
-              <div style={{ marginTop: 8 }}><button type="button" className="kt-btn kt-btn-sm" disabled={!paste.trim()} onClick={() => tryImport(paste)}>Apply pasted theme</button></div>
+              <div style={{ marginTop: 8 }}><button type="button" className="kt-btn kt-btn-sm" disabled={!paste.trim()} onClick={() => tryImport(paste)}>Preview pasted theme</button></div>
             </div>
           </>
         );
@@ -431,11 +444,13 @@ export default function ThemeDashboard({ onClose, embedded = false }) {
       <div className="kt-dash kt-embedded" aria-label="Appearance settings">
         <div className="kt-embed-bar">
           <div className="kt-sub" style={{ flex: 1, minWidth: 0 }}>
-            Theme: <b style={{ color: 'var(--kt-text)', fontWeight: 500 }}>{theme.name}</b> · applies instantly, saved on this device
+            Theme: <b style={{ color: 'var(--kt-text)', fontWeight: 500 }}>{theme.name}</b> · {dirty ? 'unsaved preview' : 'saved on this device'}
           </div>
-          <button type="button" className="kt-btn kt-btn-sm" onClick={() => { const t = resetTheme(); setTheme(clone(t)); say('Reset to the default theme.'); }}>
+          <button type="button" className="kt-btn kt-btn-sm" onClick={() => { preview(clone(DEFAULT_THEME)); say('Default theme previewed. Press Apply to save it.'); }}>
             <RotateCcw size={13} /> Reset
           </button>
+          <button type="button" className="kt-btn kt-btn-sm" disabled={!dirty} onClick={revert}>Cancel</button>
+          <button type="button" className="kt-btn kt-btn-primary kt-btn-sm" disabled={!dirty} onClick={apply}>Apply</button>
         </div>
         <nav className="kt-nav" aria-label="Appearance sections">
           {SECTIONS.map(({ id, label, icon: Icon }) => (
@@ -453,18 +468,18 @@ export default function ThemeDashboard({ onClose, embedded = false }) {
   }
 
   return (
-    <div className="kt-backdrop" data-lenis-prevent onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+    <div className="kt-backdrop" data-lenis-prevent onMouseDown={(e) => { if (e.target === e.currentTarget) cancel(); }}>
       <div className="kt-dash" role="dialog" aria-modal="true" aria-label="Appearance settings" tabIndex={-1} ref={dialogRef}>
         <div className="kt-head">
           <Palette size={18} style={{ color: 'var(--kt-accent)' }} />
           <div style={{ flex: 1 }}>
             <h2>Appearance</h2>
-            <div className="kt-sub">Theme: <b style={{ color: 'var(--kt-text)', fontWeight: 500 }}>{theme.name}</b> · changes apply instantly and are saved on this device</div>
+            <div className="kt-sub">Theme: <b style={{ color: 'var(--kt-text)', fontWeight: 500 }}>{theme.name}</b> · changes are a preview until you press Apply</div>
           </div>
-          <button type="button" className="kt-btn kt-btn-sm" onClick={() => { const t = resetTheme(); setTheme(clone(t)); say('Reset to the default theme.'); }}>
+          <button type="button" className="kt-btn kt-btn-sm" onClick={() => { preview(clone(DEFAULT_THEME)); say('Default theme previewed. Press Apply to save it.'); }}>
             <RotateCcw size={13} /> Reset everything
           </button>
-          <button type="button" className="kt-btn kt-btn-ghost kt-btn-sm" onClick={onClose} aria-label="Close appearance settings"><X size={16} /></button>
+          <button type="button" className="kt-btn kt-btn-ghost kt-btn-sm" onClick={cancel} aria-label="Close appearance settings"><X size={16} /></button>
         </div>
 
         <div className="kt-body">
@@ -483,7 +498,8 @@ export default function ThemeDashboard({ onClose, embedded = false }) {
           <span className="kt-msg" role="status" style={{ margin: 0, color: message.ok ? 'var(--kt-muted)' : 'var(--kt-danger)' }}>
             {message.text ? (<>{message.ok && <Check size={12} style={{ verticalAlign: '-2px', marginRight: 4, color: 'var(--kt-success)' }} />}{message.text}</>) : 'Dark themes only. Light mode is not supported yet.'}
           </span>
-          <button type="button" className="kt-btn kt-btn-primary kt-btn-sm" onClick={onClose}>Done</button>
+          <button type="button" className="kt-btn kt-btn-sm" onClick={cancel}>Cancel</button>
+          <button type="button" className="kt-btn kt-btn-primary kt-btn-sm" disabled={!dirty} onClick={() => { apply(); onClose?.(); }}>Apply</button>
         </div>
       </div>
     </div>
