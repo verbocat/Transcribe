@@ -1,11 +1,10 @@
 import React, { useState } from 'react';
-import { Mail, Lock, User as UserIcon, BadgeCheck, Eye, EyeOff, AlertCircle, CheckCircle2, ArrowRight, Loader2, Send } from 'lucide-react';
+import { Mail, Lock, User as UserIcon, Eye, EyeOff, AlertCircle, CheckCircle2, ArrowRight, Loader2, Send } from 'lucide-react';
 import { signupUser, checkPasswordCriteria } from './authService';
 import PasswordCriteriaList from './PasswordCriteriaList';
-import { useTheme } from '../context/ThemeContext';
+import '../components/noun.css';
 
 export default function SignupPage({ onSwitchToLogin, embedded = false }) {
-  const { isDark } = useTheme();
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -140,210 +139,95 @@ export default function SignupPage({ onSwitchToLogin, embedded = false }) {
     );
   }
 
-  const inputClasses = isDark
-    ? "w-full pl-8 pr-2.5 py-1.5 bg-[var(--kt-s0)] border border-[var(--kt-s4)] focus:border-[var(--kt-accent)] focus:ring-1 focus:ring-[var(--kt-accent)] rounded-lg text-xs text-white placeholder-slate-600 outline-none transition-all"
-    : "w-full pl-8 pr-2.5 py-1.5 bg-slate-50 border border-slate-300 focus:border-blue-600 focus:ring-1 focus:ring-blue-500 rounded-lg text-xs text-slate-900 placeholder-slate-400 outline-none transition-all";
-
-  const labelClasses = `block text-[11px] font-semibold mb-1 ${isDark ? 'text-slate-400' : 'text-slate-700'}`;
+  const emailInvalid = email && !validateEmailFormat(email);
+  const mismatch = confirmPassword && confirmPassword !== password;
+  const eyeBtn = 'absolute right-2 h-8 w-8 grid place-items-center rounded-lg text-[var(--kt-faint)] hover:text-white hover:bg-[var(--kt-s3)] cursor-pointer border-0 bg-transparent';
 
   return (
-    <div className={embedded ? "w-full p-0 flex flex-col justify-between relative" : `w-full max-w-[460px] ${isDark ? 'bg-[var(--kt-s1)] border-[var(--kt-s4)] hover:border-[var(--kt-accent)]/30' : 'bg-white border-slate-200 shadow-xl'} border rounded-2xl p-5 sm:p-6 shadow-[0_25px_60px_-15px_rgba(0,0,0,0.9),0_0_25px_rgba(var(--kt-accent-rgb),0.06)] relative z-10 transition-all duration-300`}>
-      {/* Brand Header */}
-      <div className="text-center mb-3">
-        <div className={`inline-flex items-center justify-center w-10 h-10 rounded-xl mb-1.5 border transition-all ${
-          isDark
-            ? 'bg-gradient-to-tr from-[var(--kt-accent)]/20 via-[var(--kt-info)]/20 to-transparent border-[var(--kt-accent)]/30 text-[var(--kt-accent)] shadow-[0_0_15px_rgba(var(--kt-accent-rgb),0.25)]'
-            : 'bg-blue-50 border-blue-200 text-blue-600 shadow-sm'
-        }`}>
-          <BadgeCheck size={20} />
-        </div>
-        <h1 className={`text-lg font-extrabold tracking-tight ${isDark ? 'text-white' : 'text-slate-900'}`}>
-          Join <span className={isDark ? "text-[var(--kt-accent)] drop-shadow-[0_0_10px_rgba(var(--kt-accent-rgb),0.35)]" : "text-blue-600"}>Studio</span>
-        </h1>
-        <p className={`text-[11.5px] mt-0.5 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
-          Create your workstation account with <strong className={isDark ? "text-[var(--kt-accent)] font-semibold" : "text-blue-700 font-semibold"}>any valid email</strong>
-        </p>
+    <div className={embedded ? 'w-full relative nx-rise' : 'w-full max-w-[460px] border rounded-2xl p-6 relative nx-rise bg-[var(--kt-s1)] border-[var(--kt-s4)] text-[var(--kt-text)]'}>
+      <div className="mb-6">
+        <h1 className="nx-display text-[32px] leading-[1.1] font-semibold text-white">Create your account</h1>
+        <p className="mt-2 text-[15px] text-[var(--kt-muted)] leading-relaxed">Any valid email works. You will confirm it before signing in.</p>
       </div>
 
-      {/* Error Alert */}
       {error && (
-        <div className={`mb-3 p-2.5 rounded-xl border text-xs flex items-start gap-2.5 animate-mac-squish ${
-          isDark ? 'bg-rose-500/15 border-rose-500/40 text-rose-300' : 'bg-rose-50 border-rose-200 text-rose-800'
-        }`}>
-          <AlertCircle size={16} className={`shrink-0 mt-0.5 ${isDark ? 'text-rose-400' : 'text-rose-600'}`} />
-          <div className="leading-relaxed flex-1">
-            <span className={`font-semibold block ${isDark ? 'text-white' : 'text-rose-950'}`}>{error}</span>
+        <div role="alert" className="nx-notice err mb-4">
+          <AlertCircle size={17} className="shrink-0 mt-0.5" />
+          <div className="flex-1">
+            <div>{error}</div>
             {error.toLowerCase().includes('already exists') && (
-              <button
-                type="button"
-                onClick={onSwitchToLogin}
-                className={`mt-1 inline-flex items-center gap-1 text-[11px] font-bold hover:underline cursor-pointer bg-transparent border-0 p-0 ${
-                  isDark ? 'text-[var(--kt-accent)]' : 'text-blue-700'
-                }`}
-              >
-                Sign in to your existing account &rarr;
-              </button>
+              <button type="button" onClick={onSwitchToLogin} className="nx-link mt-1.5">Sign in to your existing account</button>
             )}
           </div>
         </div>
       )}
 
-      {/* Signup Form */}
-      <form onSubmit={handleSubmit} className="space-y-2.5">
-        {/* Name */}
-        <div>
-          <div>
-            <label className={labelClasses}>
-              Full Name <span className={isDark ? "text-[var(--kt-accent)]" : "text-blue-600"}>*</span>
-            </label>
-            <div className="relative flex items-center">
-              <UserIcon size={14} className={`absolute left-3 pointer-events-none ${isDark ? 'text-slate-500' : 'text-slate-400'}`} />
-              <input
-                type="text"
-                placeholder="e.g. John Doe"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                required
-                autoComplete="name"
-                className={inputClasses}
-              />
-            </div>
-          </div>
-
-        </div>
-
-        {/* Work Email */}
-        <div>
-          <label className={labelClasses}>
-            Email Address <span className={isDark ? "text-[var(--kt-accent)]" : "text-blue-600"}>*</span>
-          </label>
-          <div className="relative flex items-center">
-            <Mail size={14} className={`absolute left-3 pointer-events-none ${isDark ? 'text-slate-500' : 'text-slate-400'}`} />
-            <input
-              type="email"
-              placeholder="name@verbolabs.com"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-              autoComplete="email"
-              className={`${inputClasses} ${
-                email && !validateEmailFormat(email) ? '!border-rose-500' : ''
-              }`}
-            />
-          </div>
-          {email && !validateEmailFormat(email) && (
-            <span className="block mt-1 text-[10.5px] text-rose-500">
-              Please enter a valid email address
-            </span>
-          )}
-        </div>
-
-        {/* Passwords */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-          <div>
-            <label className={labelClasses}>
-              Password <span className={isDark ? "text-[var(--kt-accent)]" : "text-blue-600"}>*</span>
-            </label>
-            <div className="relative flex items-center">
-              <Lock size={14} className={`absolute left-3 pointer-events-none ${isDark ? 'text-slate-500' : 'text-slate-400'}`} />
-              <input
-                type={showPassword ? 'text' : 'password'}
-                placeholder="Password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-                autoComplete="new-password"
-                className={`w-full pl-8 pr-7 py-1.5 ${
-                  isDark
-                    ? 'bg-[var(--kt-s0)] border border-[var(--kt-s4)] focus:border-[var(--kt-accent)] focus:ring-1 focus:ring-[var(--kt-accent)] text-white placeholder-slate-600'
-                    : 'bg-slate-50 border border-slate-300 focus:border-blue-600 focus:ring-1 focus:ring-blue-500 text-slate-900 placeholder-slate-400'
-                } rounded-lg text-xs outline-none transition-all`}
-              />
-              <button
-                type="button"
-                onClick={() => setShowPassword(!showPassword)}
-                className={`absolute right-2 p-0.5 cursor-pointer bg-transparent border-0 ${isDark ? 'text-slate-500 hover:text-slate-300' : 'text-slate-400 hover:text-slate-700'}`}
-              >
-                {showPassword ? <EyeOff size={13} /> : <Eye size={13} />}
-              </button>
-            </div>
-          </div>
-
-          <div>
-            <label className={labelClasses}>
-              Confirm <span className={isDark ? "text-[var(--kt-accent)]" : "text-blue-600"}>*</span>
-            </label>
-            <div className="relative flex items-center">
-              <Lock size={14} className={`absolute left-3 pointer-events-none ${isDark ? 'text-slate-500' : 'text-slate-400'}`} />
-              <input
-                type={showConfirmPassword ? 'text' : 'password'}
-                placeholder="Confirm"
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                required
-                autoComplete="new-password"
-                className={`w-full pl-8 pr-7 py-1.5 ${
-                  isDark
-                    ? 'bg-[var(--kt-s0)] border border-[var(--kt-s4)] focus:border-[var(--kt-accent)] focus:ring-1 focus:ring-[var(--kt-accent)] text-white placeholder-slate-600'
-                    : 'bg-slate-50 border border-slate-300 focus:border-blue-600 focus:ring-1 focus:ring-blue-500 text-slate-900 placeholder-slate-400'
-                } ${
-                  confirmPassword && confirmPassword !== password ? '!border-rose-500' : ''
-                } rounded-lg text-xs outline-none transition-all`}
-              />
-              <button
-                type="button"
-                onClick={() => setShowConfirmPassword(!showConfirmPassword)}
-                className={`absolute right-2 p-0.5 cursor-pointer bg-transparent border-0 ${isDark ? 'text-slate-500 hover:text-slate-300' : 'text-slate-400 hover:text-slate-700'}`}
-              >
-                {showConfirmPassword ? <EyeOff size={13} /> : <Eye size={13} />}
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {confirmPassword && confirmPassword !== password && (
-          <span className="block text-[10.5px] text-rose-500">
-            Passwords do not match
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <label className="nx-field">
+          <span className="nx-label">Full name</span>
+          <span className="nx-input-wrap">
+            <UserIcon size={16} className="lead" />
+            <input type="text" placeholder="Your name" value={name} onChange={(e) => setName(e.target.value)} required autoComplete="name" className="nx-input" />
           </span>
-        )}
+        </label>
+
+        <label className="nx-field">
+          <span className="nx-label">Email</span>
+          <span className="nx-input-wrap">
+            <Mail size={16} className="lead" />
+            <input type="email" placeholder="you@company.com" value={email} onChange={(e) => setEmail(e.target.value)} required autoComplete="email"
+              aria-invalid={emailInvalid ? 'true' : undefined} className={`nx-input ${emailInvalid ? 'bad' : ''}`} />
+          </span>
+          {emailInvalid && <span className="block mt-1.5 text-xs text-[var(--kt-danger)]">Enter a valid email address, like name@company.com.</span>}
+        </label>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="nx-field">
+            <label htmlFor="signup-password" className="nx-label">Password</label>
+            <span className="nx-input-wrap">
+              <Lock size={16} className="lead" />
+              <input id="signup-password" type={showPassword ? 'text' : 'password'} placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} required autoComplete="new-password" className="nx-input pr-11" />
+              <button type="button" onClick={() => setShowPassword(!showPassword)} className={eyeBtn} aria-label={showPassword ? 'Hide password' : 'Show password'}>
+                {showPassword ? <EyeOff size={15} /> : <Eye size={15} />}
+              </button>
+            </span>
+          </div>
+          <div className="nx-field">
+            <label htmlFor="signup-confirm" className="nx-label">Confirm password</label>
+            <span className="nx-input-wrap">
+              <Lock size={16} className="lead" />
+              <input id="signup-confirm" type={showConfirmPassword ? 'text' : 'password'} placeholder="Repeat it" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} required autoComplete="new-password"
+                aria-invalid={mismatch ? 'true' : undefined} className={`nx-input pr-11 ${mismatch ? 'bad' : ''}`} />
+              <button type="button" onClick={() => setShowConfirmPassword(!showConfirmPassword)} className={eyeBtn} aria-label={showConfirmPassword ? 'Hide password' : 'Show password'}>
+                {showConfirmPassword ? <EyeOff size={15} /> : <Eye size={15} />}
+              </button>
+            </span>
+          </div>
+        </div>
+
+        {mismatch && <span className="block text-xs text-[var(--kt-danger)]">Passwords do not match.</span>}
 
         <PasswordCriteriaList password={password} />
 
-        {/* Submit Button */}
-        <button
-          type="submit"
-          disabled={isSubmitting}
-          className={`w-full mt-1.5 py-2.5 px-4 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed ${
-            isDark
-              ? 'bg-[var(--kt-accent)] hover:bg-[var(--kt-accent)] text-black shadow-[0_0_20px_rgba(var(--kt-accent-rgb),0.3)] hover:shadow-[0_0_25px_rgba(var(--kt-accent-rgb),0.45)]'
-              : 'bg-[#2563eb] hover:bg-[#1d4ed8] text-white shadow-md hover:shadow-blue-500/20'
-          }`}
-        >
+        <button type="submit" disabled={isSubmitting} className="nx-btn mt-2">
           {isSubmitting ? (
             <>
-              <Loader2 size={15} className="animate-spin" />
-              <span>Creating Account...</span>
+              <Loader2 size={17} className="animate-spin" />
+              <span>Creating account...</span>
             </>
           ) : (
             <>
-              <span>Create Account</span>
-              <ArrowRight size={14} />
+              <span>Create account</span>
+              <ArrowRight size={16} />
             </>
           )}
         </button>
       </form>
 
-      {/* Footer link */}
-      <div className={`mt-3 pt-2.5 border-t text-center text-xs ${isDark ? 'border-[var(--kt-s3)] text-slate-400' : 'border-slate-200 text-slate-600'}`}>
-        <span>Already have an account?</span>{' '}
-        <button
-          type="button"
-          onClick={onSwitchToLogin}
-          className={`font-bold hover:underline cursor-pointer bg-transparent border-0 p-0 ${isDark ? 'text-[var(--kt-accent)]' : 'text-blue-700'}`}
-        >
-          Sign In
-        </button>
-      </div>
+      <p className="mt-7 text-sm text-center text-[var(--kt-muted)]">
+        Already have an account?{' '}
+        <button type="button" onClick={onSwitchToLogin} className="nx-link">Sign in</button>
+      </p>
     </div>
   );
 }

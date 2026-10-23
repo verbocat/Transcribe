@@ -1,16 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import BrandLogo from '../components/BrandLogo';
-import { Mail, Lock, User as UserIcon, Building2, Eye, EyeOff, AlertCircle, CheckCircle2, ArrowRight, ArrowLeft, Loader2, Sparkles, ShieldCheck, RotateCw, Clock, ShieldAlert } from 'lucide-react';
+import { Mail, Lock, Eye, EyeOff, AlertCircle, CheckCircle2, ArrowRight, ArrowLeft, Loader2, ShieldCheck, RotateCw, Clock, ShieldAlert } from 'lucide-react';
 import { useAuth } from './AuthContext';
-import { useTheme } from '../context/ThemeContext';
 import { loginUser, resendVerification, verifyLoginOtp, resendLoginOtp, requestLoginOtp, getBotChallenge } from './authService';
 import AuthProcessModal from './AuthProcessModal';
+import '../components/noun.css';
 
 import { Server } from 'lucide-react';
 
 export default function LoginPage({ onSwitchToSignup, onSwitchToForgotPassword, onOpenBackendSettings, initialSuccessMsg = '', embedded = false }) {
   const { login, sessionNotice, clearSessionNotice } = useAuth();
-  const { isDark } = useTheme();
 
   // Step 1 Form fields
   const [email, setEmail] = useState('');
@@ -291,393 +289,245 @@ export default function LoginPage({ onSwitchToSignup, onSwitchToForgotPassword, 
     }
   };
 
+  const emailInvalid = email && !validateEmailFormat(email);
+  const showResendHint = (error.toLowerCase().includes('timed out') || error.toLowerCase().includes('connect') || error.toLowerCase().includes('network') || error.toLowerCase().includes('server is running')) && onOpenBackendSettings;
+
   return (
-    <div className={embedded ? "w-full flex flex-col justify-between relative" : `w-full max-w-md border rounded-2xl p-6 sm:p-7 shadow-2xl relative ${isDark ? 'bg-[var(--kt-s1)] border-[var(--kt-s4)] text-slate-200' : 'bg-white border-slate-200 text-slate-800'}`}>
-      {/* Brand Header */}
-      <div className="text-center mb-3 sm:mb-4">
-        <div className={`inline-flex p-2.5 rounded-2xl mb-2 shadow-xs ${
-          isDark
-            ? 'bg-gradient-to-tr from-[var(--kt-accent)]/20 to-[var(--kt-accent-2)]/10 text-[var(--kt-accent)] border border-[var(--kt-accent)]/30 shadow-[0_0_15px_rgba(var(--kt-accent-rgb),0.2)]'
-            : 'bg-blue-50 text-blue-700 border border-blue-200'
-        }`}>
-          {step === 'mfa' ? (
-            <ShieldCheck size={22} className={isDark ? 'text-[var(--kt-accent)]' : 'text-blue-600'} />
-          ) : (
-            <BrandLogo size={30} />
-          )}
-        </div>
-        <h1 className={`text-lg sm:text-xl font-extrabold tracking-tight ${isDark ? 'text-white' : 'text-slate-900'}`}>
-          {step === 'mfa' ? (
-            <>Enter <span className={`${isDark ? 'text-[var(--kt-accent)]' : 'text-blue-600'} drop-shadow-[0_0_10px_rgba(var(--kt-accent-rgb),0.35)]`}>Code</span></>
-          ) : (
-            <span className={`${isDark ? 'text-[var(--kt-accent)]' : 'text-blue-600'} drop-shadow-[0_0_10px_rgba(var(--kt-accent-rgb),0.35)]`}>Noun</span>
-          )}
+    <div className={embedded ? 'w-full relative nx-rise' : 'w-full max-w-md border rounded-2xl p-6 sm:p-7 shadow-2xl relative nx-rise bg-[var(--kt-s1)] border-[var(--kt-s4)] text-[var(--kt-text)]'}>
+      <div className="mb-6">
+        <h1 className="nx-display text-[32px] leading-[1.1] font-semibold text-white">
+          {step === 'mfa' ? 'Check your email' : 'Welcome back'}
         </h1>
-        <p className={`text-xs mt-0.5 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
-          {step === 'mfa' ? (
-            'Enter the temporary 6-digit code sent to your email'
-          ) : (
-            <>Sign in to your <strong className={isDark ? 'text-[var(--kt-accent)] font-semibold' : 'text-blue-700 font-semibold'}>workstation</strong> account</>
-          )}
+        <p className="mt-2 text-[15px] text-[var(--kt-muted)] leading-relaxed">
+          {step === 'mfa' ? 'Enter the 6-digit code we sent to finish signing in.' : 'Sign in to pick up your projects.'}
         </p>
       </div>
 
-      {/* Brute-Force Lockout Banner */}
-      {lockoutSeconds > 0 && (
-        <div className={`mb-4 p-3 rounded-xl border text-xs flex items-start gap-2.5 leading-relaxed animate-in fade-in ${
-          isDark
-            ? 'bg-rose-500/15 border-rose-500/40 text-rose-300'
-            : 'bg-rose-50 border-rose-200 text-rose-900 shadow-xs'
-        }`}>
-          <ShieldAlert size={18} className={`shrink-0 mt-0.5 ${isDark ? 'text-rose-400' : 'text-rose-600'}`} />
-          <div>
-            <div className={`font-bold ${isDark ? 'text-rose-200' : 'text-rose-950'}`}>Account Temporarily Locked</div>
-            <div className={`mt-0.5 text-[11px] ${isDark ? 'text-rose-300/90' : 'text-rose-800'}`}>
-              Too many failed attempts. Access is locked for: <strong className={`font-mono ${isDark ? 'text-white' : 'text-rose-950 font-bold'}`}>{formatTimer(lockoutSeconds)}</strong>
+      <div className="space-y-3 empty:hidden mb-4" aria-live="polite">
+        {lockoutSeconds > 0 && (
+          <div role="alert" className="nx-notice err">
+            <ShieldAlert size={18} className="shrink-0 mt-0.5" />
+            <div>
+              <div className="font-semibold">Too many attempts</div>
+              <div className="mt-0.5">Sign-in is paused for <strong className="font-mono">{formatTimer(lockoutSeconds)}</strong>. Try again then.</div>
             </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {/* Session Expired / Inactivity Notice */}
-      {sessionNotice && !error && step === 'credentials' && lockoutSeconds === 0 && (
-        <div className={`mb-4 p-3 rounded-xl border text-xs flex items-start gap-2.5 leading-relaxed animate-in fade-in duration-200 ${
-          isDark
-            ? 'bg-amber-500/10 border-amber-500/30 text-amber-300'
-            : 'bg-amber-50 border-amber-200 text-amber-900 shadow-xs'
-        }`}>
-          <AlertCircle size={16} className={`shrink-0 mt-0.5 ${isDark ? 'text-amber-400' : 'text-amber-600'}`} />
-          <div className="flex-1">
-            <span className={isDark ? 'text-amber-300' : 'text-amber-900 font-medium'}>{sessionNotice}</span>
+        {sessionNotice && !error && step === 'credentials' && lockoutSeconds === 0 && (
+          <div className="nx-notice warn">
+            <AlertCircle size={17} className="shrink-0 mt-0.5" />
+            <span>{sessionNotice}</span>
           </div>
-        </div>
-      )}
+        )}
 
-      {/* Error Alert */}
-      {error && !processModalOpen && (
-        <div className={`mb-4 p-3 rounded-xl border text-xs flex items-start gap-2.5 leading-relaxed ${
-          isDark
-            ? 'bg-rose-500/10 border-rose-500/30 text-rose-300'
-            : 'bg-rose-50 border-rose-200 text-rose-900 shadow-xs'
-        }`}>
-          <AlertCircle size={16} className={`shrink-0 mt-0.5 ${isDark ? 'text-rose-400' : 'text-rose-600'}`} />
-          <div className="flex-1">
-            <div className={isDark ? 'text-rose-200' : 'text-rose-900 font-medium'}>{error}</div>
-            {unverifiedEmail && (
-              <button
-                type="button"
-                onClick={handleResendVerification}
-                disabled={isResending}
-                className={`mt-2 px-3 py-1 rounded-lg text-[11px] font-semibold transition-colors cursor-pointer border ${
-                  isDark
-                    ? 'bg-[var(--kt-s3)] hover:bg-[var(--kt-s4)] text-white border-[var(--kt-s5)]'
-                    : 'bg-white hover:bg-slate-50 text-rose-800 border-rose-300 shadow-xs'
-                }`}
-              >
-                {isResending ? 'Sending...' : 'Resend Verification Email'}
-              </button>
-            )}
-            {(error.toLowerCase().includes('timed out') || error.toLowerCase().includes('connect') || error.toLowerCase().includes('network') || error.toLowerCase().includes('server is running')) && onOpenBackendSettings && (
-              <button
-                type="button"
-                onClick={onOpenBackendSettings}
-                className={`mt-2 px-2.5 py-1 rounded-md text-[11px] font-semibold transition-colors cursor-pointer flex items-center gap-1.5 border ${
-                  isDark
-                    ? 'bg-[var(--kt-accent)]/10 hover:bg-[var(--kt-accent)]/20 text-[var(--kt-accent)] border-[var(--kt-accent)]/30'
-                    : 'bg-white hover:bg-slate-50 text-blue-700 border-blue-200 shadow-xs'
-                }`}
-              >
-                <Server size={12} />
-                <span>Configure Backend URL / Switch Port</span>
-              </button>
-            )}
+        {error && !processModalOpen && (
+          <div role="alert" className="nx-notice err">
+            <AlertCircle size={17} className="shrink-0 mt-0.5" />
+            <div className="flex-1 min-w-0">
+              <div>{error}</div>
+              {unverifiedEmail && (
+                <button type="button" onClick={handleResendVerification} disabled={isResending} className="nx-link mt-2 block">
+                  {isResending ? 'Sending...' : 'Resend verification email'}
+                </button>
+              )}
+              {showResendHint && (
+                <button type="button" onClick={onOpenBackendSettings} className="nx-link mt-2 flex items-center gap-1.5">
+                  <Server size={13} />
+                  <span>Check server connection</span>
+                </button>
+              )}
+            </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {/* Info Alert */}
-      {infoMessage && (
-        <div className={`mb-4 p-3 rounded-xl border text-xs flex items-start gap-2.5 leading-relaxed ${
-          isDark
-            ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
-            : 'bg-emerald-50 border-emerald-200 text-emerald-900 shadow-xs'
-        }`}>
-          <CheckCircle2 size={16} className={`shrink-0 mt-0.5 ${isDark ? 'text-emerald-400' : 'text-emerald-600'}`} />
-          <div className={isDark ? 'text-emerald-300' : 'text-emerald-900 font-medium'}>{infoMessage}</div>
-        </div>
-      )}
+        {infoMessage && (
+          <div className="nx-notice ok">
+            <CheckCircle2 size={17} className="shrink-0 mt-0.5" />
+            <span>{infoMessage}</span>
+          </div>
+        )}
+      </div>
 
       {/* STEP 1: CREDENTIALS FORM */}
       {step === 'credentials' && (
-        <form onSubmit={handleSubmit} className="space-y-2.5">
-          {/* Sign-in method */}
-          <div role="tablist" aria-label="Sign-in method" className={`grid grid-cols-2 gap-1 p-1 rounded-xl border ${isDark ? 'bg-[var(--kt-s0)] border-[var(--kt-s4)]' : 'bg-slate-100 border-slate-200'}`}>
-            {[['password', 'Password', Lock], ['otp', 'OTP', Mail]].map(([key, label, Icon]) => (
+        <form onSubmit={handleSubmit} className="space-y-4" noValidate>
+          <div role="tablist" aria-label="Sign-in method" className="nx-seg">
+            {[['password', 'Password', Lock], ['otp', 'Email code', Mail]].map(([key, label, Icon]) => (
               <button
                 key={key}
                 type="button"
                 role="tab"
                 aria-selected={method === key}
                 onClick={() => { setMethod(key); setError(''); setInfoMessage(''); }}
-                className={`py-1.5 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer border-0 ${
-                  method === key
-                    ? (isDark ? 'bg-[var(--kt-accent)] text-black shadow-sm' : 'bg-white text-blue-700 shadow-sm')
-                    : (isDark ? 'bg-transparent text-slate-400 hover:text-white' : 'bg-transparent text-slate-500 hover:text-slate-800')
-                }`}
               >
-                <Icon size={13} />
+                <Icon size={14} />
                 <span>{label}</span>
               </button>
             ))}
           </div>
 
-          {/* Email */}
-          <div>
-            <label className={`block text-[11px] mb-1 tracking-wide ${isDark ? 'text-slate-400 font-semibold' : 'text-slate-700 font-semibold'}`}>
-              Email Address <span className={isDark ? 'text-[var(--kt-accent)]' : 'text-blue-600'}>*</span>
-            </label>
-            <div className="relative flex items-center">
-              <Mail size={16} className={`absolute left-3 pointer-events-none ${isDark ? 'text-slate-500' : 'text-slate-400'}`} />
+          <label className="nx-field">
+            <span className="nx-label">Email</span>
+            <span className="nx-input-wrap">
+              <Mail size={16} className="lead" />
               <input
                 type="email"
-                placeholder="name@email.com"
+                placeholder="you@company.com"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
                 autoComplete="email"
+                autoFocus
+                aria-invalid={emailInvalid ? 'true' : undefined}
                 disabled={lockoutSeconds > 0}
-                className={`w-full pl-9 pr-3 py-2 border rounded-lg text-xs outline-none transition-all disabled:opacity-50 ${
-                  email && !validateEmailFormat(email)
-                    ? 'border-rose-500'
-                    : isDark
-                    ? 'bg-[var(--kt-s0)] border-[var(--kt-s4)] text-white placeholder-slate-600 focus:border-[var(--kt-accent)] focus:ring-1 focus:ring-[var(--kt-accent)]'
-                    : 'bg-slate-50 border-slate-300 text-slate-900 placeholder-slate-400 focus:border-blue-600 focus:bg-white focus:ring-1 focus:ring-blue-600/20'
-                }`}
+                className={`nx-input ${emailInvalid ? 'bad' : ''}`}
               />
-            </div>
-            {email && !validateEmailFormat(email) && (
-              <span className="block mt-1 text-[11px] text-rose-400">
-                Please enter a valid email address
-              </span>
-            )}
-          </div>
+            </span>
+            {emailInvalid && <span className="block mt-1.5 text-xs text-[var(--kt-danger)]">Enter a valid email address, like name@company.com.</span>}
+          </label>
 
-          {/* Password (password method only) */}
           {method === 'password' && (
-          <div>
-            <div className="flex items-center justify-between mb-1">
-              <label className={`text-[11px] tracking-wide ${isDark ? 'text-slate-400 font-semibold' : 'text-slate-700 font-semibold'}`}>
-                Password <span className={isDark ? 'text-[var(--kt-accent)]' : 'text-blue-600'}>*</span>
-              </label>
-              {onSwitchToForgotPassword && (
+            <div className="nx-field">
+              <div className="nx-label">
+                <label htmlFor="login-password">Password</label>
+                {onSwitchToForgotPassword && (
+                  <button type="button" onClick={onSwitchToForgotPassword} className="nx-link text-xs">Forgot password?</button>
+                )}
+              </div>
+              <span className="nx-input-wrap">
+                <Lock size={16} className="lead" />
+                <input
+                  id="login-password"
+                  type={showPassword ? 'text' : 'password'}
+                  placeholder="Your password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                  autoComplete="current-password"
+                  disabled={lockoutSeconds > 0}
+                  className="nx-input pr-11"
+                />
                 <button
                   type="button"
-                  onClick={onSwitchToForgotPassword}
-                  className={`text-[11px] font-medium hover:underline cursor-pointer bg-transparent border-0 p-0 ${
-                    isDark ? 'text-[var(--kt-accent)]' : 'text-blue-700 font-semibold'
-                  }`}
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-2 h-8 w-8 grid place-items-center rounded-lg text-[var(--kt-faint)] hover:text-white hover:bg-[var(--kt-s3)] cursor-pointer border-0 bg-transparent"
+                  title={showPassword ? 'Hide password' : 'Show password'}
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
                 >
-                  Forgot Password?
+                  {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
                 </button>
-              )}
+              </span>
             </div>
-            <div className="relative flex items-center">
-              <Lock size={16} className={`absolute left-3 pointer-events-none ${isDark ? 'text-slate-500' : 'text-slate-400'}`} />
-              <input
-                type={showPassword ? 'text' : 'password'}
-                placeholder="Enter your password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-                autoComplete="current-password"
-                disabled={lockoutSeconds > 0}
-                className={`w-full pl-9 pr-9 py-2 border rounded-lg text-xs outline-none transition-all disabled:opacity-50 ${
-                  isDark
-                    ? 'bg-[var(--kt-s0)] border-[var(--kt-s4)] text-white placeholder-slate-600 focus:border-[var(--kt-accent)] focus:ring-1 focus:ring-[var(--kt-accent)]'
-                    : 'bg-slate-50 border-slate-300 text-slate-900 placeholder-slate-400 focus:border-blue-600 focus:bg-white focus:ring-1 focus:ring-blue-600/20'
-                }`}
-              />
-              <button
-                type="button"
-                onClick={() => setShowPassword(!showPassword)}
-                className={`absolute right-3 p-0.5 cursor-pointer bg-transparent border-0 ${
-                  isDark ? 'text-slate-500 hover:text-slate-300' : 'text-slate-400 hover:text-slate-600'
-                }`}
-                title={showPassword ? 'Hide password' : 'Show password'}
-              >
-                {showPassword ? <EyeOff size={15} /> : <Eye size={15} />}
-              </button>
-            </div>
-          </div>
           )}
 
-          {/* Bot Defense Challenge (Shown after 2 failed attempts) */}
           {botChallenge && (
-            <div className={`p-3 border rounded-xl space-y-2 animate-in fade-in ${
-              isDark ? 'bg-[var(--kt-s2)] border-[var(--kt-s5)]' : 'bg-slate-50 border-slate-200'
-            }`}>
-              <div className="flex items-center justify-between">
-                <div className={`flex items-center gap-1.5 text-xs font-semibold ${isDark ? 'text-[var(--kt-accent)]' : 'text-blue-700'}`}>
-                  <ShieldCheck size={14} />
+            <div className="p-3.5 rounded-xl border border-[var(--kt-s5)] bg-[var(--kt-s2)] space-y-2.5 nx-rise">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2 text-[13px] font-semibold text-[var(--kt-accent-soft)]">
+                  <ShieldCheck size={15} />
                   <span>{botChallenge.question}</span>
                 </div>
-                <button
-                  type="button"
-                  onClick={loadBotChallenge}
-                  disabled={isLoadingChallenge}
-                  className={`text-[11px] cursor-pointer bg-transparent border-0 p-0 ${
-                    isDark ? 'text-slate-400 hover:text-white' : 'text-slate-500 hover:text-slate-800'
-                  }`}
-                >
+                <button type="button" onClick={loadBotChallenge} disabled={isLoadingChallenge} className="nx-link text-xs shrink-0">
                   {isLoadingChallenge ? 'Loading...' : 'New question'}
                 </button>
               </div>
               <input
                 type="text"
-                placeholder="Enter answer (e.g. 14)"
+                placeholder="Your answer"
+                aria-label="Security question answer"
                 value={botAnswer}
                 onChange={(e) => setBotAnswer(e.target.value)}
                 required
-                className={`w-full px-3 py-1.5 border rounded-lg text-xs outline-none ${
-                  isDark
-                    ? 'bg-[var(--kt-s0)] border-[var(--kt-s4)] text-white placeholder-slate-600 focus:border-[var(--kt-accent)]'
-                    : 'bg-white border-slate-300 text-slate-900 placeholder-slate-400 focus:border-blue-600'
-                }`}
+                className="nx-input pl-3.5 h-11"
               />
-              <p className={`text-[10px] ${isDark ? 'text-slate-500' : 'text-slate-500'}`}>
-                Human verification required to protect server email quota.
-              </p>
+              <p className="text-xs text-[var(--kt-faint)]">This quick check keeps automated sign-ups away.</p>
             </div>
           )}
 
-          {/* Submit Button */}
-          <button
-            type="submit"
-            disabled={isSubmitting || lockoutSeconds > 0}
-            className={`w-full mt-2 py-2.5 px-4 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed ${
-              isDark
-                ? 'bg-[var(--kt-accent)] hover:bg-[var(--kt-accent)] text-black shadow-[0_0_20px_rgba(var(--kt-accent-rgb),0.3)] hover:shadow-[0_0_25px_rgba(var(--kt-accent-rgb),0.45)]'
-                : 'bg-[#2563eb] hover:bg-[#1d4ed8] text-white shadow-md hover:shadow-blue-500/20'
-            }`}
-          >
+          <button type="submit" disabled={isSubmitting || lockoutSeconds > 0} className="nx-btn mt-2">
             {isSubmitting ? (
               <>
-                <Loader2 size={16} className="animate-spin" />
+                <Loader2 size={17} className="animate-spin" />
                 <span>{method === 'otp' ? 'Sending code...' : 'Signing in...'}</span>
               </>
             ) : lockoutSeconds > 0 ? (
-              <span>Locked ({formatTimer(lockoutSeconds)})</span>
+              <span>Try again in {formatTimer(lockoutSeconds)}</span>
             ) : (
               <>
-                <span>{method === 'otp' ? 'Send me a code' : 'Sign In'}</span>
-                <ArrowRight size={15} />
+                <span>{method === 'otp' ? 'Send me a code' : 'Sign in'}</span>
+                <ArrowRight size={16} />
               </>
             )}
           </button>
         </form>
       )}
 
-      {/* STEP 2: MFA OTP VERIFICATION */}
+      {/* STEP 2: EMAILED CODE */}
       {step === 'mfa' && (
-        <form onSubmit={handleVerifyOtp} className="space-y-4">
-          {/* Target Email Indicator */}
-          <div className="p-3 bg-[var(--kt-s0)] border border-[var(--kt-s4)] rounded-xl text-center">
-            <span className="text-[11px] text-slate-400 block mb-1">Code sent to official email:</span>
-            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[var(--kt-s2)] border border-[var(--kt-s5)] text-xs font-mono text-[var(--kt-accent)]">
-              <Mail size={12} />
-              <span>{maskedEmail}</span>
-            </div>
+        <form onSubmit={handleVerifyOtp} className="space-y-5">
+          <div className="flex items-center gap-2.5 px-3.5 py-3 rounded-xl bg-[var(--kt-s1)] border border-[var(--kt-s4)] text-sm">
+            <Mail size={16} className="text-[var(--kt-accent-soft)] shrink-0" />
+            <span className="text-[var(--kt-muted)]">Sent to</span>
+            <span className="font-mono text-[13px] text-white truncate">{maskedEmail}</span>
           </div>
 
-          {/* OTP Input & Expiration Timer */}
           <div>
-            <div className="flex items-center justify-between text-[11px] text-slate-400 mb-1.5">
-              <span className="font-semibold tracking-wide">6-Digit Verification Code</span>
-              <span className={`flex items-center gap-1 font-mono ${mfaExpiresIn < 60 ? 'text-rose-400 font-bold animate-pulse' : 'text-slate-400'}`}>
+            <div className="flex items-center justify-between text-xs mb-2">
+              <label htmlFor="login-otp" className="font-semibold text-[var(--kt-muted)] text-[12.5px]">Verification code</label>
+              <span className={`flex items-center gap-1.5 font-mono ${mfaExpiresIn < 60 ? 'text-[var(--kt-danger)]' : 'text-[var(--kt-faint)]'}`}>
                 <Clock size={12} />
                 <span>{mfaExpiresIn > 0 ? `Expires in ${formatTimer(mfaExpiresIn)}` : 'Code expired'}</span>
               </span>
             </div>
-            <div className="relative">
-              <input
-                type="text"
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                maxLength={6}
-                placeholder="······"
-                value={otp}
-                onChange={(e) => setOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                autoFocus
-                disabled={isSubmitting || mfaExpiresIn === 0}
-                className="w-full text-center font-mono text-2xl tracking-[14px] sm:tracking-[18px] py-3 px-4 bg-[var(--kt-s0)] border border-[var(--kt-s4)] focus:border-[var(--kt-accent)] focus:ring-1 focus:ring-[var(--kt-accent)] rounded-xl text-white outline-none transition-all placeholder-slate-600 disabled:opacity-50"
-              />
-            </div>
-            <p className="mt-1.5 text-[11px] text-slate-500 text-center leading-relaxed">
-              Temporary single-use OTP. Immediately deleted after successful login.
-            </p>
+            <input
+              id="login-otp"
+              type="text"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              maxLength={6}
+              placeholder="000000"
+              value={otp}
+              onChange={(e) => setOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
+              autoFocus
+              disabled={isSubmitting || mfaExpiresIn === 0}
+              className="nx-input text-center font-mono text-[28px] tracking-[0.5em] h-16 pl-[0.5em]"
+            />
+            <p className="mt-2 text-xs text-[var(--kt-faint)]">Each code works once and is deleted after you sign in.</p>
           </div>
 
-          {/* Submit Button */}
-          <button
-            type="submit"
-            disabled={isSubmitting || otp.length !== 6 || mfaExpiresIn === 0}
-            className="w-full py-2.5 px-4 rounded-xl text-xs font-bold bg-[var(--kt-accent)] hover:bg-[var(--kt-accent)] text-black transition-all shadow-[0_0_20px_rgba(var(--kt-accent-rgb),0.3)] hover:shadow-[0_0_25px_rgba(var(--kt-accent-rgb),0.45)] cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
+          <button type="submit" disabled={isSubmitting || otp.length !== 6 || mfaExpiresIn === 0} className="nx-btn">
             {isSubmitting ? (
               <>
-                <Loader2 size={16} className="animate-spin" />
-                <span>Verifying Security Code...</span>
+                <Loader2 size={17} className="animate-spin" />
+                <span>Verifying...</span>
               </>
             ) : (
               <>
-                <span>Verify & Launch Workspace</span>
-                <ArrowRight size={15} />
+                <span>Verify and sign in</span>
+                <ArrowRight size={16} />
               </>
             )}
           </button>
 
-          {/* Resend & Back Navigation */}
-          <div className="pt-2 flex items-center justify-between text-xs">
-            <button
-              type="button"
-              onClick={handleBackToCredentials}
-              className="text-slate-400 hover:text-white flex items-center gap-1.5 transition-colors cursor-pointer bg-transparent border-0 p-0"
-            >
+          <div className="flex items-center justify-between text-[13px]">
+            <button type="button" onClick={handleBackToCredentials} className="flex items-center gap-1.5 text-[var(--kt-muted)] hover:text-white transition-colors cursor-pointer bg-transparent border-0 p-0">
               <ArrowLeft size={14} />
-              <span>Back to Sign In</span>
+              <span>Back</span>
             </button>
-
-            <button
-              type="button"
-              onClick={handleResendLoginOtp}
-              disabled={resendCooldown > 0 || isResending}
-              className="text-[var(--kt-accent)] hover:underline disabled:opacity-40 disabled:hover:no-underline flex items-center gap-1.5 cursor-pointer disabled:cursor-not-allowed bg-transparent border-0 p-0 font-medium"
-            >
+            <button type="button" onClick={handleResendLoginOtp} disabled={resendCooldown > 0 || isResending} className="nx-link flex items-center gap-1.5 disabled:opacity-45 disabled:no-underline disabled:cursor-not-allowed">
               <RotateCw size={12} className={isResending ? 'animate-spin' : ''} />
-              <span>
-                {isResending ? 'Sending code...' : resendCooldown > 0 ? `Resend code in ${resendCooldown}s` : 'Resend Code'}
-              </span>
+              <span>{isResending ? 'Sending...' : resendCooldown > 0 ? `Resend in ${resendCooldown}s` : 'Resend code'}</span>
             </button>
           </div>
         </form>
       )}
 
-      {/* Footer link (only in credentials step) */}
       {step === 'credentials' && (
-        <div className={`mt-3.5 pt-2.5 border-t text-center text-xs ${
-          isDark ? 'border-[var(--kt-s3)] text-slate-400' : 'border-slate-200 text-slate-600'
-        }`}>
-          <span>Don't have an account yet?</span>{' '}
-          <button
-            type="button"
-            onClick={onSwitchToSignup}
-            className={`font-bold hover:underline cursor-pointer bg-transparent border-0 p-0 ${
-              isDark ? 'text-[var(--kt-accent)]' : 'text-blue-700'
-            }`}
-          >
-            Create an Account
-          </button>
-        </div>
+        <p className="mt-7 text-sm text-center text-[var(--kt-muted)]">
+          New to Noun?{' '}
+          <button type="button" onClick={onSwitchToSignup} className="nx-link">Create an account</button>
+        </p>
       )}
 
       {/* Synchronous Process Modal */}

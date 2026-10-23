@@ -7,7 +7,6 @@ import VerifyEmailPage from './VerifyEmailPage';
 import ForgotPasswordPage from './ForgotPasswordPage';
 import ResetPasswordPage from './ResetPasswordPage';
 import AuthSplitVisual from './AuthSplitVisual';
-import ThemeToggle from '../components/ThemeToggle';
 import { useTheme } from '../context/ThemeContext';
 import { getApiBase, setCustomApiBase, testBackendHealth, detectAndSelectLiveBackend, cleanUrl, isLocalhostHost } from '../config';
 
@@ -154,6 +153,14 @@ export default function AuthScreen({ onBackToHome, initialView = 'login' }) {
     setView('login');
   };
 
+  const switchTo = (next) => {
+    setLoginSuccessMsg('');
+    setView(next);
+    if (window.history.pushState && window.location.pathname !== `/${next}`) {
+      window.history.pushState({ tool: null, auth: next }, '', `/${next}`);
+    }
+  };
+
   return (
     <div
       onClick={(e) => {
@@ -161,137 +168,63 @@ export default function AuthScreen({ onBackToHome, initialView = 'login' }) {
           handleDismiss();
         }
       }}
-      className={`min-h-screen w-screen flex flex-col justify-between relative overflow-y-auto custom-scrollbar select-none transition-all duration-300 ${isDark ? 'bg-[var(--kt-s0)] text-slate-200' : 'bg-[#f4f6fb] text-slate-800'
-        } ${isClosing ? 'opacity-0' : 'opacity-100'}`}
+      className={`min-h-screen w-screen grid lg:grid-cols-[minmax(480px,1fr)_minmax(0,1.1fr)] bg-[var(--kt-s0)] text-[var(--kt-text)] transition-opacity duration-200 ${isClosing ? 'opacity-0' : 'opacity-100'}`}
+      style={{ fontFamily: 'var(--kt-font-ui)' }}
     >
-      {/* Ambient background glow effects */}
-      <div className={`absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[700px] h-[400px] blur-[130px] pointer-events-none rounded-full ${isDark ? 'bg-gradient-to-tr from-[var(--kt-accent)]/10 to-indigo-600/10' : 'bg-gradient-to-tr from-blue-500/10 to-indigo-400/10'
-        }`} />
-      <div className={`absolute bottom-10 right-10 w-[400px] h-[300px] blur-[110px] pointer-events-none rounded-full ${isDark ? 'bg-gradient-to-br from-blue-500/10 to-transparent' : 'bg-gradient-to-br from-blue-400/10 to-transparent'
-        }`} />
-
-      {/* Top Header / Tab Bar */}
-      <header className="relative z-30 w-full max-w-5xl mx-auto px-4 sm:px-6 py-2.5 sm:py-3.5 flex items-center justify-between shrink-0">
-        {/* Left: Brand */}
-        <div className="flex items-center gap-2.5">
-          <BrandLogo variant="wordmark" size={34} />
-        </div>
-
-        {/* Right: Actions */}
-        <div className="flex items-center gap-2 sm:gap-3">
-          {/* Acoustic Theme Toggle Button */}
-          <ThemeToggle />
-
-          {/* Backend Server Status Pill */}
-          <button
-            type="button"
-            onClick={handleOpenConfigModal}
-            className={`hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-[11px] font-mono backdrop-blur-md transition-all cursor-pointer ${backendStatus === 'connected'
-                ? (isDark ? 'bg-[var(--kt-s1)]/90 border-emerald-500/30 text-emerald-400 hover:border-emerald-500/60' : 'bg-white border-emerald-500/40 text-emerald-700 shadow-2xs')
-                : backendStatus === 'checking'
-                  ? (isDark ? 'bg-[var(--kt-s1)]/90 border-amber-500/30 text-amber-400 hover:border-amber-500/60' : 'bg-white border-amber-500/40 text-amber-700 shadow-2xs')
-                  : 'bg-rose-950/40 border-rose-500/50 text-rose-300 hover:border-rose-500 hover:bg-rose-900/50 animate-pulse'
-              }`}
-            title="Click to view or change Backend Server API URL"
-          >
-            {backendStatus === 'connected' ? (
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]" />
-            ) : backendStatus === 'checking' ? (
-              <RotateCw size={10} className="animate-spin text-amber-400" />
-            ) : (
-              <AlertCircle size={11} className="text-rose-400" />
-            )}
-            <span>{backendStatus === 'connected' ? `Server Live${backendLatency ? ` (${backendLatency}ms)` : ''}` : 'Server Offline'}</span>
-          </button>
-
-          {/* Return to Home / Studio Button */}
-          {onBackToHome && (
+      {/* Form column */}
+      <div className="relative flex flex-col min-h-screen overflow-y-auto">
+        <header className="flex items-center justify-between gap-3 px-5 sm:px-10 pt-5">
+          {onBackToHome ? (
             <button
               type="button"
               onClick={handleDismiss}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-semibold transition-all shadow-xs backdrop-blur-md cursor-pointer ${isDark
-                  ? 'border-[var(--kt-s4)] bg-[var(--kt-s1)]/90 hover:bg-[var(--kt-s3)] hover:border-[var(--kt-accent)]/40 text-slate-300 hover:text-white'
-                  : 'border-slate-200 bg-white hover:bg-slate-50 hover:border-blue-500/40 text-slate-700 hover:text-slate-900'
-                }`}
-              title="Return to Home Landing Page (Esc)"
+              className="group flex items-center gap-2 h-9 pl-2 pr-3 -ml-2 rounded-lg text-[13px] font-semibold text-[var(--kt-muted)] hover:text-white hover:bg-[var(--kt-s2)] transition-colors cursor-pointer focus-visible:outline-2 focus-visible:outline-[var(--kt-accent-soft)]"
+              title="Back to home (Esc)"
             >
-              <ArrowLeft size={13} className={isDark ? 'text-[var(--kt-accent)]' : 'text-blue-600'} />
-              <span>Back</span>
+              <ArrowLeft size={15} className="group-hover:-translate-x-0.5 transition-transform" />
+              <span>Home</span>
             </button>
-          )}
-        </div>
-      </header>
+          ) : <span />}
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleOpenConfigModal}
+              className="flex items-center gap-2 h-9 px-3 rounded-full text-xs font-medium text-[var(--kt-muted)] hover:bg-[var(--kt-s2)] transition-colors cursor-pointer focus-visible:outline-2 focus-visible:outline-[var(--kt-accent-soft)]"
+              title="Server connection settings"
+              aria-label={backendStatus === 'connected' ? 'Server connected. Open connection settings' : backendStatus === 'checking' ? 'Checking server. Open connection settings' : 'Server offline. Open connection settings'}
+            >
+              {backendStatus === 'checking' ? (
+                <RotateCw size={12} className="animate-spin text-amber-400" />
+              ) : (
+                <span className={`h-2 w-2 rounded-full ${backendStatus === 'connected' ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.9)]' : 'bg-rose-400 animate-pulse'}`} />
+              )}
+              <span className="hidden sm:inline">{backendStatus === 'connected' ? `Server live${backendLatency ? `, ${backendLatency} ms` : ''}` : backendStatus === 'checking' ? 'Checking server' : 'Server offline'}</span>
+            </button>
+          </div>
+        </header>
 
-      {/* Main Split-Screen Card Canvas */}
-      <main className="relative z-20 w-full max-w-5xl mx-auto px-4 my-auto py-2 sm:py-3 flex justify-center items-center">
-        <div className={`w-full border rounded-3xl overflow-hidden shadow-2xl flex flex-col lg:flex-row transition-all duration-300 ${isDark
-            ? 'bg-[var(--kt-s1)] border-[var(--kt-s4)]'
-            : 'bg-white border-slate-200/90 shadow-slate-200/60'
-          } ${isClosing ? 'animate-mac-squish-exit' : 'animate-mac-squish'}`}>
-          {/* Left Column: Interactive Form & Tab Switcher */}
-          <div className="w-full lg:w-[54%] flex flex-col justify-between p-5 sm:p-7 xl:p-8">
-            {/* Top Navigation Tabs for Login vs Signup */}
+        <main className="flex-1 flex items-center justify-center px-5 sm:px-10 py-8">
+          <div className={`w-full max-w-[400px] ${isClosing ? 'animate-mac-squish-exit' : ''}`}>
+            <div className="lg:hidden mb-7"><BrandLogo variant="wordmark" size={32} /></div>
+
             {(view === 'login' || view === 'signup') && (
-              <div className={`inline-flex p-1 rounded-xl border mb-3 self-start ${
-                isDark ? 'bg-[var(--kt-s0)] border-[var(--kt-s4)]' : 'bg-slate-100 border-slate-200'
-              }`}>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setLoginSuccessMsg('');
-                    setView('login');
-                    if (window.history.pushState && window.location.pathname !== '/login') {
-                      window.history.pushState({ tool: null, auth: 'login' }, '', '/login');
-                    }
-                  }}
-                  className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${view === 'login'
-                      ? (isDark ? 'bg-[var(--kt-accent)] text-black shadow-xs font-bold' : 'bg-white text-blue-700 shadow-sm border border-slate-200/80 font-bold')
-                      : (isDark ? 'text-slate-400 hover:text-white font-medium' : 'text-slate-600 hover:text-slate-900 font-medium')
-                    }`}
-                >
-                  Sign In
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setLoginSuccessMsg('');
-                    setView('signup');
-                    if (window.history.pushState && window.location.pathname !== '/signup') {
-                      window.history.pushState({ tool: null, auth: 'signup' }, '', '/signup');
-                    }
-                  }}
-                  className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${view === 'signup'
-                      ? (isDark ? 'bg-[var(--kt-accent)] text-black shadow-xs font-bold' : 'bg-white text-blue-700 shadow-sm border border-slate-200/80 font-bold')
-                      : (isDark ? 'text-slate-400 hover:text-white font-medium' : 'text-slate-600 hover:text-slate-900 font-medium')
-                    }`}
-                >
-                  Create Account
-                </button>
+              <div className="nx-seg mb-7" role="tablist" aria-label="Sign in or create account">
+                <button type="button" role="tab" aria-selected={view === 'login'} onClick={() => switchTo('login')}>Sign in</button>
+                <button type="button" role="tab" aria-selected={view === 'signup'} onClick={() => switchTo('signup')}>Create account</button>
               </div>
             )}
 
-            {/* Form View Content */}
             {view === 'login' && (
               <LoginPage
                 embedded={true}
-                onSwitchToSignup={() => {
-                  setLoginSuccessMsg('');
-                  setView('signup');
-                  if (window.history.pushState) window.history.pushState({ tool: null, auth: 'signup' }, '', '/signup');
-                }}
+                onSwitchToSignup={() => switchTo('signup')}
                 onSwitchToForgotPassword={() => { setLoginSuccessMsg(''); setView('forgot'); }}
                 onOpenBackendSettings={handleOpenConfigModal}
                 initialSuccessMsg={loginSuccessMsg}
               />
             )}
             {view === 'signup' && (
-              <SignupPage
-                embedded={true}
-                onSwitchToLogin={() => {
-                  setView('login');
-                  if (window.history.pushState) window.history.pushState({ tool: null, auth: 'login' }, '', '/login');
-                }}
-              />
+              <SignupPage embedded={true} onSwitchToLogin={() => switchTo('login')} />
             )}
             {view === 'forgot' && (
               <ForgotPasswordPage embedded={true} onSwitchToLogin={() => setView('login')} />
@@ -310,18 +243,15 @@ export default function AuthScreen({ onBackToHome, initialView = 'login' }) {
               />
             )}
           </div>
+        </main>
 
-          {/* Right Column: Acoustic Studio Artwork Showcase */}
-          <AuthSplitVisual activeView={view} />
-        </div>
-      </main>
+        <footer className="px-5 sm:px-10 pb-5 text-xs text-[var(--kt-faint)]">
+          Noun &copy; {new Date().getFullYear()} VerboLabs
+        </footer>
+      </div>
 
-      {/* Footer Branding */}
-      <footer className="relative z-30 w-full text-center py-3 text-[11px] font-mono text-slate-500 shrink-0">
-        Noun &copy; {new Date().getFullYear()} &middot; Verbatim Audio Intelligence
-      </footer>
-
-
+      {/* Brand panel */}
+      <AuthSplitVisual activeView={view} />
 
       {/* Backend Server Configuration Modal (Accessible Pre-Login) */}
       {backendModalOpen && (

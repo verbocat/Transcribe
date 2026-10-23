@@ -1,15 +1,16 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Mic, Subtitles, AudioLines, UploadCloud, ArrowRight, X, FileAudio, FileVideo, Clock, Palette, FolderOpen,
+  Mic, Subtitles, AudioLines, UploadCloud, ArrowRight, X, FileAudio, FileVideo, Palette, FolderOpen,
 } from 'lucide-react';
 import BrandLogo from './BrandLogo';
+import CaptionStage from './CaptionStage';
+import './noun.css';
 import AccountMenuDropdown from './AccountMenuDropdown';
 import NotificationBellDropdown from './NotificationBellDropdown';
 import { API_BASE } from '../config';
 import { openAppearance } from '../theme/themeEngine';
 import { setLaunchIntent } from '../utils/launchIntent';
 
-const GRAD = 'linear-gradient(100deg, #1a6dff 0%, #5b3cff 55%, #8a10ff 100%)';
 const MEDIA_RE = /\.(mp3|wav|m4a|aac|flac|ogg|opus|wma|mp4|mkv|mov|webm|avi|flv|wmv|m4v|ts)$/i;
 const VIDEO_RE = /\.(mp4|mkv|mov|webm|avi|flv|wmv|m4v|ts)$/i;
 
@@ -17,19 +18,22 @@ const TOOLS = [
   {
     id: 'transcribe',
     name: 'Transcribe Studio',
-    blurb: 'Speaker-labelled transcripts with QC and CSV, DOCX and XLSX deliverables.',
+    blurb: 'Speaker-labelled transcripts with QC, ready as CSV, DOCX and XLSX.',
+    art: 'transcribe',
     icon: Mic,
   },
   {
     id: 'subtitle',
     name: 'Subtitle Studio',
-    blurb: 'Build, check, translate and export subtitle cards as SRT, VTT and more.',
+    blurb: 'Build, check, translate and export subtitles as SRT, VTT and more.',
+    art: 'subtitle',
     icon: Subtitles,
   },
   {
     id: 'dubbing',
     name: 'Dubbing Studio',
     blurb: 'Dub a video or audio file into another language, in each speaker\'s own voice.',
+    art: 'dubbing',
     icon: AudioLines,
   },
 ];
@@ -127,16 +131,106 @@ export default function HomePage({ onSelect, user, onLogout, onOpenAuth }) {
   const FileIcon = isVideo ? FileVideo : FileAudio;
   const firstName = (user?.name || user?.email?.split('@')[0] || '').split(' ')[0];
 
+  const SLAB_BARS = useMemo(() => Array.from({ length: 96 }, (_, k) => 14 + Math.abs(Math.sin(k * 0.45) * 0.6 + Math.sin(k * 1.3 + 2) * 0.4) * 86), []);
+
+  const dropzone = (
+    <section {...dropProps} aria-label="Start from a media file" className={`nx-slab ${dragging ? 'drag' : ''}`}>
+      <input ref={inputRef} type="file" accept="audio/*,video/*,.mkv,.wma,.ts" className="hidden"
+        onChange={(e) => { accept(e.target.files?.[0]); e.target.value = ''; }} />
+      <div className="nx-slab-ruler" aria-hidden />
+      <div className="nx-slab-wave" aria-hidden>
+        {SLAB_BARS.map((h, k) => (<span key={k} style={{ height: `${h}%` }} />))}
+      </div>
+      <div className="nx-slab-play" aria-hidden />
+      {!file ? (
+        <button type="button" onClick={() => (user ? inputRef.current?.click() : onOpenAuth?.('login'))}
+          className="relative w-full px-6 sm:px-9 pt-9 pb-28 sm:pb-24 flex items-start gap-5 text-left cursor-pointer">
+          <span className="nx-brand-grad h-12 w-12 rounded-2xl grid place-items-center text-white shrink-0 shadow-lg shadow-[#5b3cff]/40"><UploadCloud size={22} /></span>
+          <span className="min-w-0">
+            <span className="nx-display block text-[22px] sm:text-2xl font-semibold text-white leading-tight">
+              {dragging ? 'Release to start' : user ? 'Drop a recording to begin' : 'Sign in to start with a file'}
+            </span>
+            <span className={`block mt-1.5 text-sm ${badFile ? 'text-[var(--kt-danger)]' : 'text-[var(--kt-muted)]'}`}>
+              {badFile ? 'That file type is not supported. Try MP3, WAV, M4A, MP4, MKV or MOV.' : user ? 'Or click to browse. MP3, WAV, M4A, MP4, MKV, MOV and more.' : 'You will be able to drop your audio or video right after.'}
+            </span>
+          </span>
+        </button>
+      ) : (
+        <div className="relative px-5 sm:px-7 pt-7 pb-24 flex flex-col gap-5">
+          <div className="flex items-center gap-3 min-w-0">
+            <span className="h-11 w-11 rounded-xl grid place-items-center bg-[var(--kt-s3)] text-[var(--kt-accent-soft)] shrink-0"><FileIcon size={19} /></span>
+            <div className="min-w-0 flex-1">
+              <div className="text-[15px] font-semibold truncate">{file.name}</div>
+              <div className="text-xs text-[var(--kt-muted)]">{(file.size / (1024 * 1024)).toFixed(1)} MB. Choose where to open it.</div>
+            </div>
+            <button type="button" onClick={() => setFile(null)} aria-label="Remove file" title="Remove file"
+              className="h-8 w-8 rounded-lg grid place-items-center text-[var(--kt-faint)] hover:text-white hover:bg-[var(--kt-s3)] cursor-pointer shrink-0"><X size={15} /></button>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" onClick={() => open('transcribe', { file })} className="nx-primary nx-brand-grad"><Mic size={14} /> Transcribe</button>
+            <button type="button" onClick={() => open('subtitle', { file })} className="nx-ghost"><Subtitles size={14} /> Subtitle</button>
+            <button type="button" onClick={() => open('dubbing', { file })} className="nx-ghost"><AudioLines size={14} /> Dub</button>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+
+  const studios = (
+    <section className="grid grid-cols-1 sm:grid-cols-3 gap-3.5" aria-label="Studios">
+      {TOOLS.map((t) => (
+        <button key={t.id} type="button" onClick={() => open(t.id)} className="nx-tile group">
+          <div className="nx-tile-art" aria-hidden><TileArt kind={t.art} /></div>
+          <div className="p-4 flex flex-col gap-1.5 flex-1">
+            <span className="flex items-center justify-between gap-2">
+              <span className="flex items-center gap-2 text-[15px] font-semibold"><t.icon size={16} className="text-[var(--kt-accent-soft)]" />{t.name}</span>
+              <ArrowRight size={15} className="text-[var(--kt-faint)] group-hover:text-white group-hover:translate-x-0.5 transition-all" />
+            </span>
+            <span className="text-[13px] leading-snug text-[var(--kt-muted)]">{t.blurb}</span>
+          </div>
+        </button>
+      ))}
+    </section>
+  );
+
+  const recentPanel = user && (
+    <section aria-label="Recent projects" className="min-w-0">
+      <h2 className="nx-display text-lg font-semibold mb-3">Pick up where you left off</h2>
+      {recents.length ? (
+        <ul className="flex flex-col gap-0.5 -mx-2">
+          {recents.map((r) => {
+            const Icon = r.tool === 'subtitle' ? Subtitles : Mic;
+            return (
+              <li key={r.key}>
+                <button type="button" onClick={() => open(r.tool, r.projectId ? { projectId: r.projectId } : r.draftName ? { draftName: r.draftName } : undefined)} className="nx-recent">
+                  <span className="h-9 w-9 rounded-lg grid place-items-center bg-[var(--kt-s3)] text-[var(--kt-accent-soft)] shrink-0"><Icon size={16} /></span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-sm font-medium truncate">{r.filename}</span>
+                    <span className="block text-xs text-[var(--kt-faint)] truncate">{r.meta}</span>
+                  </span>
+                  <span className="text-xs text-[var(--kt-faint)] shrink-0">{timeAgo(r.updatedAt)}</span>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      ) : (
+        <div className="rounded-xl border border-dashed border-[var(--kt-s5)] px-4 py-6 flex items-center gap-3 text-sm text-[var(--kt-muted)]">
+          <FolderOpen size={18} className="shrink-0" /> Your projects will appear here after your first transcript.
+        </div>
+      )}
+    </section>
+  );
+
   return (
     <div className="min-h-screen flex flex-col bg-[var(--kt-s0)] text-[var(--kt-text)] relative overflow-hidden" style={{ fontFamily: 'var(--kt-font-ui)' }}>
-      <div aria-hidden className="pointer-events-none absolute inset-x-0 top-0 h-[420px] opacity-[0.16]"
-        style={{ background: 'radial-gradient(60% 100% at 50% 0%, #5b3cff 0%, rgba(26,109,255,0.4) 45%, transparent 75%)' }} />
+      <div aria-hidden className="nx-home-bg" />
 
-      <header className="relative z-10 h-14 px-4 sm:px-6 flex items-center justify-between border-b border-[var(--kt-s4)]/70">
-        <BrandLogo variant="wordmark" size={30} />
+      <header className="relative z-10 h-16 px-4 sm:px-8 flex items-center justify-between max-w-[1280px] w-full mx-auto">
+        <BrandLogo variant="wordmark" size={32} />
         <div className="flex items-center gap-2">
           <button type="button" onClick={openAppearance} title="Appearance" aria-label="Appearance"
-            className="h-8 w-8 rounded-lg grid place-items-center text-[var(--kt-muted)] hover:text-white hover:bg-[var(--kt-s3)] transition-colors cursor-pointer">
+            className="h-9 w-9 rounded-lg grid place-items-center text-[var(--kt-muted)] hover:text-white hover:bg-[var(--kt-s3)] transition-colors cursor-pointer focus-visible:outline-2 focus-visible:outline-[var(--kt-accent-soft)]">
             <Palette size={16} />
           </button>
           {user ? (
@@ -146,121 +240,100 @@ export default function HomePage({ onSelect, user, onLogout, onOpenAuth }) {
             </>
           ) : (
             <>
-              <button type="button" onClick={() => onOpenAuth?.('login')}
-                className="h-8 px-3 rounded-lg text-xs font-semibold text-[var(--kt-muted)] hover:text-white hover:bg-[var(--kt-s3)] transition-colors cursor-pointer">Sign in</button>
-              <button type="button" onClick={() => onOpenAuth?.('signup')}
-                className="h-8 px-3.5 rounded-lg text-xs font-bold text-white cursor-pointer" style={{ background: GRAD }}>Create account</button>
+              <button type="button" onClick={() => onOpenAuth?.('login')} className="nx-ghost !bg-transparent !border-transparent hover:!bg-[var(--kt-s3)]">Sign in</button>
+              <button type="button" onClick={() => onOpenAuth?.('signup')} className="nx-primary nx-brand-grad">Create account</button>
             </>
           )}
         </div>
       </header>
 
-      <main className="relative z-10 flex-1 w-full max-w-4xl mx-auto px-4 sm:px-6 py-8 sm:py-10 flex flex-col gap-7">
-        <div>
-          <h1 className="text-2xl sm:text-[28px] font-semibold tracking-tight">
-            {greeting()}{firstName ? `, ${firstName}` : ''}
-          </h1>
-          <p className="text-sm text-[var(--kt-muted)] mt-1">{user ? 'Start with a file or pick up where you left off.' : 'Sign in to start transcribing and subtitling.'}</p>
-        </div>
-
-        {/* Drop to start */}
-        <section {...dropProps} aria-label="Start from a media file"
-          className={`rounded-2xl border-2 border-dashed transition-all ${dragging ? 'border-[#5b3cff] bg-[#5b3cff]/10 scale-[1.005]' : 'border-[var(--kt-s5)] bg-[var(--kt-s1)]/70'}`}>
-          <input ref={inputRef} type="file" accept="audio/*,video/*,.mkv,.wma,.ts" className="hidden"
-            onChange={(e) => { accept(e.target.files?.[0]); e.target.value = ''; }} />
-          {!file ? (
-            <button type="button" onClick={() => (user ? inputRef.current?.click() : onOpenAuth?.('login'))}
-              className="w-full px-6 py-9 flex flex-col items-center gap-3 text-center cursor-pointer">
-              <span className="h-11 w-11 rounded-xl grid place-items-center text-white" style={{ background: GRAD }}><UploadCloud size={20} /></span>
-              <span className="text-[15px] font-medium">{dragging ? 'Drop to start' : 'Drop an audio or video file to start'}</span>
-              <span className={`text-xs ${badFile ? 'text-[var(--kt-danger)]' : 'text-[var(--kt-faint)]'}`}>
-                {badFile ? 'That file type is not supported. Try MP3, WAV, M4A, MP4, MKV or MOV.' : user ? 'or click to browse. MP3, WAV, M4A, MP4, MKV, MOV and more.' : 'Sign in first, then drop your file.'}
-              </span>
-            </button>
-          ) : (
-            <div className="px-5 py-5 flex flex-col sm:flex-row sm:items-center gap-4">
-              <div className="flex items-center gap-3 min-w-0 flex-1">
-                <span className="h-10 w-10 rounded-lg grid place-items-center bg-[var(--kt-s3)] text-[var(--kt-accent)] shrink-0"><FileIcon size={18} /></span>
-                <div className="min-w-0">
-                  <div className="text-sm font-medium truncate">{file.name}</div>
-                  <div className="text-xs text-[var(--kt-faint)]">{(file.size / (1024 * 1024)).toFixed(1)} MB. Choose where to open it.</div>
+      <main className="relative z-10 flex-1 w-full max-w-[1280px] mx-auto px-4 sm:px-8 pt-6 sm:pt-10 pb-12 flex flex-col gap-10">
+        {user ? (
+          <>
+            <div>
+              <h1 className="nx-display text-[34px] sm:text-5xl font-semibold leading-[1.05] text-white">
+                {greeting()}{firstName ? `, ${firstName}` : ''}.
+              </h1>
+              <p className="text-base text-[var(--kt-muted)] mt-3">What are we working on today?</p>
+            </div>
+            <div className="grid gap-10 lg:grid-cols-[minmax(0,1fr)_340px] lg:gap-12 items-start">
+              <div className="flex flex-col gap-7 min-w-0">
+                {dropzone}
+                {studios}
+              </div>
+              {recentPanel}
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="grid gap-12 lg:grid-cols-[minmax(0,1fr)_minmax(0,520px)] items-center pt-2 sm:pt-6">
+              <div>
+                <h1 className="nx-display text-[40px] sm:text-6xl font-semibold leading-[1.02] text-white max-w-xl">
+                  Every word, timed and translated.
+                </h1>
+                <p className="text-base sm:text-lg text-[var(--kt-muted)] mt-5 max-w-lg leading-relaxed">
+                  Transcribe speech, build broadcast-ready subtitles and dub into new languages, all in one workspace.
+                </p>
+                <div className="mt-8 flex flex-wrap gap-3">
+                  <button type="button" onClick={() => onOpenAuth?.('signup')} className="nx-btn !w-auto px-7">Create account <ArrowRight size={16} /></button>
+                  <button type="button" onClick={() => onOpenAuth?.('login')} className="nx-ghost !h-12 px-6 !text-[14.5px]">Sign in</button>
                 </div>
-                <button type="button" onClick={() => setFile(null)} aria-label="Remove file" title="Remove file"
-                  className="h-7 w-7 rounded-md grid place-items-center text-[var(--kt-faint)] hover:text-white hover:bg-[var(--kt-s3)] cursor-pointer shrink-0"><X size={14} /></button>
               </div>
-              <div className="flex gap-2 shrink-0">
-                <button type="button" onClick={() => open('transcribe', { file })}
-                  className="h-9 px-4 rounded-lg text-[13px] font-semibold text-white flex items-center gap-1.5 cursor-pointer" style={{ background: GRAD }}>
-                  <Mic size={14} /> Transcribe
-                </button>
-                <button type="button" onClick={() => open('subtitle', { file })}
-                  className="h-9 px-4 rounded-lg text-[13px] font-semibold flex items-center gap-1.5 border border-[var(--kt-s5)] bg-[var(--kt-s2)] hover:bg-[var(--kt-s3)] cursor-pointer">
-                  <Subtitles size={14} /> Subtitle
-                </button>
-                <button type="button" onClick={() => open('dubbing', { file })}
-                  className="h-9 px-4 rounded-lg text-[13px] font-semibold flex items-center gap-1.5 border border-[var(--kt-s5)] bg-[var(--kt-s2)] hover:bg-[var(--kt-s3)] cursor-pointer">
-                  <AudioLines size={14} /> Dub
-                </button>
-              </div>
+              <CaptionStage className="justify-self-center lg:justify-self-end" />
             </div>
-          )}
-        </section>
-
-        {/* Studios */}
-        <section className="grid grid-cols-1 sm:grid-cols-3 gap-3" aria-label="Studios">
-          {TOOLS.map((t) => (
-            <button key={t.id} type="button" onClick={() => open(t.id)}
-              className="group text-left rounded-xl border border-[var(--kt-s4)] bg-[var(--kt-s1)] hover:bg-[var(--kt-s2)] hover:border-[var(--kt-accent)]/60 p-4 flex items-start gap-3.5 transition-colors cursor-pointer">
-              <span className="h-10 w-10 rounded-lg grid place-items-center shrink-0 text-white" style={{ background: GRAD }}><t.icon size={18} /></span>
-              <span className="min-w-0 flex-1">
-                <span className="flex items-center justify-between gap-2">
-                  <span className="text-[15px] font-semibold">{t.name}</span>
-                  <ArrowRight size={15} className="text-[var(--kt-faint)] group-hover:text-[var(--kt-accent)] group-hover:translate-x-0.5 transition-all" />
-                </span>
-                <span className="block text-[13px] leading-snug text-[var(--kt-muted)] mt-1">{t.blurb}</span>
-              </span>
-            </button>
-          ))}
-        </section>
-
-        {/* Recent */}
-        {user && (
-          <section aria-label="Recent projects">
-            <div className="flex items-center gap-2 mb-2 text-xs font-semibold uppercase tracking-wider text-[var(--kt-faint)]">
-              <Clock size={13} /> Recent
-            </div>
-            {recents.length ? (
-              <ul className="rounded-xl border border-[var(--kt-s4)] bg-[var(--kt-s1)] divide-y divide-[var(--kt-s4)] overflow-hidden">
-                {recents.map((r) => {
-                  const Icon = r.tool === 'subtitle' ? Subtitles : Mic;
-                  return (
-                    <li key={r.key}>
-                      <button type="button" onClick={() => open(r.tool, r.projectId ? { projectId: r.projectId } : r.draftName ? { draftName: r.draftName } : undefined)}
-                        className="w-full flex items-center gap-3 px-3.5 py-2.5 text-left hover:bg-[var(--kt-s2)] transition-colors cursor-pointer">
-                        <span className="h-8 w-8 rounded-md grid place-items-center bg-[var(--kt-s3)] text-[var(--kt-accent)] shrink-0"><Icon size={15} /></span>
-                        <span className="min-w-0 flex-1">
-                          <span className="block text-sm font-medium truncate">{r.filename}</span>
-                          <span className="block text-xs text-[var(--kt-faint)] truncate">{r.meta}</span>
-                        </span>
-                        <span className="text-xs text-[var(--kt-faint)] shrink-0">{timeAgo(r.updatedAt)}</span>
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-            ) : (
-              <div className="rounded-xl border border-dashed border-[var(--kt-s4)] px-4 py-6 flex items-center gap-3 text-sm text-[var(--kt-faint)]">
-                <FolderOpen size={18} /> Projects you work on will show up here.
-              </div>
-            )}
-          </section>
+            {dropzone}
+            {studios}
+          </>
         )}
       </main>
 
-      <footer className="relative z-10 px-6 py-4 text-[11px] text-[var(--kt-faint)] flex items-center justify-between">
-        <span>Noun &middot; VerboLabs</span>
+      <footer className="relative z-10 px-4 sm:px-8 py-5 text-xs text-[var(--kt-faint)] max-w-[1280px] w-full mx-auto flex items-center justify-between">
+        <span>Noun by VerboLabs</span>
         <span className="hidden sm:inline">Next-gen AI media localization</span>
       </footer>
     </div>
+  );
+}
+
+/** Small line illustrations for the studio tiles. */
+function TileArt({ kind }) {
+  if (kind === 'transcribe') {
+    return (
+      <svg viewBox="0 0 300 92" preserveAspectRatio="xMidYMid slice">
+        {[[16, 22, 150], [16, 42, 210], [16, 62, 120]].map(([x, y, w], k) => (
+          <g key={k} className={k === 1 ? 'hv' : ''}>
+            <circle cx={x + 5} cy={y} r="5" className={k === 1 ? 'fillacc' : 'filldim'} />
+            <rect x={x + 18} y={y - 3} width={w} height="6" rx="3" className="filldim" />
+          </g>
+        ))}
+        <rect x="34" y="39" width="64" height="6" rx="3" className="fillacc" opacity=".9" />
+      </svg>
+    );
+  }
+  if (kind === 'subtitle') {
+    return (
+      <svg viewBox="0 0 300 92" preserveAspectRatio="xMidYMid slice">
+        <path d="M0 70h300" className="dim" strokeWidth="1" />
+        <g className="hv">
+          <rect x="18" y="26" width="76" height="30" rx="6" className="filldim" />
+          <rect x="104" y="26" width="92" height="30" rx="6" className="fillacc" />
+          <rect x="206" y="26" width="68" height="30" rx="6" className="filldim" />
+        </g>
+        {[30, 44, 118, 134, 218].map((x, k) => (<rect key={k} x={x} y={k === 1 || k === 3 ? 44 : 35} width={k === 2 ? 60 : 36} height="4" rx="2" fill="#fff" opacity={k > 1 && k < 4 ? .85 : .25} />))}
+        <path d="M150 12v70" className="acc" strokeWidth="1.5" />
+      </svg>
+    );
+  }
+  return (
+    <svg viewBox="0 0 300 92" preserveAspectRatio="xMidYMid slice">
+      {[28, 62].map((cy, row) => (
+        <g key={row} className={row === 1 ? 'hv' : ''}>
+          {Array.from({ length: 34 }, (_, k) => {
+            const h = 4 + Math.abs(Math.sin(k * (row ? 0.7 : 0.5) + row) * 15);
+            return <rect key={k} x={20 + k * 8} y={cy - h / 2} width="4" height={h} rx="2" className={row ? 'fillacc' : 'filldim'} />;
+          })}
+        </g>
+      ))}
+    </svg>
   );
 }
