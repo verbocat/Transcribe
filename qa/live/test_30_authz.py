@@ -34,3 +34,33 @@ def test_invalid_token_is_401(client, ep):
 @pytest.mark.parametrize("ep", ADMIN_GETS, ids=lambda e: e.id)
 def test_admin_route_forbidden_for_test_user(api, ep):
     expect(api.get(ep.path, params=FILL), 403)
+
+
+# Routes with no login check in the GitHub code that production protects anyway. Sent without a
+# token and with an id nothing can match, so even an open route would find nothing to read or change.
+FORMERLY_OPEN = [
+    ("GET", "/api/projects/{project_id}", None), ("DELETE", "/api/projects/{project_id}", None),
+    ("GET", "/api/subtitle/projects/{project_id}", None), ("DELETE", "/api/subtitle/projects/{project_id}", None),
+    ("GET", "/api/transcribe_status/{job_id}", None), ("GET", "/api/audio/extract_status/{job_id}", None),
+    ("POST", "/api/jobs/{job_id}/cancel", None), ("DELETE", "/api/cleanup/{audio_id}", None),
+    ("DELETE", "/api/subtitle/upload_chunk/{upload_id}", None),
+    ("POST", "/api/media/discard", {"video_id": QA_ID}), ("POST", "/api/subtitle/discard", {"video_id": QA_ID}),
+]
+
+
+@pytest.mark.parametrize("method,path,body", FORMERLY_OPEN, ids=lambda v: v if isinstance(v, str) else "")
+def test_open_in_code_but_protected_live(client, method, path, body):
+    r = client.request(method, path, params={**FILL, "audio_id": QA_ID, "upload_id": QA_ID},
+                       json=body, auth=False, write=True)
+    expect(r, 401)
+
+
+# Admin writes with the (non-admin) test token: the admin dependency answers 403 before the handler
+# runs, and no body is sent. claim-initial-admin checks the caller is the super admin before changing anything.
+ADMIN_WRITES = [e for e in CATALOG if e.method != "GET" and
+                (e.auth == "admin" or e.path == "/api/admin/claim-initial-admin")]
+
+
+@pytest.mark.parametrize("ep", ADMIN_WRITES, ids=lambda e: e.id)
+def test_admin_write_forbidden_for_test_user(api, ep):
+    expect(api.request(ep.method, ep.path, params=FILL, write=True), 403)

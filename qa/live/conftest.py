@@ -74,14 +74,18 @@ class LiveClient:
         if not ep or ep.auth not in ("user", "admin"):
             raise UnsafeRequest(f"refusing {method} {template}: its handler would run without auth")
 
-    def request(self, method, template, *, params=None, query=None, auth=True, token=None, **kw):
+    def request(self, method, template, *, params=None, query=None, auth=True, token=None, write=False, **kw):
         """template is the catalog path (e.g. /api/dubbing/projects/{pid}); params fills it in,
-        query becomes the query string."""
+        query becomes the query string. write=True is the explicit opt-in the lifecycle tests use
+        (test_60+) to change data they created themselves; the guard still blocks everything else."""
         method = method.upper()
         path = template.format(**(params or {}))
         headers = kw.pop("headers", {}) or {}
         sent_token = token if token is not None else (self.token if auth else None)
-        self._guard(method, template, with_token=bool(sent_token))
+        if not write:
+            self._guard(method, template, with_token=bool(sent_token))
+        elif f"{method} {template}" not in BY_ID:
+            raise UnsafeRequest(f"refusing write to {method} {template}: not a known route")
         if sent_token:
             headers["Authorization"] = f"Bearer {sent_token}"
         wait = MIN_INTERVAL - (time.monotonic() - self._last)
@@ -89,7 +93,7 @@ class LiveClient:
             time.sleep(wait)
         try:
             resp = self.http.request(method, self.base + path, params=query, headers=headers,
-                                     timeout=TIMEOUT, allow_redirects=False, **kw)
+                                     timeout=kw.pop("timeout", TIMEOUT), allow_redirects=False, **kw)
         finally:
             self._last = time.monotonic()
         self.calls.append((method, path, resp.status_code))
@@ -100,6 +104,15 @@ class LiveClient:
 
     def post(self, template, **kw):
         return self.request("POST", template, **kw)
+
+    def poll(self, template, done, *, params=None, timeout=300, every=3.0, **kw):
+        """GET template until done(json) is true; returns the last response."""
+        end = time.monotonic() + timeout
+        while True:
+            r = self.get(template, params=params, **kw)
+            if r.status_code != 200 or done(r.json()) or time.monotonic() > end:
+                return r
+            time.sleep(every)
 
 
 def detail(resp) -> str:
