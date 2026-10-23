@@ -120,7 +120,7 @@ def init_db():
     elif db_url.startswith("postgresql://"):
         db_url = "postgresql+psycopg2://" + db_url[len("postgresql://"):]
     try:
-        engine = create_engine(db_url, pool_pre_ping=True, pool_size=5, max_overflow=10)
+        engine = create_engine(db_url, pool_pre_ping=True, pool_size=10, max_overflow=20, pool_recycle=1800)
         Base.metadata.create_all(bind=engine)
         SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
         print("Neon PostgreSQL Database initialized successfully!")

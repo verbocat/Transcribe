@@ -1,7 +1,7 @@
 import os
 import logging
 from pathlib import Path
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 logger = logging.getLogger(__name__)
@@ -32,10 +32,24 @@ def get_database_path() -> Path:
 db_file_path = get_database_path()
 SQLITE_URL = f"sqlite:///{db_file_path.as_posix()}"
 
+# Every authenticated request holds a connection for its whole duration, so the default pool of 15
+# (30s wait) filled up under load and froze requests. Larger pool, shorter wait, and a SQLite busy
+# timeout so writers queue instead of erroring.
 engine = create_engine(
     SQLITE_URL,
-    connect_args={"check_same_thread": False}
+    connect_args={"check_same_thread": False, "timeout": 30},
+    pool_size=40,
+    max_overflow=60,
+    pool_timeout=15,
 )
+
+
+@event.listens_for(engine, "connect")
+def _sqlite_pragmas(dbapi_conn, _record):
+    cur = dbapi_conn.cursor()
+    cur.execute("PRAGMA journal_mode=WAL")
+    cur.execute("PRAGMA synchronous=NORMAL")
+    cur.close()
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 

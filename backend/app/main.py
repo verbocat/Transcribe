@@ -647,6 +647,9 @@ def _list_projects_from_db():
         return []
     try:
         projects = session.query(DBProject).order_by(DBProject.updated_at.desc()).all()
+        # one grouped count instead of lazy-loading every project's segments (N+1 round trips to Neon)
+        from sqlalchemy import func as _func
+        seg_counts = dict(session.query(DBSegment.project_id, _func.count(DBSegment.id)).group_by(DBSegment.project_id).all())
         result = []
         for p in projects:
             result.append({
@@ -658,7 +661,7 @@ def _list_projects_from_db():
                 "compliance_score": p.compliance_score,
                 "total_errors": p.total_errors,
                 "total_warnings": p.total_warnings,
-                "segment_count": len(p.segments),
+                "segment_count": seg_counts.get(p.id, 0),
                 "created_at": p.created_at.isoformat() if p.created_at else None,
                 "updated_at": p.updated_at.isoformat() if p.updated_at else None
             })
@@ -2891,23 +2894,25 @@ async def export_subtitles_endpoint(payload: SubtitleExportRequest, request: Req
     """Export subtitles to requested format."""
     auth_header = request.headers.get("authorization")
     if auth_header and auth_header.startswith("Bearer "):
-        try:
-            token = auth_header.split(" ")[1].strip()
+        def _export_blocked(token: str) -> bool:
             from app.auth_module.models import AuthSession
             from app.auth_module.database import SessionLocal
             db_s = SessionLocal()
-            sess = db_s.query(AuthSession).filter(AuthSession.session_token == token, AuthSession.is_active == True).first()
-            if sess and sess.user and not getattr(sess.user, "can_export", True):
+            try:
+                sess = db_s.query(AuthSession).filter(AuthSession.session_token == token, AuthSession.is_active == True).first()
+                return bool(sess and sess.user and not getattr(sess.user, "can_export", True))
+            finally:
                 db_s.close()
-                raise HTTPException(
-                    status_code=403,
-                    detail="Subtitle export feature is currently disabled for your account by the administrator."
-                )
-            db_s.close()
-        except HTTPException:
-            raise
+        try:
+            # blocking DB work runs in a thread so a busy pool can never freeze the event loop
+            blocked = await asyncio.to_thread(_export_blocked, auth_header.split(" ")[1].strip())
         except Exception:
-            pass
+            blocked = False
+        if blocked:
+            raise HTTPException(
+                status_code=403,
+                detail="Subtitle export feature is currently disabled for your account by the administrator."
+            )
 
     try:
         events_dicts = [
@@ -3125,6 +3130,8 @@ def _list_subtitle_projects_from_db():
         return []
     try:
         projects = session.query(DBSubtitleProject).order_by(DBSubtitleProject.updated_at.desc()).all()
+        from sqlalchemy import func as _func
+        ev_counts = dict(session.query(DBSubtitleEvent.project_id, _func.count(DBSubtitleEvent.id)).group_by(DBSubtitleEvent.project_id).all())
         result = []
         for p in projects:
             result.append({
@@ -3136,7 +3143,7 @@ def _list_subtitle_projects_from_db():
                 "compliance_score": p.compliance_score,
                 "total_errors": p.total_errors,
                 "total_warnings": p.total_warnings,
-                "event_count": len(p.events),
+                "event_count": ev_counts.get(p.id, 0),
                 "created_at": p.created_at.isoformat() if p.created_at else None,
                 "updated_at": p.updated_at.isoformat() if p.updated_at else None
             })
