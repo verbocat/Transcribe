@@ -68,3 +68,92 @@ export const qcIssues = (draft) => (Array.isArray(draft?.qc?.issues) ? draft.qc.
 
 /** Text a finding proposes for its cue, when it proposes one (the linguist decides whether to use it). */
 export const suggestionText = (issue) => (typeof issue?.suggestion === 'string' && issue.suggestion.trim() ? issue.suggestion : null);
+
+// ── Editing operations for the linguist timeline and list. Each takes the events of the active track and returns
+//    { events, issueMap } where issueMap(oldIndex) gives the new 1-based position of a QC finding (or null when its line is gone).
+
+const startOf = (e) => e.start_time ?? e.start ?? 0;
+const endOf = (e) => e.end_time ?? e.end ?? 0;
+const round3 = (n) => Math.round(n * 1000) / 1000;
+const withTimes = (e, s, t) => ({ ...e, start_time: round3(s), end_time: round3(t), start: round3(s), end: round3(t), duration: round3(Math.max(0.1, t - s)) });
+const same = (n) => n;
+
+/** Every cue gets a numeric id, so the timeline can select and drag it. */
+export const ensureIds = (events) => {
+  let next = Math.max(0, ...events.map((e) => Number(e.id) || 0)) + 1;
+  return events.map((e) => (Number.isFinite(Number(e.id)) && e.id !== null && e.id !== '' ? e : { ...e, id: next++ }));
+};
+
+export const setTimes = (events, id, start, end) => ({ events: events.map((e) => (e.id === id ? withTimes(e, start, end) : e)), issueMap: same });
+
+/** Split the cue under `t` in two, at the nearest space to the middle of its text. */
+export const splitAt = (events, t, preferId = null) => {
+  let i = events.findIndex((e) => t > startOf(e) && t < endOf(e));
+  if (i < 0 && preferId != null) i = events.findIndex((e) => e.id === preferId);
+  if (i < 0) return null;
+  const ev = events[i];
+  const s = startOf(ev);
+  const en = endOf(ev);
+  if (t <= s + 0.1 || t >= en - 0.1) return null;
+  const text = String(ev.text ?? '');
+  const mid = Math.floor(text.length / 2);
+  const sp = text.lastIndexOf(' ', mid) > -1 ? text.lastIndexOf(' ', mid) : mid;
+  const cut = sp > 0 ? sp : mid;
+  const a = text.slice(0, cut).trim();
+  const b = text.slice(cut).trim();
+  const at = round3(t);
+  const second = round3(at + 0.08);
+  const newId = Math.max(0, ...events.map((e) => Number(e.id) || 0)) + 1;
+  const first = { ...withTimes(ev, s, at), text: a, lines: a.split('\n') };
+  const last = { ...withTimes(ev, second, en), id: newId, text: b, lines: b.split('\n') };
+  const out = [...events];
+  out.splice(i, 1, first, last);
+  return { events: out, activeId: newId, issueMap: (n) => (n > i + 1 ? n + 1 : n) };
+};
+
+export const mergeWithNext = (events, id) => {
+  const i = events.findIndex((e) => e.id === id);
+  if (i < 0 || i >= events.length - 1) return null;
+  const cur = events[i];
+  const nxt = events[i + 1];
+  const text = `${cur.text ?? ''}\n${nxt.text ?? ''}`.trim();
+  const merged = { ...withTimes(cur, startOf(cur), endOf(nxt)), text, lines: text.split('\n') };
+  const out = [...events];
+  out.splice(i, 2, merged);
+  return { events: out, activeId: cur.id, issueMap: (n) => (n === i + 2 ? i + 1 : n > i + 2 ? n - 1 : n) };
+};
+
+export const removeEvent = (events, id) => {
+  const i = events.findIndex((e) => e.id === id);
+  if (i < 0) return null;
+  const out = events.filter((e) => e.id !== id);
+  return { events: out, activeId: out.length ? out[Math.min(i, out.length - 1)].id : null, issueMap: (n) => (n === i + 1 ? null : n > i + 1 ? n - 1 : n) };
+};
+
+export const addEvent = (events, at, end, text = '') => {
+  const s = Math.max(0, at);
+  const e = Math.max(s + 0.2, end);
+  const id = Math.max(0, ...events.map((x) => Number(x.id) || 0)) + 1;
+  const fresh = { id, ...withTimes({}, s, e), text, lines: [text], speaker_count: 1, speakers: ['Speaker 1'], qc_errors: [], is_valid: true };
+  const out = [...events, fresh].sort((a, b) => startOf(a) - startOf(b));
+  const pos = out.findIndex((x) => x.id === id);
+  return { events: out, activeId: id, issueMap: (n) => (n > pos ? n + 1 : n) };
+};
+
+/** Move the cue `id` and every cue after it so that this cue starts at `t`, keeping the gaps between them. */
+export const shiftFollowing = (events, id, t) => {
+  const i = events.findIndex((e) => e.id === id);
+  if (i < 0) return null;
+  const delta = t - startOf(events[i]);
+  const first = events.slice(i).reduce((m, e) => Math.min(m, startOf(e)), Infinity);
+  const d = Math.max(delta, -first);
+  return { events: events.map((e, k) => (k >= i ? withTimes(e, startOf(e) + d, endOf(e) + d) : e)), issueMap: same };
+};
+
+/** Re-number a track's QC findings after a structural edit (split, merge, delete, add). */
+export const remapIssues = (issues, trackCode, issueMap) =>
+  issues.flatMap((q) => {
+    if ((q.track || '__main') !== trackCode) return [q];
+    const n = issueMap(q.index);
+    return n === null ? [] : [{ ...q, index: n }];
+  });

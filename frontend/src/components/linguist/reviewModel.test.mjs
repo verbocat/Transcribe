@@ -42,3 +42,50 @@ test('qc findings travel with the draft and keep their resolved state', () => {
   assert.equal(suggestionText({ suggestion: '  ' }), null);
   assert.equal(suggestionText({ suggestion: 'x' }), 'x');
 });
+
+import { addEvent, ensureIds, mergeWithNext, remapIssues, removeEvent, setTimes, shiftFollowing, splitAt } from './reviewModel.js';
+
+const ev = (id, s, e, text) => ({ id, start_time: s, end_time: e, start: s, end: e, text });
+test('splitAt cuts the cue under the time and renumbers later findings', () => {
+  const r = splitAt([ev(1, 0, 4, 'hello big world'), ev(2, 5, 6, 'next')], 2);
+  assert.equal(r.events.length, 3);
+  assert.equal(r.events[0].end_time, 2);
+  assert.equal(r.events[1].start_time, 2.08);
+  assert.equal(r.events[1].id, 3);
+  assert.equal(r.issueMap(2), 3);
+  assert.equal(r.issueMap(1), 1);
+  assert.equal(splitAt([ev(1, 0, 4, 'x')], 4.5), null);
+});
+test('mergeWithNext joins text and moves the later finding onto the merged cue', () => {
+  const r = mergeWithNext([ev(1, 0, 1, 'a'), ev(2, 2, 3, 'b'), ev(3, 4, 5, 'c')], 1);
+  assert.equal(r.events.length, 2);
+  assert.equal(r.events[0].text, 'a\nb');
+  assert.equal(r.events[0].end_time, 3);
+  assert.equal(r.issueMap(2), 1);
+  assert.equal(r.issueMap(3), 2);
+  assert.equal(mergeWithNext([ev(1, 0, 1, 'a')], 1), null);
+});
+test('removeEvent drops its finding and selects a neighbour', () => {
+  const r = removeEvent([ev(1, 0, 1, 'a'), ev(2, 2, 3, 'b')], 1);
+  assert.equal(r.events.length, 1);
+  assert.equal(r.activeId, 2);
+  assert.equal(r.issueMap(1), null);
+  assert.equal(r.issueMap(2), 1);
+});
+test('addEvent keeps cues in time order', () => {
+  const r = addEvent([ev(1, 0, 1, 'a'), ev(2, 5, 6, 'b')], 2, 3, 'new');
+  assert.deepEqual(r.events.map((e) => e.text), ['a', 'new', 'b']);
+  assert.equal(r.issueMap(2), 3);
+});
+test('shiftFollowing moves a cue and everything after it, never below zero', () => {
+  const r = shiftFollowing([ev(1, 1, 2, 'a'), ev(2, 3, 4, 'b'), ev(3, 5, 6, 'c')], 2, 4);
+  assert.deepEqual(r.events.map((e) => e.start_time), [1, 4, 6]);
+  const back = shiftFollowing([ev(1, 1, 2, 'a'), ev(2, 3, 4, 'b')], 1, -5);
+  assert.equal(back.events[0].start_time, 0);
+});
+test('setTimes, ensureIds and remapIssues', () => {
+  assert.equal(setTimes([ev(1, 0, 1, 'a')], 1, 0.5, 2).events[0].duration, 1.5);
+  assert.deepEqual(ensureIds([{ text: 'x' }, { id: 7, text: 'y' }]).map((e) => e.id), [8, 7]);
+  const issues = [{ index: 2, track: 'hi' }, { index: 2, track: 'en' }];
+  assert.deepEqual(remapIssues(issues, 'hi', (n) => n + 1).map((q) => q.index), [3, 2]);
+});
