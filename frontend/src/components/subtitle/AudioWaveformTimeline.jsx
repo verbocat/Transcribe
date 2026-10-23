@@ -17,11 +17,11 @@ function formatTime(s) {
 }
 
 // Track lane heights matching OOONA reference
-const RULER_H     = 24;
-const FILM_H      = 46;
-const SUBTITLE_H  = 48;
-const WAVEFORM_H  = 54;
-const SPEAKER_H   = 36;
+const RULER_H     = 22;
+const FILM_H      = 38;
+const SUBTITLE_H  = 40;
+const WAVEFORM_H  = 44;
+const SPEAKER_H   = 28;
 const HIDDEN_TRACK_H = 22; // Collapsed row for a hidden track (keeps its eye button)
 const LABEL_W     = 54; // Compact width for Eye Button + Track Icon side by side
 
@@ -494,7 +494,12 @@ export default function AudioWaveformTimeline({
     ctx.restore();
   }, [waveformPeaks, waveformPointsPerSec, zoomLevel, duration, effectiveDuration]);
 
-  useEffect(() => { drawWaveform(); }, [drawWaveform]);
+  // Redraw once the canvas is mounted again after the waveform track is unhidden
+  useEffect(() => {
+    drawWaveform();
+    const id = requestAnimationFrame(() => drawWaveform());
+    return () => cancelAnimationFrame(id);
+  }, [drawWaveform, trackVisible.waveform]);
 
   useEffect(() => {
     const el = scrollRef.current;

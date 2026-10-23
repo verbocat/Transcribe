@@ -19,7 +19,7 @@ export const DEFAULT_LAYOUT = {
   videoW: 560,
   videoH: 340,
   timelinePos: 'bottom',  // bottom | top | hidden
-  timelineH: 210,
+  timelineH: 250,
   timelineSpan: 'full',   // full | list (only under the subtitle list when video is at a side)
   listMinW: 420,
   maximize: 'none',       // none | video | list | timeline
