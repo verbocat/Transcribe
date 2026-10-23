@@ -1,8 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  UserPlus, Search, Eye, SlidersHorizontal, X, Copy, Check, Trash2, KeyRound, Ban, UserCheck, ListOrdered, Pencil, RefreshCw, AlertTriangle,
-  ShieldCheck, ShieldOff,
-} from 'lucide-react';
+  UserPlus, Search, SlidersHorizontal, X, Copy, Check, KeyRound, RefreshCw, AlertTriangle,
+  } from 'lucide-react';
 
 // Where an administrator's rights come from (only those granted in this panel can be removed here).
 const ADMIN_SOURCE = {
@@ -10,6 +9,7 @@ const ADMIN_SOURCE = {
   server: 'Set on the server (ADMIN_EMAILS), cannot be removed here',
   granted: 'Made administrator in this panel',
 };
+import { MoreHorizontal } from 'lucide-react';
 import { API_BASE } from '../../config';
 import { useAuth } from '../../auth_views/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
@@ -122,6 +122,35 @@ function AccessBadges({ a }) {
         <span key={label} className={`text-[10.5px] px-1.5 py-0.5 rounded-md ${warn ? 'bg-[var(--kt-danger)]/12 text-[var(--kt-danger)]' : 'bg-[var(--kt-s3)] text-[var(--kt-muted)]'}`}>{label}</span>
       ))}
     </div>
+  );
+}
+
+/** One "more" button per row with a menu of named actions, instead of a row of unlabeled icons. */
+function RowMenu({ items, label, btn }) {
+  const [at, setAt] = useState(null);
+  useEffect(() => {
+    if (!at) return undefined;
+    const close = () => setAt(null);
+    const key = (e) => { if (e.key === 'Escape') close(); };
+    window.addEventListener('click', close);
+    window.addEventListener('scroll', close, true);
+    window.addEventListener('keydown', key);
+    return () => { window.removeEventListener('click', close); window.removeEventListener('scroll', close, true); window.removeEventListener('keydown', key); };
+  }, [at]);
+  return (
+    <>
+      <button type="button" aria-label={label} aria-haspopup="menu" aria-expanded={!!at}
+        onClick={(e) => { e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); setAt(at ? null : { top: r.bottom + 6, right: window.innerWidth - r.right }); }}
+        className={`p-1.5 rounded-lg border cursor-pointer ${btn}`}><MoreHorizontal size={14} /></button>
+      {at && (
+        <div role="menu" className="fixed z-50 min-w-[210px] rounded-xl border border-[var(--kt-s5)] bg-[var(--kt-s2)] p-1.5 shadow-2xl" style={{ top: at.top, right: at.right }}>
+          {items.map((it) => (
+            <button key={it.label} type="button" role="menuitem" onClick={() => { setAt(null); it.run(); }}
+              className={`w-full text-left px-3 py-2 rounded-lg text-[13px] cursor-pointer hover:bg-[var(--kt-s3)] ${it.danger ? 'text-rose-400' : 'text-[var(--kt-text)]'}`}>{it.label}</button>
+          ))}
+        </div>
+      )}
+    </>
   );
 }
 
@@ -260,21 +289,15 @@ export default function AdminAccounts({ refreshKey = 0, onOpenDossier }) {
                 <td className="p-3">
                   <div className="flex justify-end gap-1.5">
                     <button type="button" onClick={() => setLimitsFor(u.id)} className={`px-2 py-1.5 rounded-lg border flex items-center gap-1 cursor-pointer ${btn}`} title="Usage time, job limits, feature access and end date"><SlidersHorizontal size={12} /> Limits</button>
-                    {onOpenDossier && <button type="button" onClick={() => onOpenDossier(u.id)} className={`p-1.5 rounded-lg border cursor-pointer ${btn}`} title="Details: sessions, logins, productions, send a notice" aria-label="Details"><Eye size={13} /></button>}
-                    <button type="button" onClick={() => openLedger(u)} className={`p-1.5 rounded-lg border cursor-pointer ${btn}`} title="Usage history" aria-label="Usage history"><ListOrdered size={13} /></button>
-                    <button type="button" onClick={() => openEdit(u)} className={`p-1.5 rounded-lg border cursor-pointer ${btn}`} title="Edit account" aria-label="Edit account"><Pencil size={13} /></button>
-                    {!u.is_admin && !u.is_blocked && (
-                      <button type="button" onClick={() => { setError(''); setDialog({ type: 'admin', user: u, grant: true }); }} className={`p-1.5 rounded-lg border cursor-pointer ${btn}`} title="Make administrator" aria-label="Make administrator"><ShieldCheck size={13} /></button>
-                    )}
-                    {u.is_admin && u.admin_source === 'granted' && u.id !== me?.id && (
-                      <button type="button" onClick={() => { setError(''); setDialog({ type: 'admin', user: u, grant: false }); }} className="p-1.5 rounded-lg border border-amber-500/40 text-amber-400 hover:bg-amber-500/10 cursor-pointer" title="Remove administrator access" aria-label="Remove administrator access"><ShieldOff size={13} /></button>
-                    )}
-                    {!u.is_admin && (
-                      <>
-                        <button type="button" onClick={() => toggleBlock(u)} className={`p-1.5 rounded-lg border cursor-pointer ${btn}`} title={u.is_blocked ? 'Enable account' : 'Disable account'} aria-label={u.is_blocked ? 'Enable account' : 'Disable account'}>{u.is_blocked ? <UserCheck size={13} /> : <Ban size={13} />}</button>
-                        <button type="button" onClick={() => setDialog({ type: 'delete', user: u })} className="p-1.5 rounded-lg border border-rose-500/40 text-rose-400 hover:bg-rose-500/10 cursor-pointer" title="Delete account" aria-label="Delete account"><Trash2 size={13} /></button>
-                      </>
-                    )}
+                    <RowMenu label={`More actions for ${u.name}`} isDark={isDark} btn={btn} items={[
+                      onOpenDossier && { label: 'View details', run: () => onOpenDossier(u.id) },
+                      { label: 'Usage history', run: () => openLedger(u) },
+                      { label: 'Edit account', run: () => openEdit(u) },
+                      !u.is_admin && !u.is_blocked && { label: 'Make administrator', run: () => { setError(''); setDialog({ type: 'admin', user: u, grant: true }); } },
+                      u.is_admin && u.admin_source === 'granted' && u.id !== me?.id && { label: 'Remove administrator access', run: () => { setError(''); setDialog({ type: 'admin', user: u, grant: false }); } },
+                      !u.is_admin && { label: u.is_blocked ? 'Enable account' : 'Disable account', run: () => toggleBlock(u) },
+                      !u.is_admin && { label: 'Delete account…', danger: true, run: () => setDialog({ type: 'delete', user: u }) },
+                    ].filter(Boolean)} />
                   </div>
                 </td>
               </tr>

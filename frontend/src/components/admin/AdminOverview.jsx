@@ -72,7 +72,7 @@ export default function AdminOverview({ overview, hardware, onOpenTab, refreshKe
                     <div className="mt-0.5 text-[12px] text-[var(--kt-muted)] truncate">{j.file ? `${j.action} · ` : j.detail ? `${j.detail} · ` : ''}{j.user_name} · {ago(j.created_at)}</div>
                   </div>
                   <span className="text-[12px] text-[var(--kt-muted)] tabular-nums whitespace-nowrap">{exact(j.hours, { fromHours: true })}</span>
-                  <StatusPill status={j.status} />
+                  {j.status !== 'charged' && <StatusPill status={j.status} />}
                 </li>
               ))}
             </ul>
@@ -89,7 +89,7 @@ export default function AdminOverview({ overview, hardware, onOpenTab, refreshKe
                   </span>
                   <div className="min-w-0 flex-1">
                     <div className="text-[13px] font-medium text-[var(--kt-text)] truncate">{r.user_name}</div>
-                    <div className="text-[12px] text-[var(--kt-muted)] truncate">{r.jobs} {r.jobs === 1 ? 'job' : 'jobs'}</div>
+                    <div className="text-[12px] text-[var(--kt-muted)] truncate">{r.user_email ? `${r.user_email} · ` : ''}{r.jobs} {r.jobs === 1 ? 'job' : 'jobs'}</div>
                   </div>
                   <div className="text-right text-[12px] tabular-nums">
                     <div className="text-[var(--kt-text)]">{hrs(r.transcribe_hours)} <span className="text-[var(--kt-faint)]">transcribe</span></div>

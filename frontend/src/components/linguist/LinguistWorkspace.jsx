@@ -2,7 +2,20 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Loader2, FileText, RefreshCw } from 'lucide-react';
 import { API_BASE } from '../../config';
 import AccountMenuDropdown from '../AccountMenuDropdown';
+import BrandLogo from '../BrandLogo';
 import ReviewEditor from './ReviewEditor';
+import '../noun.css';
+
+const ago = (iso) => {
+  if (!iso) return '';
+  const t = new Date(iso + (String(iso).endsWith('Z') ? '' : 'Z')).getTime();
+  const s = Math.max(0, (Date.now() - t) / 1000);
+  if (s < 60) return 'just now';
+  if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
+  if (s < 86400 * 7) return `${Math.floor(s / 86400)} d ago`;
+  return new Date(t).toLocaleDateString();
+};
 
 /** Everything a linguist account sees: the subtitle projects coordinators shared with them, and the review editor. */
 export default function LinguistWorkspace({ user, onOpenLogoutModal }) {
@@ -31,15 +44,15 @@ export default function LinguistWorkspace({ user, onOpenLogoutModal }) {
   return (
     <div className="min-h-screen bg-[var(--kt-s0)] text-[var(--kt-text)]">
       <header className="flex items-center justify-between px-6 py-3 border-b border-[var(--kt-s3)] bg-[var(--kt-s1)]">
-        <div>
-          <div className="text-[15px] font-semibold">Noun</div>
-          <div className="text-[12px] text-[var(--kt-muted)]">Linguist · {user?.name}</div>
-        </div>
+        <BrandLogo variant="wordmark" size={30} />
         <AccountMenuDropdown user={user} onOpenLogoutModal={onOpenLogoutModal} />
       </header>
       <main className="max-w-3xl mx-auto px-6 py-8">
         <div className="flex items-center justify-between mb-4">
-          <h1 className="text-lg font-semibold">Shared with me</h1>
+          <div>
+            <h1 className="text-[26px] font-bold tracking-tight" style={{ fontFamily: "'Bricolage Grotesque', var(--kt-font-ui)" }}>Shared with me</h1>
+            <p className="text-[13px] text-[var(--kt-muted)] mt-1">Subtitle projects coordinators have asked you to review.</p>
+          </div>
           <button type="button" onClick={load} className="h-8 px-3 rounded-lg text-[13px] bg-[var(--kt-s2)] hover:bg-[var(--kt-s3)] cursor-pointer inline-flex items-center gap-1.5"><RefreshCw size={13} /> Refresh</button>
         </div>
         {error && <div className="mb-3 text-[13px] text-[var(--kt-danger)]">{error}</div>}
@@ -55,9 +68,9 @@ export default function LinguistWorkspace({ user, onOpenLogoutModal }) {
                   <FileText size={18} className="text-[var(--kt-muted)] shrink-0" />
                   <div className="min-w-0 flex-1">
                     <div className="text-[14px] font-medium truncate">{p.title}</div>
-                    <div className="text-[12px] text-[var(--kt-muted)] truncate">From {p.owner?.name} · last saved {p.updated_at ? new Date(p.updated_at + (p.updated_at.endsWith('Z') ? '' : 'Z')).toLocaleString() : ''}{p.updated_by ? ` by ${p.updated_by}` : ''}</div>
+                    <div className="text-[12px] text-[var(--kt-muted)] truncate">{p.updated_by ? `Updated ${ago(p.updated_at)} by ${p.updated_by}` : `Shared ${ago(p.updated_at)} by ${p.owner?.name}`}</div>
                   </div>
-                  <span className="text-[12px] text-[var(--kt-accent)]">Open</span>
+                  <span className="nx-primary nx-brand-grad" style={{ height: 30 }}>Open</span>
                 </button>
               </li>
             ))}
