@@ -1,0 +1,5 @@
+pytest>=8.3
+pytest-html>=4.1
+requests>=2.32
+# UI tests only (then run: python -m playwright install chromium)
+playwright>=1.48
