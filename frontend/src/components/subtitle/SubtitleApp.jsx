@@ -3200,7 +3200,36 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
           className="flex-1 min-w-0 min-h-0 flex overflow-hidden"
           style={{ flexDirection: layout.qcDock === 'bottom' ? 'column' : 'row', order: 1 }}
         >
-          <main className="flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden" style={{ order: 1 }} aria-label="Subtitle workspace">
+          <main className="relative flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden" style={{ order: 1 }} aria-label="Subtitle workspace">
+            {!videoUrl && !selectedFile && !hasEvents && !isGenerating && (
+              <div className="absolute inset-0 z-[80] overflow-auto bg-[var(--kt-s0)] grid place-items-center p-6">
+                <div className="w-full max-w-[720px]">
+                  <h1 className="nx-display text-[30px] font-bold leading-tight text-slate-100 m-0">Start a subtitle project</h1>
+                  <p className="text-sm text-slate-400 mt-1.5 mb-5">Generate cards from speech, or work on subtitles you already have.</p>
+                  <div
+                    role="button" tabIndex={0}
+                    onClick={() => fileInputRef.current?.click()}
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') fileInputRef.current?.click(); }}
+                    onDragOver={(e) => { e.preventDefault(); }}
+                    onDrop={(e) => { e.preventDefault(); const f = e.dataTransfer.files?.[0]; if (f) handleFileChange({ target: { files: [f] } }); }}
+                    className="flex flex-col items-center gap-2 text-center cursor-pointer rounded-[22px] border-2 border-dashed border-[var(--ss-line)] hover:border-[var(--ss-accent)] bg-[var(--kt-s1)]/70 hover:bg-[var(--ss-panel)] transition-all px-6 py-10"
+                  >
+                    <div className="w-14 h-14 rounded-2xl flex items-center justify-center text-white nx-brand-grad"><Film className="w-6 h-6" /></div>
+                    <strong className="nx-display text-[19px] text-slate-100">Drop a video or audio file to generate subtitles</strong>
+                    <span className="text-xs text-slate-400">MP4, MKV, MOV, WebM, WAV and MP3. Waveform and speech timing are extracted automatically.</span>
+                    <span className="mt-2 h-9 px-4 rounded-[10px] text-[13px] font-semibold text-white nx-brand-grad inline-flex items-center gap-2"><Upload className="w-3.5 h-3.5" />Choose a file</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => srtImportRef.current?.click()}
+                    className="mt-3 w-full text-left rounded-2xl border border-[var(--ss-line)] bg-[var(--kt-s1)] hover:bg-[var(--ss-panel)] p-4 transition-colors"
+                  >
+                    <div className="nx-display text-[15px] font-semibold text-slate-100">Open an SRT or VTT</div>
+                    <div className="text-xs text-slate-400 mt-0.5">Edit, check and translate existing subtitles.</div>
+                  </button>
+                </div>
+              </div>
+            )}
             <StudioStage
               layout={layout}
               patch={patchLayout}
