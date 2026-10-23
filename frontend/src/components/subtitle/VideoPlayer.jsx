@@ -699,31 +699,28 @@ export default function VideoPlayer({
                 onFileSelect?.(e.dataTransfer.files[0]);
               }
             }}
-            className={`flex flex-col items-center justify-center gap-3 p-8 text-center cursor-pointer transition-all border-2 border-dashed m-6 rounded-none ${
-              'border-[var(--ss-line)] hover:border-[var(--ss-accent)]/50 bg-[var(--kt-s1)]/60 hover:bg-[var(--ss-panel)]'
-            }`}
+            className="flex flex-col items-center justify-center gap-3 p-10 text-center cursor-pointer transition-all border-2 border-dashed m-6 rounded-[22px] border-[var(--ss-line)] hover:border-[var(--ss-accent)] bg-[var(--kt-s1)]/70 hover:bg-[var(--ss-panel)]"
           >
-            <div className={`w-14 h-14 rounded-none border flex items-center justify-center transition-all ${
-              'bg-[var(--kt-s2)] border-[var(--kt-s5)] text-[var(--ss-accent)] shadow-[0_0_20px_rgba(var(--kt-accent-rgb),0.15)]'
-            }`}>
+            <div className="w-14 h-14 rounded-2xl flex items-center justify-center text-white" style={{ background: 'linear-gradient(100deg,#1a6dff 0%,#5b3cff 55%,#8a10ff 100%)' }}>
               <Upload className="w-6 h-6" />
             </div>
             <div className="space-y-1">
-              <p className={`text-sm font-bold text-slate-200`}>
-                Import Video or Audio Media
+              <p className="text-[17px] font-semibold text-slate-100" style={{ fontFamily: "'Bricolage Grotesque', var(--kt-font-ui)" }}>
+                Drop a video or audio file to generate subtitles
               </p>
-              <p className={`text-xs max-w-sm text-slate-400`}>
-                Drag & drop or click to select MP4, MKV, MOV, WebM, WAV, MP3. Audio waveforms & speech sync are automatically extracted.
+              <p className="text-xs max-w-sm text-slate-400">
+                MP4, MKV, MOV, WebM, WAV and MP3. The waveform and speech timing are extracted automatically.
               </p>
             </div>
             {onOpenFilePicker && (
               <button
                 type="button"
                 onClick={(e) => { e.stopPropagation(); onOpenFilePicker(); }}
-                className="mt-1 px-4 py-1.5 rounded-none text-xs font-semibold bg-gradient-to-r from-blue-500 to-blue-500 text-black hover:opacity-90 transition-opacity shadow-sm flex items-center gap-1.5 cursor-pointer"
+                className="mt-1 h-9 px-4 rounded-[10px] text-[13px] font-semibold text-white hover:brightness-110 transition flex items-center gap-2"
+                style={{ background: 'linear-gradient(100deg,#1a6dff 0%,#5b3cff 55%,#8a10ff 100%)' }}
               >
                 <Film className="w-3.5 h-3.5" />
-                <span>Browse Media</span>
+                <span>Choose a file</span>
               </button>
             )}
           </div>

@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import { AlertTriangle, CheckCircle2, Info, X } from 'lucide-react';
+import '../noun.css';
 
 /**
  * App dialogs and toasts that replace the browser's alert, confirm and prompt boxes.

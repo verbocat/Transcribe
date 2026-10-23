@@ -680,7 +680,7 @@ export default function SubtitleTablePanel({
       </div>
 
       {/* ── Column headers ── */}
-      <div className={`${comparing ? GRID_COMPARE : GRID} items-center px-2 py-1.5 text-[10px] font-bold text-slate-500 uppercase tracking-wider border-b border-[var(--ss-line)] bg-[var(--ss-bg)] shrink-0 select-none`}>
+      <div className={`${comparing ? GRID_COMPARE : GRID} items-center px-2 py-1.5 text-[12px] font-medium text-slate-400 border-b border-[var(--ss-line)] bg-[var(--ss-bg)] shrink-0 select-none`}>
         <div className="flex items-center justify-center">
           <input
             type="checkbox"
@@ -718,10 +718,10 @@ export default function SubtitleTablePanel({
               <Play size={16} className="text-slate-600 ml-0.5" />
             </div>
             <span className="text-xs font-semibold text-slate-300">
-              {searchQuery || filterMode === 'errors' ? 'No matching subtitles' : 'No subtitles yet'}
+              {searchQuery || filterMode === 'errors' ? 'No matching subtitles' : 'Your subtitles will appear here'}
             </span>
             <span className="text-[11px] text-slate-600 mt-1">
-              {searchQuery || filterMode === 'errors' ? 'Try a different search or clear the issues filter' : 'Open a video and run AI Generate, or import an SRT/VTT file.'}
+              {searchQuery || filterMode === 'errors' ? 'Try a different search or clear the issues filter' : 'Open a video and press Generate in the left rail, or open an SRT or VTT file from File.'}
             </span>
           </div>
         ) : (
