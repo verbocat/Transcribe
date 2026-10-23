@@ -15,7 +15,7 @@ graph TD
     FastAPI --> Gemini[Google Gemini API - proofreading, QC fixes, context helpers]
     FastAPI --> Centroid[Centroid API - translation and translation QC, optional]
     FastAPI --> FFmpeg[FFmpeg - audio extraction, shot detection]
-    FastAPI --> AuthDB[(SQLite - users, sessions, audit logs)]
+    FastAPI --> AuthDB[(Neon PostgreSQL - users, sessions, usage, audit logs)]
     FastAPI --> ProjDB[(Neon PostgreSQL - saved projects, optional)]
     FastAPI --> Brevo[Brevo - verification and OTP email]
 ```
@@ -25,7 +25,7 @@ graph TD
 * **Speech and timing:** ElevenLabs Scribe v2 (`app/elevenlabs_service.py`) provides word-level timestamps, diarization and audio-event tags for the whole file in one request. There is no Whisper model, DTW aligner or fixed-length batching any more.
 * **Subtitle building and QC:** the local Netflix engine (`app/netflix_engine.py`, `app/netflix_linter.py`) turns Scribe words into cards and audits CPS, CPL, line count, duration, gaps and shot changes.
 * **Gemini (`google-genai`):** optional context proofreading, "Fix QC issues with Gemini", glossary extraction and context auto-fill. Transcription itself does not need Gemini.
-* **Databases:** a SQLite file for accounts, sessions, quotas and audit logs (always on), and an optional Neon PostgreSQL database for saved projects (`DATABASE_URL`).
+* **Database:** one Neon PostgreSQL database (`DATABASE_URL`, required) holds accounts, sessions, hour budgets, the usage ledger, audit logs and saved projects. The test suite uses a throwaway SQLite file through `AUTH_DATABASE_URL` and never touches it.
 * **Silero VAD (optional):** `app/vad_processor.py` loads `backend/models/silero_vad.jit` with PyTorch to refine Karya segment boundaries. PyTorch is not in `requirements.txt`; without it the app runs and skips VAD refinement.
 
 ### Subtitle pipeline (`POST /api/subtitle/generate_stream`)
@@ -69,7 +69,7 @@ Transcribe/
 │   ├── app/
 │   │   ├── main.py                       # FastAPI app and API endpoints
 │   │   ├── config.py                     # Environment and settings
-│   │   ├── auth_module/                  # Sign-up, login, OTP, sessions (SQLite) and Brevo email
+│   │   ├── auth_module/                  # Sign-up, login, OTP, sessions, hour budgets (Postgres) and Brevo email
 │   │   ├── admin_routes.py               # /api/admin endpoints: users, quotas, audit logs
 │   │   ├── db.py                         # Neon PostgreSQL models for saved projects
 │   │   ├── elevenlabs_service.py         # ElevenLabs Scribe v2 client
@@ -151,9 +151,7 @@ Some older modules (`gemini_subtitle_generator.py`, `gemini_subtitle_structurer.
    SEGMENT_BUFFER_SEC=0.3
    MAX_SILENCE_SEC=4.0
 
-   # Accounts database (SQLite). Defaults to backend/data/transcribe_app.db when unset.
-   SERVER_DB_PATH=
-   # Saved projects (Neon PostgreSQL, optional). Project saving is disabled when unset.
+   # Accounts, usage and saved projects (Neon PostgreSQL). Required: the backend will not start without it.
    DATABASE_URL=postgresql://user:password@ep-sample-pooler.neon.tech/neondb?sslmode=require
 
    # Links in verification emails point here
@@ -208,7 +206,7 @@ On Windows, `run_app.bat` (or `npm start` in the repository root) creates the ve
 
 ### Step 4: Accounts
 
-Sign-up accepts any valid email address and requires email verification. Without `BREVO_API_KEY`, verification links, password-reset links and login OTPs are printed in the backend console instead of being emailed. Accounts live in the SQLite file (`backend/data/transcribe_app.db` by default). Super-admin accounts are a fixed list in `app/auth_module/routes.py`; admins can manage other users from `/admin`.
+Sign-up accepts any valid email address and requires email verification. Without `BREVO_API_KEY`, verification links, password-reset links and login OTPs are printed in the backend console instead of being emailed. Accounts live in the Postgres database (`DATABASE_URL`); the auth tables are created on first start. Super-admin accounts are a fixed list in `app/auth_module/routes.py`; admins can manage other users from `/admin`.
 
 ---
 
@@ -304,7 +302,6 @@ cd /var/www/transcribe
    GEMINI_API_KEY=your_gemini_api_key
    GEMINI_MODEL=gemini-3.8-flash
    DATABASE_URL=postgresql://user:password@ep-pooler.neon.tech/neondb?sslmode=require
-   SERVER_DB_PATH=/var/www/transcribe/backend/data/transcribe_app.db
    FRONTEND_URL=https://yourdomain.com
    BREVO_API_KEY=your_brevo_api_key
    OTP_SECRET=your_strong_random_secret
@@ -312,6 +309,17 @@ cd /var/www/transcribe
    ```
 
    Do not set `PORT` in this file unless you also set `ENABLE_SHOT_DETECTION=true`, because `PORT` turns shot detection off.
+
+   **Moving accounts from an older SQLite install.** Versions before the Postgres move kept accounts in `backend/data/transcribe_app.db`. Copy them once, with the backend stopped so nothing changes during the copy:
+
+   ```bash
+   cd /var/www/transcribe/backend
+   python3 -c "import sqlite3; s=sqlite3.connect('data/transcribe_app.db'); d=sqlite3.connect('/tmp/auth_copy.db'); s.backup(d); d.close()"
+   venv/bin/python -m app.migrate_auth_to_postgres /tmp/auth_copy.db --dry-run    # checks every row fits, writes nothing
+   venv/bin/python -m app.migrate_auth_to_postgres /tmp/auth_copy.db --replace    # one transaction: all rows or none
+   ```
+
+   Use `.backup` (as above), not a plain file copy: recent writes sit in the `-wal` file next to the database. `--replace` empties only the auth tables before copying; saved projects are never touched. Keep the SQLite file until the new install has run for a while. Set `ADMIN_EMAILS` the same on every server that uses this database: admin status is re-derived from it on each start.
 
 3. Create the uploads directory and set permissions:
 

@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, Integer, Text, Float
+from sqlalchemy import BigInteger, Column, String, Boolean, DateTime, ForeignKey, Integer, Text, Float
 from sqlalchemy.orm import relationship
 from .database import AuthBase
 
@@ -37,18 +37,19 @@ class User(AuthBase):
     max_file_minutes = Column(Integer, nullable=True)
     max_jobs_per_day = Column(Integer, nullable=True)
     access_expires_at = Column(DateTime, nullable=True)  # the account stops working at this moment (UTC)
-    # Hour budgets, stored as whole milliseconds so reserve/settle/refund arithmetic is exact.
+    # Hour budgets, stored as whole milliseconds so reserve/settle/refund arithmetic is exact (BIGINT: 32 bits
+    # would overflow at about 596 hours).
     # *_limit_ms NULL means unlimited. used = finished work, reserved = jobs in flight; the
     # server only lets a job start when used + reserved + job <= limit (see usage.py).
     # One shared pool: transcription and translation both spend from hours_limit_ms (NULL = unlimited).
     # transcribe_/translate_limit_ms are the retired per-kind limits, kept only as a record of the old setup.
-    hours_limit_ms = Column(Integer, nullable=True)
-    transcribe_limit_ms = Column(Integer, nullable=True)
-    translate_limit_ms = Column(Integer, nullable=True)
-    transcribe_used_ms = Column(Integer, default=0, nullable=False)
-    translate_used_ms = Column(Integer, default=0, nullable=False)
-    transcribe_reserved_ms = Column(Integer, default=0, nullable=False)
-    translate_reserved_ms = Column(Integer, default=0, nullable=False)
+    hours_limit_ms = Column(BigInteger, nullable=True)
+    transcribe_limit_ms = Column(BigInteger, nullable=True)
+    translate_limit_ms = Column(BigInteger, nullable=True)
+    transcribe_used_ms = Column(BigInteger, default=0, nullable=False)
+    translate_used_ms = Column(BigInteger, default=0, nullable=False)
+    transcribe_reserved_ms = Column(BigInteger, default=0, nullable=False)
+    translate_reserved_ms = Column(BigInteger, default=0, nullable=False)
     is_blocked = Column(Boolean, default=False, nullable=False)
     is_verified = Column(Boolean, default=False, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
@@ -162,9 +163,9 @@ class UserMediaAsset(AuthBase):
 
     id = Column(String(64), primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id = Column(String(64), ForeignKey("auth_users.id", ondelete="CASCADE"), nullable=False, index=True)
-    video_id = Column(String(128), index=True, nullable=False)
-    filename = Column(String(255), nullable=False)
-    file_size_bytes = Column(Integer, default=0, nullable=False)
+    video_id = Column(String(512), index=True, nullable=False)  # <8-char prefix>_<file name>: can pass 255
+    filename = Column(String(512), nullable=False)
+    file_size_bytes = Column(BigInteger, default=0, nullable=False)
     duration_seconds = Column(Float, default=0.0, nullable=False)
     video_resolution = Column(String(64), default="")
     frame_rate = Column(Float, default=0.0)
@@ -190,7 +191,7 @@ class SubtitleGenerationRun(AuthBase):
     id = Column(String(64), primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id = Column(String(64), ForeignKey("auth_users.id", ondelete="CASCADE"), nullable=False, index=True)
     media_asset_id = Column(String(64), ForeignKey("user_media_assets.id", ondelete="SET NULL"), nullable=True, index=True)
-    video_id = Column(String(128), index=True, nullable=False)
+    video_id = Column(String(512), index=True, nullable=False)
     run_index_for_video = Column(Integer, default=1, nullable=False)  # 1 = 1st run, 2 = re-run, 3 = re-run...
     target_language = Column(String(32), default="en", nullable=False)
     mode = Column(String(64), default="default", nullable=False)
@@ -282,7 +283,7 @@ class UsageReservation(AuthBase):
     id = Column(String(64), primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id = Column(String(64), nullable=False, index=True)  # no FK: survives deleting the user
     kind = Column(String(16), nullable=False)  # "transcribe" | "translate"
-    ms = Column(Integer, nullable=False)
+    ms = Column(BigInteger, nullable=False)
     status = Column(String(16), default="reserved", nullable=False, index=True)  # reserved | settled | refunded
     route = Column(String(96), nullable=False)
     ref = Column(String(255), nullable=True)
@@ -292,7 +293,7 @@ class UsageReservation(AuthBase):
 
 class UsageLedger(AuthBase):
     """Append-only usage history (who, when, what, how long). Rows are never updated or deleted:
-    SQLite triggers and ORM hooks in usage.py both refuse it."""
+    database triggers and ORM hooks in usage.py both refuse it."""
     __tablename__ = "usage_ledger"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -300,7 +301,7 @@ class UsageLedger(AuthBase):
     user_email = Column(String(255), nullable=True)  # snapshot, so the row still reads after the user is deleted
     kind = Column(String(16), nullable=False)
     event = Column(String(24), nullable=False)  # reserve | settle | refund | limit_change
-    ms = Column(Integer, default=0, nullable=False)
+    ms = Column(BigInteger, default=0, nullable=False)
     reservation_id = Column(String(64), nullable=True, index=True)
     route = Column(String(96), nullable=True)
     ref = Column(String(255), nullable=True)
@@ -317,8 +318,8 @@ class SharedProject(AuthBase):
     id = Column(String(64), primary_key=True, default=lambda: str(uuid.uuid4()))
     owner_id = Column(String(64), ForeignKey("auth_users.id", ondelete="CASCADE"), nullable=False, index=True)
     title = Column(String(255), nullable=False)
-    filename = Column(String(255), nullable=True)
-    video_id = Column(String(128), nullable=True)  # the owner's uploaded media, streamed to people it is shared with
+    filename = Column(String(512), nullable=True)
+    video_id = Column(String(512), nullable=True)  # the owner's uploaded media, streamed to people it is shared with
     draft = Column(Text, nullable=False)  # JSON
     revision = Column(Integer, default=1, nullable=False)
     updated_by_id = Column(String(64), nullable=True)

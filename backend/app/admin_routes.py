@@ -418,6 +418,8 @@ def get_user_dossier(
             item["target_language"] = r["target_language"]
 
     production_items = list(production_map.values())
+    # Timestamps are stored as naive UTC, so compare against naive UTC (an aware "now" raises TypeError).
+    now_naive_utc = datetime.now(timezone.utc).replace(tzinfo=None)
 
     return {
         "success": True,
@@ -461,8 +463,8 @@ def get_user_dossier(
                 "device": s.device_info or "Web Browser",
                 "device_info": s.device_info or "Web Browser",
                 "ip_address": getattr(s, "ip_address", "127.0.0.1"),
-                "is_expired": not (s.is_active and s.expires_at > datetime.now(timezone.utc)),
-                "status": "Active Workstation" if s.is_active and s.expires_at > datetime.now(timezone.utc) else "Logged Out / Expired"
+                "is_expired": not (s.is_active and s.expires_at > now_naive_utc),
+                "status": "Active Workstation" if s.is_active and s.expires_at > now_naive_utc else "Logged Out / Expired"
             }
             for s in sessions
         ],
@@ -1266,8 +1268,9 @@ def usage_overview(
     month_ago, day_ago = now - timedelta(days=30), now - timedelta(hours=24)
     R = UsageReservation
 
+    # Postgres returns SUM(BIGINT) as NUMERIC (Decimal in Python); int() keeps the arithmetic below plain ints and floats.
     def hours(*filters) -> float:
-        ms = db.query(func.sum(R.ms)).filter(R.status == "settled", *filters).scalar() or 0
+        ms = int(db.query(func.sum(R.ms)).filter(R.status == "settled", *filters).scalar() or 0)
         return round(ms / _MS_PER_HOUR, 2)
 
     def count(*filters) -> int:
@@ -1281,7 +1284,7 @@ def usage_overview(
     per_user: Dict[str, Dict[str, Any]] = {}
     for uid, k, ms, n in top:
         row = per_user.setdefault(uid, {"user_id": uid, "transcribe_hours": 0.0, "translate_hours": 0.0, "jobs": 0})
-        row[f"{k}_hours"] = round((ms or 0) / _MS_PER_HOUR, 2)
+        row[f"{k}_hours"] = round(int(ms or 0) / _MS_PER_HOUR, 2)
         row["jobs"] += n or 0
     ranked = sorted(per_user.values(), key=lambda r: r["transcribe_hours"] + r["translate_hours"], reverse=True)[:6]
     names = {u.id: u for u in db.query(User).filter(User.id.in_([r["user_id"] for r in ranked])).all()} if ranked else {}

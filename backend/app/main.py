@@ -175,7 +175,7 @@ from app.admin_routes import (
 
 
 def _record_hardware_snapshot():
-    """One hardware sample into the DB. Blocking (psutil + SQLite), so the loop runs it in a worker thread."""
+    """One hardware sample into the DB. Blocking (psutil + a database write), so the loop runs it in a worker thread."""
     from sqlalchemy import func
     from datetime import datetime, timezone, timedelta
     stats = get_live_hardware_stats()

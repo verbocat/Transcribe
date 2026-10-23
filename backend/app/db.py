@@ -1,12 +1,9 @@
-import os
 import json
 import uuid
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
-from sqlalchemy import create_engine, Column, String, Float, Integer, Boolean, DateTime, Text, ForeignKey, func
-from sqlalchemy.orm import declarative_base, sessionmaker, relationship
-
-from app.config import DATABASE_URL
+from sqlalchemy import Column, String, Float, Integer, Boolean, DateTime, Text, ForeignKey, func
+from sqlalchemy.orm import declarative_base, relationship
 
 Base = declarative_base()
 
@@ -105,34 +102,16 @@ class DBSubtitleEvent(Base):
     project = relationship("DBSubtitleProject", back_populates="events")
 
 
-# Engine and Session factory
-engine = None
-SessionLocal = None
+# Saved projects share the one database and connection pool with accounts (auth_module/database.py):
+# a single engine for the whole app, configured in one place.
+from app.auth_module.database import SessionLocal, engine  # noqa: E402
+
 
 def init_db():
-    global engine, SessionLocal
-    db_url = DATABASE_URL or os.getenv("DATABASE_URL", "")
-    if not db_url:
-        return None
-    # SQLAlchemy 2.1 maps a bare postgresql:// URL to psycopg (v3); requirements ship psycopg2-binary
-    if db_url.startswith("postgres://"):
-        db_url = "postgresql+psycopg2://" + db_url[len("postgres://"):]
-    elif db_url.startswith("postgresql://"):
-        db_url = "postgresql+psycopg2://" + db_url[len("postgresql://"):]
-    try:
-        engine = create_engine(db_url, pool_pre_ping=True, pool_size=10, max_overflow=20, pool_recycle=1800)
-        Base.metadata.create_all(bind=engine)
-        SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-        print("Neon PostgreSQL Database initialized successfully!")
-        return SessionLocal
-    except Exception as e:
-        print(f"Neon DB initialization warning: {e}")
-        return None
+    """Create the saved-project tables if missing."""
+    Base.metadata.create_all(bind=engine)
+    return SessionLocal
+
 
 def get_db_session():
-    global SessionLocal
-    if SessionLocal is None:
-        init_db()
-    if SessionLocal:
-        return SessionLocal()
-    return None
+    return SessionLocal()

@@ -121,9 +121,9 @@ def reserve(db: Session, user_id: str, kind: str, ms: int, route: str, ref: Opti
     done = db.execute(
         text(
             f"UPDATE auth_users SET {res_c} = {res_c} + :ms "
-            f"WHERE id = :uid AND is_blocked = 0 AND (hours_limit_ms IS NULL OR {_SPENT} + :ms <= hours_limit_ms)"
+            f"WHERE id = :uid AND is_blocked = :no AND (hours_limit_ms IS NULL OR {_SPENT} + :ms <= hours_limit_ms)"
         ),
-        {"ms": ms, "uid": user_id},
+        {"ms": ms, "uid": user_id, "no": False},
     )
     if done.rowcount != 1:
         db.rollback()
@@ -163,7 +163,7 @@ def _close(db: Session, rid: str, outcome: str, note: Optional[str]) -> bool:
     used_c, res_c = _COLS[res.kind]
     add_used = f", {used_c} = {used_c} + :ms" if outcome == "settled" else ""
     db.execute(
-        text(f"UPDATE auth_users SET {res_c} = MAX(0, {res_c} - :ms){add_used} WHERE id = :uid"),
+        text(f"UPDATE auth_users SET {res_c} = CASE WHEN {res_c} > :ms THEN {res_c} - :ms ELSE 0 END{add_used} WHERE id = :uid"),
         {"ms": res.ms, "uid": res.user_id},
     )
     user = db.query(User).filter(User.id == res.user_id).first()
@@ -211,7 +211,7 @@ def list_ledger(db: Session, user_id: str, limit: int = 200, offset: int = 0) ->
     } for r in rows]
 
 
-# Belt and braces with the SQLite triggers: the ORM refuses to modify an existing ledger row too.
+# Belt and braces with the database triggers: the ORM refuses to modify an existing ledger row too.
 @event.listens_for(UsageLedger, "before_update")
 @event.listens_for(UsageLedger, "before_delete")
 def _ledger_is_append_only(mapper, connection, target):  # pragma: no cover - exercised by tests
