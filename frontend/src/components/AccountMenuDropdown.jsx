@@ -84,7 +84,7 @@ export default function AccountMenuDropdown({ user, onOpenLogoutModal, compact =
 
         {/* Floating Dropdown Menu */}
         {isOpen && (
-          <div className={`absolute ${MENU_POS[placement] || MENU_POS.header} w-72 bg-[var(--kt-s1)] border border-[var(--kt-s4)] rounded-2xl shadow-[0_24px_50px_-10px_rgba(0,0,0,0.95),0_0_20px_rgba(var(--kt-accent-rgb),0.08)] z-50 p-3 select-none animate-in fade-in zoom-in-95 duration-150`}>
+          <div className={`absolute ${MENU_POS[placement] || MENU_POS.header} w-72 bg-[var(--kt-s1)] border border-[var(--kt-s4)] rounded-2xl shadow-[0_24px_50px_-10px_rgba(0,0,0,0.95),0_0_20px_rgba(var(--kt-accent-rgb),0.08)] z-[100] p-3 select-none animate-in fade-in zoom-in-95 duration-150`}>
             {/* User Profile Header */}
             <div className="flex items-start gap-3 pb-3 border-b border-[var(--kt-s3)]">
               <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#0284c7] to-[#2563eb] flex items-center justify-center text-white font-black text-sm shrink-0 shadow-md">

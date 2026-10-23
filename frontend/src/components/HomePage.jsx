@@ -226,7 +226,7 @@ export default function HomePage({ onSelect, user, onLogout, onOpenAuth }) {
     <div className="min-h-screen flex flex-col bg-[var(--kt-s0)] text-[var(--kt-text)] relative overflow-hidden" style={{ fontFamily: 'var(--kt-font-ui)' }}>
       <div aria-hidden className="nx-home-bg" />
 
-      <header className="relative z-10 h-16 px-4 sm:px-8 flex items-center justify-between max-w-[1280px] w-full mx-auto">
+      <header className="relative z-30 h-16 px-4 sm:px-8 flex items-center justify-between max-w-[1280px] w-full mx-auto">
         <BrandLogo variant="wordmark" size={32} />
         <div className="flex items-center gap-2">
           <button type="button" onClick={openAppearance} title="Appearance" aria-label="Appearance"
