@@ -3,12 +3,14 @@ import { Clock } from 'lucide-react';
 import { getApiBase } from '../config';
 
 /** Remaining hours for the signed-in account: one pool of hours shared by transcription and translation. */
+let inflight = null; // every badge on the page shares one request
 export function useUsage(enabled = true) {
   const [usage, setUsage] = useState(null);
   const refresh = useCallback(async () => {
     try {
-      const res = await fetch(`${getApiBase()}/api/auth/me/usage`);
-      if (res.ok) setUsage((await res.json()).usage);
+      inflight = inflight || fetch(`${getApiBase()}/api/auth/me/usage`).finally(() => { inflight = null; });
+      const res = await inflight;
+      if (res.ok) setUsage((await res.clone().json()).usage);
     } catch { /* offline: keep the last numbers */ }
   }, []);
   useEffect(() => {
@@ -16,7 +18,7 @@ export function useUsage(enabled = true) {
     refresh();
     window.addEventListener('lt-usage-refresh', refresh);
     window.addEventListener('lt-out-of-hours', refresh);
-    const id = setInterval(refresh, 60000);
+    const id = setInterval(() => { if (document.visibilityState !== 'hidden') refresh(); }, 60000);
     return () => {
       window.removeEventListener('lt-usage-refresh', refresh);
       window.removeEventListener('lt-out-of-hours', refresh);

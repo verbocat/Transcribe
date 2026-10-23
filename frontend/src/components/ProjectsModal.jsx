@@ -174,12 +174,12 @@ export default function ProjectsModal({
                 key={proj.id}
                 className="group p-4 bg-[var(--kt-s2)] hover:bg-[var(--kt-s3)] border border-[var(--kt-s4)] hover:border-[var(--kt-accent)] rounded-xl transition-all shadow-xs flex flex-wrap items-center justify-between gap-3"
               >
-                <div className="flex items-start gap-3">
-                  <div className="p-2.5 bg-[var(--kt-s1)] text-[var(--kt-accent)] border border-[var(--kt-s4)] rounded-xl mt-0.5">
+                <div className="flex items-start gap-3 min-w-0 flex-1 basis-60">
+                  <div className="p-2.5 bg-[var(--kt-s1)] text-[var(--kt-accent)] border border-[var(--kt-s4)] rounded-xl mt-0.5 shrink-0">
                     <FileAudio className="w-4 h-4" />
                   </div>
-                  <div>
-                    <h3 className="text-xs font-bold text-white line-clamp-1">{proj.filename}</h3>
+                  <div className="min-w-0">
+                    <h3 className="text-xs font-bold text-white truncate" title={proj.filename}>{proj.filename}</h3>
                     <div className="flex flex-wrap items-center gap-2 mt-1 text-[11px] text-slate-400">
                       <span className="font-semibold text-[var(--kt-accent)] bg-[var(--kt-s0)] border border-[var(--kt-s4)] px-2 py-0.5 rounded-md">
                         {proj.language} ({proj.script})
@@ -197,7 +197,7 @@ export default function ProjectsModal({
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 shrink-0">
                   <span className={`text-[11px] font-bold px-2 py-0.5 rounded-lg border ${
                     proj.compliance_score >= 95
                       ? 'bg-[var(--kt-accent)]/15 text-[var(--kt-accent)] border-[var(--kt-accent)]/30'

@@ -75,6 +75,8 @@ class DBSubtitleProject(Base):
     total_warnings = Column(Integer, default=0)
     shot_changes = Column(Text, default="[]")  # JSON string
     cps_stats = Column(Text, default="{}")  # JSON string
+    # Account that created the project. NULL on rows saved before owners were recorded: those are visible to admins only.
+    owner_id = Column(String(64), nullable=True, index=True)
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
     
@@ -117,13 +119,14 @@ def init_db():
 
 
 def _migrate_project_columns():
-    """create_all never alters an existing table: add transcription_projects.owner_id (nullable) when missing.
+    """create_all never alters an existing table: add owner_id (nullable) to the project tables when missing.
     Additive and idempotent; existing rows keep NULL and stay admin-only."""
     from sqlalchemy import inspect, text
     with engine.begin() as conn:
-        if "owner_id" not in {c["name"] for c in inspect(conn).get_columns("transcription_projects")}:
-            conn.execute(text("ALTER TABLE transcription_projects ADD COLUMN owner_id VARCHAR(64)"))
-            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_transcription_projects_owner_id ON transcription_projects (owner_id)"))
+        for table in ("transcription_projects", "subtitle_projects"):
+            if "owner_id" not in {c["name"] for c in inspect(conn).get_columns(table)}:
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN owner_id VARCHAR(64)"))
+                conn.execute(text(f"CREATE INDEX IF NOT EXISTS ix_{table}_owner_id ON {table} (owner_id)"))
 
 
 def get_db_session():

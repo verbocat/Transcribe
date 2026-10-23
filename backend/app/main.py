@@ -832,7 +832,9 @@ async def save_project(payload: dict, current_user: User = Depends(get_current_u
     except PermissionError:
         raise HTTPException(status_code=404, detail="Project not found")
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Could not save the project: {e}")
 
 
 def _delete_project_from_db(project_id: str, user):
@@ -1251,7 +1253,7 @@ async def cancel_job_endpoint(job_id: str):
 
 
 @app.get("/api/audio/extract_status/{job_id}")
-async def extract_audio_status_endpoint(job_id: str):
+async def extract_audio_status_endpoint(job_id: str, current_user: User = Depends(get_current_user_from_token)):
     job = _extract_jobs.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Extraction job not found or expired.")
@@ -3042,7 +3044,7 @@ async def rebreak_subtitles_endpoint(payload: dict):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-def _save_subtitle_project_to_db(payload: dict):
+def _save_subtitle_project_to_db(payload: dict, user):
     session = get_db_session()
     if not session:
         raise ValueError("Database not initialized")
@@ -3061,9 +3063,12 @@ def _save_subtitle_project_to_db(payload: dict):
         width, height = int(metadata.get("width") or 0), int(metadata.get("height") or 0)
 
         db_proj = session.query(DBSubtitleProject).filter(DBSubtitleProject.id == proj_id).first()
+        if db_proj is not None and not _can_access_project(db_proj, user):
+            raise PermissionError("Project not found")
         if not db_proj:
             db_proj = DBSubtitleProject(
                 id=proj_id,
+                owner_id=user.id,
                 filename=filename,
                 language=project_data.get("language", "en"),
                 content_type=project_data.get("content_type", "adult"),
@@ -3110,26 +3115,34 @@ def _save_subtitle_project_to_db(payload: dict):
 
 
 @app.post("/api/subtitle/projects/save")
-async def save_subtitle_project(payload: dict):
+async def save_subtitle_project(payload: dict, current_user: User = Depends(get_current_user_from_token)):
     """Save or update subtitle project into DB."""
     try:
-        proj_id = await asyncio.to_thread(_save_subtitle_project_to_db, payload)
+        proj_id = await asyncio.to_thread(_save_subtitle_project_to_db, payload, current_user)
         _LIST_CACHE.clear()
         return {"status": "success", "project_id": proj_id}
+    except PermissionError:
+        raise HTTPException(status_code=404, detail="Project not found")
     except Exception as e:
         import traceback
         traceback.print_exc()
-        return {"status": "error", "message": str(e)}
+        raise HTTPException(status_code=500, detail=f"Could not save the project: {e}")
 
 
-def _list_subtitle_projects_from_db():
+def _list_subtitle_projects_from_db(user):
     session = get_db_session()
     if not session:
         return []
     try:
-        projects = session.query(DBSubtitleProject).order_by(DBSubtitleProject.updated_at.desc()).all()
+        q = session.query(DBSubtitleProject)
+        if getattr(user, "is_admin", False):
+            # an admin's own list: their projects plus the legacy rows nobody owns
+            q = q.filter((DBSubtitleProject.owner_id == user.id) | (DBSubtitleProject.owner_id.is_(None)))
+        else:
+            q = q.filter(DBSubtitleProject.owner_id == user.id)
+        projects = q.order_by(DBSubtitleProject.updated_at.desc()).all()
         from sqlalchemy import func as _func
-        ev_counts = dict(session.query(DBSubtitleEvent.project_id, _func.count(DBSubtitleEvent.id)).group_by(DBSubtitleEvent.project_id).all())
+        ev_counts = dict(session.query(DBSubtitleEvent.project_id, _func.count(DBSubtitleEvent.id)).filter(DBSubtitleEvent.project_id.in_([p.id for p in projects])).group_by(DBSubtitleEvent.project_id).all())
         result = []
         for p in projects:
             result.append({
@@ -3151,10 +3164,10 @@ def _list_subtitle_projects_from_db():
 
 
 @app.get("/api/subtitle/projects")
-async def list_subtitle_projects():
-    """List all saved subtitle projects from DB."""
+async def list_subtitle_projects(current_user: User = Depends(get_current_user_from_token)):
+    """List the signed-in user's saved subtitle projects (admins also see legacy projects that have no owner)."""
     try:
-        projects = await asyncio.to_thread(_cached_list, "subtitle_projects", _list_subtitle_projects_from_db)
+        projects = await asyncio.to_thread(_cached_list, f"subtitle_projects:{current_user.id}", lambda: _list_subtitle_projects_from_db(current_user))
         return {"projects": projects}
     except Exception as e:
         import traceback
@@ -3162,14 +3175,14 @@ async def list_subtitle_projects():
         return {"projects": [], "error": str(e)}
 
 
-def _get_subtitle_project_details_from_db(project_id: str):
+def _get_subtitle_project_details_from_db(project_id: str, user):
     session = get_db_session()
     if not session:
         raise ValueError("Database not available")
     try:
         proj = session.query(DBSubtitleProject).filter(DBSubtitleProject.id == project_id).first()
-        if not proj:
-            return None
+        if not proj or not _can_access_project(proj, user):
+            return None  # someone else's project looks exactly like a missing one
 
         events_out = []
         for e in sorted(proj.events, key=lambda ev: ev.event_id):
@@ -3220,10 +3233,10 @@ def _get_subtitle_project_details_from_db(project_id: str):
 
 
 @app.get("/api/subtitle/projects/{project_id}")
-async def get_subtitle_project_details(project_id: str):
+async def get_subtitle_project_details(project_id: str, current_user: User = Depends(get_current_user_from_token)):
     """Retrieve full subtitle project details with all events from DB."""
     try:
-        data = await asyncio.to_thread(_get_subtitle_project_details_from_db, project_id)
+        data = await asyncio.to_thread(_get_subtitle_project_details_from_db, project_id, current_user)
         if not data:
             raise HTTPException(status_code=404, detail="Project not found")
         return data
@@ -3235,11 +3248,14 @@ async def get_subtitle_project_details(project_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-def _delete_subtitle_project_from_db(project_id: str):
+def _delete_subtitle_project_from_db(project_id: str, user):
     session = get_db_session()
     if not session:
         raise ValueError("Database not available")
     try:
+        proj = session.query(DBSubtitleProject).filter(DBSubtitleProject.id == project_id).first()
+        if proj is None or not _can_access_project(proj, user):
+            return False
         session.query(DBSubtitleProject).filter(DBSubtitleProject.id == project_id).delete()
         session.commit()
         return True
@@ -3251,12 +3267,15 @@ def _delete_subtitle_project_from_db(project_id: str):
 
 
 @app.delete("/api/subtitle/projects/{project_id}")
-async def delete_subtitle_project(project_id: str):
+async def delete_subtitle_project(project_id: str, current_user: User = Depends(get_current_user_from_token)):
     """Delete subtitle project from DB."""
     try:
-        await asyncio.to_thread(_delete_subtitle_project_from_db, project_id)
+        if not await asyncio.to_thread(_delete_subtitle_project_from_db, project_id, current_user):
+            raise HTTPException(status_code=404, detail="Project not found")
         _LIST_CACHE.clear()
         return {"status": "success", "deleted_id": project_id}
+    except HTTPException:
+        raise
     except Exception as e:
         import traceback
         traceback.print_exc()
@@ -3264,9 +3283,12 @@ async def delete_subtitle_project(project_id: str):
 
 
 @app.delete("/api/cleanup/{audio_id}")
-async def cleanup_audio_file(audio_id: str):
+async def cleanup_audio_file(audio_id: str, current_user: User = Depends(get_current_user_from_token)):
     """Delete uploaded audio file for a given session to free disk space."""
     session = active_sessions.get(audio_id)
+    owner = (session or {}).get("user_id")
+    if session and owner and owner != current_user.id and not getattr(current_user, "is_admin", False):
+        session = None  # someone else's upload: behave as if it does not exist
     if session and session.get("file_path"):
         file_path = Path(session["file_path"])
         if file_path.exists():

@@ -144,8 +144,10 @@ export function AuthProvider({ children }) {
     // Check inactivity every 30 seconds
     const interval = setInterval(checkInactivityTimeout, 30000);
 
-    // Notice when the session has expired or an admin ended it, every 5 seconds
-    const sessionCheckInterval = setInterval(async () => {
+    // Notice when the session has expired or an admin ended it: every 30 seconds while the tab is in view,
+    // and straight away when the person comes back to it
+    const checkSession = async () => {
+      if (document.visibilityState === 'hidden') return;
       try {
         const res = await fetch(`${API_BASE}/api/auth/me`, {
           headers: { Authorization: `Bearer ${token}` }
@@ -157,13 +159,15 @@ export function AuthProvider({ children }) {
       } catch (err) {
         // Ignore network hiccups
       }
-    }, 5000);
+    };
+    const sessionCheckInterval = setInterval(checkSession, 30000);
 
     // Also verify immediately when switching back to tab
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
         checkInactivityTimeout();
         recordActivity();
+        checkSession();
       }
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);

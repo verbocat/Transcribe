@@ -43,7 +43,7 @@ export default function NotificationBellDropdown() {
 
   useEffect(() => {
     fetchNotifications();
-    const interval = setInterval(fetchNotifications, 25000);
+    const interval = setInterval(() => { if (document.visibilityState !== 'hidden') fetchNotifications(); }, 60000);
     const onFocus = () => fetchNotifications();
     window.addEventListener('focus', onFocus);
     return () => {

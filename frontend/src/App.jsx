@@ -1418,12 +1418,11 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
         body: JSON.stringify({ result: payloadResult })
       });
 
-      // The backend replies 200 with {status: "error"} when the DB write fails
-      const data = res.ok ? await res.json().catch(() => ({})) : {};
+      const data = await res.json().catch(() => ({}));
       if (res.ok && data.status === 'success') {
         setDbSaveToast('Saved to cloud!');
       } else {
-        setDbSaveToast(`Save failed: ${data.message || `HTTP ${res.status}`}`);
+        setDbSaveToast(`Save failed: ${data.detail || data.message || `HTTP ${res.status}`}`);
       }
       setTimeout(() => setDbSaveToast(''), 3500);
     } catch (err) {

@@ -54,6 +54,10 @@ class DubbingError(Exception):
     """A problem the user can act on (missing key, plan limit, bad language pair)."""
 
 
+class DubbingPlanError(DubbingError):
+    """The ElevenLabs plan does not include what was asked for (e.g. instant voice cloning)."""
+
+
 ProgressCb = Callable[[str, float, str], None]
 
 
@@ -336,7 +340,11 @@ async def clone_voice(client: httpx.AsyncClient, name: str, sample_mp3: str, des
     files = [("files", (Path(sample_mp3).name, Path(sample_mp3).read_bytes(), "audio/mpeg"))]
     resp = await client.post(f"{ELEVEN_BASE}/v1/voices/add", headers=_headers(), data=data, files=files, timeout=180)
     if resp.status_code >= 400:
-        raise DubbingError(f"Voice cloning refused by ElevenLabs ({_eleven_error(resp)})")
+        why = _eleven_error(resp)
+        if resp.status_code in (401, 402, 403) or any(w in str(why).lower() for w in ("subscription", "upgrade", "plan")):
+            raise DubbingPlanError("Voice cloning is not included in the ElevenLabs plan this server uses. "
+                                   "Pick a stock voice, or ask an administrator to upgrade the plan. " + f"({why})")
+        raise DubbingError(f"Voice cloning refused by ElevenLabs ({why})")
     vid = resp.json().get("voice_id")
     if not vid:
         raise DubbingError("ElevenLabs did not return a voice id.")

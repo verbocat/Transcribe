@@ -47,6 +47,8 @@ def is_public(path: str, method: str) -> bool:
     if path in PUBLIC_EXACT or path.startswith(("/api/auth/", "/api/shares/", "/api/health", "/health")):
         return True
     # Media playback is GET/HEAD only
+    if path.startswith("/api/audio/extract_status/"):
+        return False  # job progress: needs a session like the rest of the API
     return method in ("GET", "HEAD") and path.startswith(("/api/audio/", "/api/subtitle/video/"))
 
 

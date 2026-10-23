@@ -79,7 +79,7 @@ export default function AdminOverview({ overview, hardware, onOpenTab, refreshKe
           )}
         </Panel>
 
-        <Panel title="Top users · last 30 days" action={link('accounts', 'Manage hours')} className="lg:col-span-2" pad={false}>
+        <Panel title="Top users · last 30 days" action={link('users', 'Manage hours')} className="lg:col-span-2" pad={false}>
           {!u ? <Empty>Loading…</Empty> : u.top_users.length === 0 ? <Empty>No usage in the last 30 days.</Empty> : (
             <ul className="divide-y divide-[var(--kt-s3)] border-t border-[var(--kt-s3)]">
               {u.top_users.map((r) => (

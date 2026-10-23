@@ -159,22 +159,26 @@ export default function AdminDashboard({ onBackToStudio, onOpenStudio, user: cur
     }
   }, [token]);
 
-  // Master refresh based on current tab
+  // Manual refresh (header button): reload the overview and every tab
   const refreshCurrentView = useCallback(() => {
     fetchOverview();
     setRefreshKey((k) => k + 1);
     if (activeTab === 'hardware') fetchHardwareHistory();
   }, [activeTab, fetchOverview, fetchHardwareHistory]);
 
-  // Auto-refresh polling interval (every 8 seconds)
+  // First load: the overview once (the tabs load their own data when they open)
+  useEffect(() => { fetchOverview(); }, [fetchOverview]);
+  useEffect(() => { if (activeTab === 'hardware') fetchHardwareHistory(); }, [activeTab, fetchHardwareHistory]);
+
+  // Auto-refresh: every 30 seconds, and only while this tab is in view
   useEffect(() => {
-    refreshCurrentView();
-    if (!autoRefresh) return;
+    if (!autoRefresh) return undefined;
     const timer = setInterval(() => {
+      if (document.visibilityState === 'hidden') return;
       refreshCurrentView();
-    }, 8000);
+    }, activeTab === 'hardware' ? 10000 : 30000); // live server numbers refresh faster
     return () => clearInterval(timer);
-  }, [autoRefresh, refreshCurrentView]);
+  }, [autoRefresh, activeTab, refreshCurrentView]);
 
   // ── User Management Actions ──
   const openUserDossier = async (userId) => {

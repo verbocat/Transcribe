@@ -152,6 +152,8 @@ export default function AdminAccounts({ refreshKey = 0, onOpenDossier }) {
   const [form, setForm] = useState({});
   const [copied, setCopied] = useState(false);
   const [ledger, setLedger] = useState([]);
+  const [toast, setToast] = useState('');
+  useEffect(() => { if (!toast) return undefined; const t = setTimeout(() => setToast(''), 3500); return () => clearTimeout(t); }, [toast]);
 
   const load = useCallback(async () => {
     try {
@@ -199,7 +201,7 @@ export default function AdminAccounts({ refreshKey = 0, onOpenDossier }) {
     });
   };
   const toggleBlock = (u) => run(() => api(token, `/users/${u.id}/status`, { method: 'PATCH', body: { is_blocked: !u.is_blocked } }));
-  const confirmDelete = () => run(async () => { await api(token, `/users/${dialog.user.id}`, { method: 'DELETE' }); setDialog(null); });
+  const confirmDelete = () => run(async () => { const gone = dialog.user; await api(token, `/users/${gone.id}`, { method: 'DELETE' }); setDialog(null); setToast(`Account ${gone.email} deleted.`); });
   const confirmAdmin = () => run(async () => { await api(token, `/users/${dialog.user.id}/admin`, { method: 'PUT', body: { admin: dialog.grant } }); setDialog(null); });
 
   const card = isDark ? 'bg-[var(--kt-s1)] border-[var(--kt-s3)]' : 'bg-white border-slate-200 shadow-2xs';
@@ -211,6 +213,11 @@ export default function AdminAccounts({ refreshKey = 0, onOpenDossier }) {
 
   return (
     <div className="space-y-4" data-testid="admin-accounts">
+      {toast && (
+        <div role="status" className="fixed bottom-5 left-1/2 -translate-x-1/2 z-[60] px-4 py-2.5 rounded-xl text-[13px] font-medium shadow-lg bg-emerald-600 text-white flex items-center gap-2">
+          <Check size={14} /> {toast}
+        </div>
+      )}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h2 className={`text-base font-bold ${strong}`}>Accounts &amp; Minutes</h2>

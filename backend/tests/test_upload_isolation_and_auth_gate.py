@@ -57,7 +57,10 @@ def test_signed_out_requests_are_refused_except_public_routes(main_app):
     for method, path in (("post", "/api/upload"), ("post", "/api/subtitle/upload"), ("get", "/api/projects"),
                          ("get", "/api/subtitle/projects"), ("post", "/api/export"), ("post", "/api/subtitle/lint"),
                          ("post", "/api/subtitle/qc"), ("post", "/api/lint"), ("get", "/api/subtitle/waveform/abc"),
-                         ("post", "/api/subtitle/export"), ("get", "/api/centroid/status")):
+                         ("post", "/api/subtitle/export"), ("get", "/api/centroid/status"),
+                         ("get", "/api/audio/extract_status/qa-nonexistent"), ("post", "/api/projects/save"),
+                         ("delete", "/api/projects/abc"), ("delete", "/api/subtitle/projects/abc"),
+                         ("post", "/api/subtitle/projects/save"), ("delete", "/api/cleanup/abc")):
         res = getattr(client, method)(path)
         assert res.status_code == 401, (path, res.status_code)
     assert client.get("/api/health").status_code == 200

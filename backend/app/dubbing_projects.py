@@ -396,6 +396,8 @@ async def clone_speaker(pid: str, name: str, current_user: User = Depends(get_cu
             if sp["voice"].get("cloned_id"):
                 await eng.delete_voice(client, sp["voice"]["cloned_id"])
             vid = await eng.clone_voice(client, f"LT-{pid[:6]}-{name}", str(sample), f"{sp.get('gender')}, {sp.get('age_range')}, {sp.get('accent')}")
+    except eng.DubbingPlanError as exc:
+        raise HTTPException(status_code=424, detail=str(exc))
     except eng.DubbingError as exc:
         raise HTTPException(status_code=502, detail=str(exc))
     sp["voice"].update(mode="clone", voice_id=vid, cloned_id=vid, voice_name="Cloned voice")
