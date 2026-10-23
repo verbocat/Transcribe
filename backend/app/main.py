@@ -277,6 +277,11 @@ async def _hardware_monitor_loop():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown lifecycle handler."""
+    try:  # default anyio pool is 40 threads; DB and export work queued behind it under load
+        import anyio.to_thread
+        anyio.to_thread.current_default_thread_limiter().total_tokens = 120
+    except Exception:
+        pass
     _cleanup_old_uploads()
     _evict_expired_sessions()
     init_db()
@@ -641,6 +646,22 @@ async def transcribe_audio(
     return result
 
 
+_LIST_CACHE: dict = {}
+_LIST_CACHE_TTL = 10.0
+
+
+def _cached_list(key: str, fn):
+    """Short-lived cache for the project list routes: concurrent users share one DB read.
+    Save/delete routes clear it, so a user's own change shows up immediately."""
+    hit = _LIST_CACHE.get(key)
+    now = time.monotonic()
+    if hit and now - hit[0] < _LIST_CACHE_TTL:
+        return hit[1]
+    val = fn()
+    _LIST_CACHE[key] = (now, val)
+    return val
+
+
 def _list_projects_from_db():
     session = get_db_session()
     if not session:
@@ -674,7 +695,7 @@ def _list_projects_from_db():
 async def list_projects():
     """List all saved projects from Neon PostgreSQL DB."""
     try:
-        projects = await asyncio.to_thread(_list_projects_from_db)
+        projects = await asyncio.to_thread(_cached_list, "projects", _list_projects_from_db)
         return {"projects": projects}
     except Exception as e:
         return {"projects": [], "error": str(e)}
@@ -839,6 +860,7 @@ async def save_project(payload: dict):
     """Save or update project edits into Neon PostgreSQL DB."""
     try:
         proj_id = await asyncio.to_thread(_save_project_to_db, payload)
+        _LIST_CACHE.clear()
         return {"status": "success", "project_id": proj_id}
     except Exception as e:
         return {"status": "error", "message": str(e)}
@@ -865,6 +887,7 @@ async def delete_project(project_id: str):
     """Delete project from Neon DB."""
     try:
         await asyncio.to_thread(_delete_project_from_db, project_id)
+        _LIST_CACHE.clear()
         return {"status": "success", "deleted_id": project_id}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -3117,6 +3140,7 @@ async def save_subtitle_project(payload: dict):
     """Save or update subtitle project into DB."""
     try:
         proj_id = await asyncio.to_thread(_save_subtitle_project_to_db, payload)
+        _LIST_CACHE.clear()
         return {"status": "success", "project_id": proj_id}
     except Exception as e:
         import traceback
@@ -3156,7 +3180,7 @@ def _list_subtitle_projects_from_db():
 async def list_subtitle_projects():
     """List all saved subtitle projects from DB."""
     try:
-        projects = await asyncio.to_thread(_list_subtitle_projects_from_db)
+        projects = await asyncio.to_thread(_cached_list, "subtitle_projects", _list_subtitle_projects_from_db)
         return {"projects": projects}
     except Exception as e:
         import traceback
@@ -3259,6 +3283,7 @@ async def delete_subtitle_project(project_id: str):
     """Delete subtitle project from DB."""
     try:
         await asyncio.to_thread(_delete_subtitle_project_from_db, project_id)
+        _LIST_CACHE.clear()
         return {"status": "success", "deleted_id": project_id}
     except Exception as e:
         import traceback
