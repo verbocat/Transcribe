@@ -944,7 +944,7 @@ def _prune_transcribe_jobs():
         _transcribe_jobs.pop(jid, None)
 
 
-async def _run_transcribe_job(job_id, target_path, original_media_path, language, script, elevenlabs_api_key, needs_extract=True, cancel_id=None, meter=None):
+async def _run_transcribe_job(job_id, target_path, original_media_path, language, script, elevenlabs_api_key, needs_extract=True, cancel_id=None, meter=None, owner_id=None):
     job = _transcribe_jobs[job_id]
     # Registered under the id the browser sent as X-Job-Id (or the poll id), so POST /api/jobs/{id}/cancel stops FFmpeg and the run
     scope_id = cancel_id or job_id
@@ -1004,7 +1004,7 @@ async def _run_transcribe_job(job_id, target_path, original_media_path, language
         result.filename = Path(target_path).name
         active_sessions[result.audio_id] = {"filename": result.filename, "file_path": target_path, "result": result}
         set_state(stage="saving", percent=99.0, detail="Saving the project")
-        await asyncio.to_thread(_save_transcription_to_db, result, target_path, current_user.id)
+        await asyncio.to_thread(_save_transcription_to_db, result, target_path, owner_id)
         if meter is not None:
             meter.finish(True)
         set_state(stage="done", percent=100.0, detail="Done", result=result.model_dump(mode="json"))
@@ -1080,7 +1080,7 @@ async def transcribe_audio_async(
 
     job_id = uuid.uuid4().hex
     _transcribe_jobs[job_id] = {"stage": "queued", "percent": 0.0, "updated": time.time()}
-    asyncio.create_task(_run_transcribe_job(job_id, target_path, original_path or target_path, language, script, elevenlabs_api_key, needs_extract, cancel_id=request.headers.get("x-job-id"), meter=meter))
+    asyncio.create_task(_run_transcribe_job(job_id, target_path, original_path or target_path, language, script, elevenlabs_api_key, needs_extract, cancel_id=request.headers.get("x-job-id"), meter=meter, owner_id=current_user.id))
     return {"job_id": job_id}
 
 
