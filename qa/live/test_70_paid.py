@@ -83,7 +83,8 @@ def test_upload_returns_audio_id(audio):
 
 
 def test_audio_stream_own_file(client, audio):
-    r = client.get("/api/audio/{filename}", params={"filename": audio["audio_id"]}, stream=True)
+    # lookups are literal since 85e71f3, so ask for the exact stored name
+    r = client.get("/api/audio/{filename}", params={"filename": audio["filename"]}, stream=True)
     expect(r, 200)
     r.close()
 

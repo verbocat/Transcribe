@@ -48,6 +48,12 @@ def test_preference_unknown_key_404(api):
     expect(api.get("/api/auth/preferences/{key}", params={"key": "qa_unknown_key"}), 404)
 
 
+def test_centroid_status(api):
+    r = api.get("/api/centroid/status")
+    expect(r, 200)
+    assert isinstance(r.json(), dict), "centroid status is not a JSON object"
+
+
 # ── dubbing ─────────────────────────────────────────────────────────────────────────────
 def test_dubbing_config(api):
     r = api.get("/api/dubbing/config")

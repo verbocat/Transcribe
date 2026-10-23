@@ -37,10 +37,9 @@ def test_security_headers(client):
     assert r.headers.get("Referrer-Policy"), "Referrer-Policy header missing"
 
 
-def test_centroid_status(client):
-    r = client.get("/api/centroid/status", auth=False)
-    expect(r, 200)
-    assert isinstance(r.json(), dict), "centroid status is not a JSON object"
+def test_centroid_status_requires_login(client):
+    # Since the role gate (85e71f3) every route outside /, health, /api/auth and /api/shares needs a login.
+    expect(client.get("/api/centroid/status", auth=False), 401)
 
 
 def test_bot_challenge(client):
