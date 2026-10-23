@@ -2537,6 +2537,7 @@ def _resolve_auto_source(body: dict, texts: list, payload: dict) -> None:
 async def centroid_translate(payload: dict, current_user: User = Depends(get_current_user_from_token)):
     """Send SRT/events to Centroid and return translated SRT(s) per target language."""
     from app import centroid_client
+    centroid_client.for_user(current_user)
     if not (payload.get("srt") or payload.get("cues") or payload.get("events")):
         raise HTTPException(status_code=400, detail="Provide 'srt' or 'events'.")
     if not (payload.get("target_langs") or payload.get("target_lang")):
@@ -2658,6 +2659,7 @@ async def centroid_analyze(payload: dict, current_user: User = Depends(get_curre
     _ai_rate_limit(current_user.id)
     access_policy.require(current_user, "can_ai_optimize")
     from app import centroid_client
+    centroid_client.for_user(current_user)
     cues = payload.get("cues") or payload.get("events") or []
     if not cues:
         raise HTTPException(status_code=400, detail="There are no subtitles to analyse.")
@@ -2704,6 +2706,7 @@ async def centroid_qc(payload: dict, current_user: User = Depends(get_current_us
     from app import centroid_client
     from app.subtitle_qc import run_local_qc, merge_qc
     access_policy.require(current_user, "can_ai_optimize")
+    centroid_client.for_user(current_user)
     cues = payload.get("cues") or []
     if not cues or not payload.get("target_lang"):
         raise HTTPException(status_code=400, detail="Provide 'cues' (source + target) and 'target_lang'.")

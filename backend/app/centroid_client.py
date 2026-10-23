@@ -1,5 +1,6 @@
 """Thin async client for the Centroid public API (subtitle translation + linguistic QC)."""
-from typing import Any, Dict, List
+import contextvars
+from typing import Any, Dict, List, Optional
 
 import httpx
 from fastapi import HTTPException
@@ -19,8 +20,22 @@ def _require_config() -> None:
         )
 
 
+# Email of the Transcribe user the current request is for. Centroid records it (X-End-User-Email) on its AI usage
+# and word logs, so its reports show who translated, not only the owner of the shared API key.
+_end_user: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("centroid_end_user", default=None)
+
+
+def for_user(user) -> None:
+    """Call at the start of a request: every Centroid call it makes is attributed to this user."""
+    email = (getattr(user, "email", None) or "").strip().lower()
+    _end_user.set(email or None)
+
+
 def _headers() -> Dict[str, str]:
-    return {"x-api-key": CENTROID_API_KEY, "Content-Type": "application/json"}
+    headers = {"x-api-key": CENTROID_API_KEY, "Content-Type": "application/json"}
+    if _end_user.get():
+        headers["X-End-User-Email"] = _end_user.get()
+    return headers
 
 
 async def post(path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
