@@ -2992,6 +2992,11 @@ def _save_subtitle_project_to_db(payload: dict):
         proj_id = project_data.get("video_id") or str(uuid.uuid4())[:8]
         filename = project_data.get("filename") or "video_subtitle.mp4"
 
+        raw_events = project_data.get("events", [])
+        # subtitle_projects has no metadata column; keep what its own columns hold
+        metadata = project_data.get("metadata") or {}
+        width, height = int(metadata.get("width") or 0), int(metadata.get("height") or 0)
+
         db_proj = session.query(DBSubtitleProject).filter(DBSubtitleProject.id == proj_id).first()
         if not db_proj:
             db_proj = DBSubtitleProject(
@@ -2999,11 +3004,13 @@ def _save_subtitle_project_to_db(payload: dict):
                 filename=filename,
                 language=project_data.get("language", "en"),
                 content_type=project_data.get("content_type", "adult"),
-                duration=float(project_data.get("metadata", {}).get("duration", 0.0)),
+                frame_rate=float(metadata.get("frame_rate", project_data.get("frame_rate", 24.0))),
+                audio_duration=float(metadata.get("duration", 0.0)),
+                video_resolution=f"{width}x{height}" if width and height else "",
+                total_events=len(raw_events),
                 compliance_score=float(project_data.get("compliance_score", 100.0)),
                 total_errors=int(project_data.get("total_errors", 0)),
                 total_warnings=int(project_data.get("total_warnings", 0)),
-                video_metadata=json.dumps(project_data.get("metadata", {})),
                 shot_changes=json.dumps(project_data.get("shot_changes", []))
             )
             session.add(db_proj)
@@ -3014,11 +3021,10 @@ def _save_subtitle_project_to_db(payload: dict):
             db_proj.compliance_score = float(project_data.get("compliance_score", db_proj.compliance_score))
             db_proj.total_errors = int(project_data.get("total_errors", db_proj.total_errors))
             db_proj.total_warnings = int(project_data.get("total_warnings", db_proj.total_warnings))
+            db_proj.total_events = len(raw_events)
             session.query(DBSubtitleEvent).filter(DBSubtitleEvent.project_id == db_proj.id).delete()
 
-        raw_events = project_data.get("events", [])
         for ev in raw_events:
-            qc_errors_data = json.dumps(ev.get("qc_errors", []), ensure_ascii=False)
             db_ev = DBSubtitleEvent(
                 project_id=proj_id,
                 event_id=int(ev.get("event_id", 1)),
@@ -3026,7 +3032,7 @@ def _save_subtitle_project_to_db(payload: dict):
                 end_time=float(ev.get("end_time", 2.0)),
                 duration=float(ev.get("duration", 2.0)),
                 text=str(ev.get("text", "")),
-                qc_errors_data=qc_errors_data,
+                qc_errors=json.dumps(ev.get("qc_errors", []), ensure_ascii=False),
                 is_valid=bool(ev.get("is_valid", True))
             )
             session.add(db_ev)
@@ -3068,7 +3074,7 @@ def _list_subtitle_projects_from_db():
                 "filename": p.filename,
                 "language": p.language,
                 "content_type": p.content_type,
-                "duration": p.duration,
+                "duration": p.audio_duration,
                 "compliance_score": p.compliance_score,
                 "total_errors": p.total_errors,
                 "total_warnings": p.total_warnings,
@@ -3103,11 +3109,11 @@ def _get_subtitle_project_details_from_db(project_id: str):
             return None
 
         events_out = []
-        for e in proj.events:
+        for e in sorted(proj.events, key=lambda ev: ev.event_id):
             qc_errors = []
-            if e.qc_errors_data:
+            if e.qc_errors:
                 try:
-                    qc_errors = json.loads(e.qc_errors_data)
+                    qc_errors = json.loads(e.qc_errors)
                 except Exception:
                     pass
 
@@ -3121,12 +3127,10 @@ def _get_subtitle_project_details_from_db(project_id: str):
                 "is_valid": e.is_valid
             })
 
-        metadata_parsed = {}
-        if proj.video_metadata:
-            try:
-                metadata_parsed = json.loads(proj.video_metadata)
-            except Exception:
-                pass
+        metadata_parsed = {"duration": proj.audio_duration, "frame_rate": proj.frame_rate}
+        width, _, height = (proj.video_resolution or "").partition("x")
+        if width.isdigit() and height.isdigit():
+            metadata_parsed.update(width=int(width), height=int(height))
                 
         shot_changes_parsed = []
         if proj.shot_changes:
@@ -3140,7 +3144,7 @@ def _get_subtitle_project_details_from_db(project_id: str):
             "filename": proj.filename,
             "language": proj.language,
             "content_type": proj.content_type,
-            "duration": proj.duration,
+            "duration": proj.audio_duration,
             "compliance_score": proj.compliance_score,
             "total_errors": proj.total_errors,
             "total_warnings": proj.total_warnings,
