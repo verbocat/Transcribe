@@ -188,23 +188,9 @@ function AppContent() {
       const path = window.location.pathname.toLowerCase();
 
       if (path.includes('login') || path.includes('signup') || path.includes('verify')) {
-        if (isAdminUser) {
-          setActiveTool('admin');
-          window.history.replaceState({ tool: 'admin' }, '', '/admin');
-        } else {
-          setActiveTool(null);
-          window.history.replaceState({ tool: null }, '', '/');
-        }
-      } else if (isAdminUser && (!activeTool || activeTool === 'home')) {
-        const currentLocTool = getToolFromLocation();
-        if (currentLocTool === 'subtitle' || currentLocTool === 'transcribe' || currentLocTool === 'dubbing') {
-          setActiveTool(currentLocTool);
-        } else {
-          setActiveTool('admin');
-          if (window.location.pathname !== '/admin') {
-            window.history.replaceState({ tool: 'admin' }, '', '/admin');
-          }
-        }
+        // administrators land on the same home page as everyone else; the Admin button opens the panel
+        setActiveTool(null);
+        window.history.replaceState({ tool: null }, '', '/');
       } else if (!isAdminUser && activeTool === 'admin') {
         setIsNotFound(true);
         setActiveTool(null);
@@ -228,7 +214,6 @@ function AppContent() {
       // Record initial authenticated state in history
       if (!window.history.state || window.history.state.tool === undefined) {
         let initialTool = getToolFromLocation();
-        if (isAdminUser && !initialTool) initialTool = 'admin';
         const targetUrl = initialTool ? `/${initialTool}` : '/';
         window.history.replaceState({ tool: initialTool }, '', targetUrl);
       }
@@ -241,11 +226,7 @@ function AppContent() {
       if (path.includes('login') || path.includes('signup') || path.includes('verify')) {
         if (isAuthenticated) {
           setShowAuthScreen(false);
-          if (isAdminUser) {
-            setActiveTool('admin');
-          } else {
-            setActiveTool(null);
-          }
+          setActiveTool(null);
           return;
         }
         setShowAuthScreen(true);
@@ -255,13 +236,8 @@ function AppContent() {
 
       // Popping to root Landing Page
       if (path === '' || path === '/') {
-        if (isAdminUser) {
-          setActiveTool('admin');
-          window.history.replaceState({ tool: 'admin' }, '', '/admin');
-        } else {
-          setShowAuthScreen(false);
-          setActiveTool(null);
-        }
+        setShowAuthScreen(false);
+        setActiveTool(null);
         return;
       }
 

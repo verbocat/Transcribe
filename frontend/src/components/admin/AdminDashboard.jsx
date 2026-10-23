@@ -81,7 +81,7 @@ export default function AdminDashboard({ onBackToStudio, onOpenStudio, user: cur
 
   const handlePermitUser = async (targetUser) => {
     try {
-      const res = await fetch(`${API_BASE}/api/admin/users/${targetUser.id}/status`, {
+      const res = await fetch(`${API_BASE}/api/admin/users/${targetUser.id}/enable`, {
         method: 'PATCH',
         headers: authHeaders,
         body: JSON.stringify({ is_blocked: false, is_verified: true })
@@ -103,7 +103,7 @@ export default function AdminDashboard({ onBackToStudio, onOpenStudio, user: cur
   const handleRestrictUser = async (targetUser) => {
     if (!confirm(`Are you sure you want to restrict account access for ${targetUser.name || targetUser.email}?`)) return;
     try {
-      const res = await fetch(`${API_BASE}/api/admin/users/${targetUser.id}/status`, {
+      const res = await fetch(`${API_BASE}/api/admin/users/${targetUser.id}/disable`, {
         method: 'PATCH',
         headers: authHeaders,
         body: JSON.stringify({ is_blocked: true })
@@ -123,9 +123,9 @@ export default function AdminDashboard({ onBackToStudio, onOpenStudio, user: cur
   };
 
   // ── Fetch Overview & Live Hardware ──
-  const fetchOverview = useCallback(async () => {
+  const fetchOverview = useCallback(async (manual = false) => {
     try {
-      const res = await fetch(`${API_BASE}/api/admin/overview`, { headers: authHeaders });
+      const res = await fetch(`${API_BASE}/api/admin/overview${manual === true ? '/refresh' : ''}`, { headers: authHeaders });
       if (!res.ok) {
         if (res.status === 403) {
           setError('Access restricted: Enterprise Admin Command Center is reserved exclusively for the Super Administrator (Divyanshu Singh Chouhan).');
@@ -160,8 +160,8 @@ export default function AdminDashboard({ onBackToStudio, onOpenStudio, user: cur
   }, [token]);
 
   // Manual refresh (header button): reload the overview and every tab
-  const refreshCurrentView = useCallback(() => {
-    fetchOverview();
+  const refreshCurrentView = useCallback((manual = false) => {
+    fetchOverview(manual === true);
     setRefreshKey((k) => k + 1);
     if (activeTab === 'hardware') fetchHardwareHistory();
   }, [activeTab, fetchOverview, fetchHardwareHistory]);
@@ -259,6 +259,9 @@ export default function AdminDashboard({ onBackToStudio, onOpenStudio, user: cur
           </div>
 
           <div className="flex items-center gap-1.5">
+            <button type="button" onClick={() => openStudio(null)} className={studioBtn} title="Back to the home page">
+              Home
+            </button>
             <button type="button" onClick={() => openStudio('transcribe')} className={studioBtn} title="Open Transcribe Studio">
               <AudioLines size={14} /> <span className="hidden md:inline">Transcribe Studio</span>
             </button>
@@ -266,7 +269,7 @@ export default function AdminDashboard({ onBackToStudio, onOpenStudio, user: cur
               <Captions size={14} /> <span className="hidden md:inline">Subtitle Studio</span>
             </button>
             <span className="w-px h-5 bg-[var(--kt-s3)] mx-1.5" aria-hidden="true" />
-            <button type="button" onClick={refreshCurrentView} className={ghostBtn} title={`Refresh · last updated ${lastRefreshedAt.toLocaleTimeString()}`} aria-label="Refresh">
+            <button type="button" onClick={() => refreshCurrentView(true)} className={ghostBtn} title={`Refresh · last updated ${lastRefreshedAt.toLocaleTimeString()}`} aria-label="Refresh">
               <RefreshCw size={14} className={isLoading ? 'animate-spin' : ''} />
             </button>
             <ThemeToggle />

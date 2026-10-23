@@ -60,7 +60,12 @@ def test_signed_out_requests_are_refused_except_public_routes(main_app):
                          ("post", "/api/subtitle/export"), ("get", "/api/centroid/status"),
                          ("get", "/api/audio/extract_status/qa-nonexistent"), ("post", "/api/projects/save"),
                          ("delete", "/api/projects/abc"), ("delete", "/api/subtitle/projects/abc"),
-                         ("post", "/api/subtitle/projects/save"), ("delete", "/api/cleanup/abc")):
+                         ("post", "/api/subtitle/projects/save"), ("delete", "/api/cleanup/abc"),
+                         # admin routes named for the action (what the browser Network tab shows)
+                         ("get", "/api/admin/users/refresh"), ("get", "/api/admin/overview/refresh"),
+                         ("delete", "/api/admin/users/x/delete"), ("patch", "/api/admin/users/x/edit"),
+                         ("patch", "/api/admin/users/x/disable"), ("patch", "/api/admin/users/x/enable"),
+                         ("patch", "/api/admin/users/x/role")):
         res = getattr(client, method)(path)
         assert res.status_code == 401, (path, res.status_code)
     assert client.get("/api/health").status_code == 200

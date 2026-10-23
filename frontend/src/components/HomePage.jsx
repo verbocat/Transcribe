@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Mic, Subtitles, AudioLines, UploadCloud, ArrowRight, X, FileAudio, FileVideo, Palette, FolderOpen,
+  Mic, Subtitles, AudioLines, UploadCloud, ArrowRight, X, FileAudio, FileVideo, Palette, FolderOpen, ShieldCheck,
 } from 'lucide-react';
 import BrandLogo from './BrandLogo';
 import CaptionStage from './CaptionStage';
@@ -235,6 +235,12 @@ export default function HomePage({ onSelect, user, onLogout, onOpenAuth }) {
           </button>
           {user ? (
             <>
+              {user.is_admin && (
+                <button type="button" onClick={() => onSelect?.('admin')} title="Open the admin panel"
+                  className="h-9 px-3 rounded-lg inline-flex items-center gap-1.5 text-[12.5px] font-medium text-[var(--kt-text)] border border-[var(--kt-s4)] hover:bg-[var(--kt-s3)] transition-colors cursor-pointer">
+                  <ShieldCheck size={14} /> Admin
+                </button>
+              )}
               <NotificationBellDropdown />
               <AccountMenuDropdown user={user} onOpenLogoutModal={onLogout} />
             </>

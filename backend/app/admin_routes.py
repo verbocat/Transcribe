@@ -138,6 +138,7 @@ def claim_initial_admin(
 # ==============================================================================
 # 1. Overview & High-Level KPIs
 # ==============================================================================
+@admin_router.get("/overview/refresh")
 @admin_router.get("/overview")
 def get_admin_overview(
     admin: User = Depends(get_current_admin_user),
@@ -226,6 +227,7 @@ def get_admin_overview(
 # ==============================================================================
 # 2. User Intelligence & Management
 # ==============================================================================
+@admin_router.get("/users/refresh")
 @admin_router.get("/users")
 def list_users(
     query: Optional[str] = None,
@@ -493,6 +495,9 @@ class UpdateUserStatusRequest(BaseModel):
     is_verified: Optional[bool] = None
     monthly_budget_usd: Optional[float] = None
 
+@admin_router.patch("/users/{user_id}/disable")
+@admin_router.patch("/users/{user_id}/enable")
+@admin_router.patch("/users/{user_id}/role")
 @admin_router.patch("/users/{user_id}/status")
 def update_user_status(
     user_id: str,
@@ -1035,6 +1040,7 @@ class UpdateUserRequest(BaseModel):
     reset_password: bool = False
 
 
+@admin_router.patch("/users/{user_id}/edit")
 @admin_router.patch("/users/{user_id}/profile")
 def edit_user(user_id: str, payload: UpdateUserRequest, request: Request, response: Response, admin: User = Depends(admin_write_guard), db: Session = Depends(get_auth_db)):
     target = db.query(User).filter(User.id == user_id).first()
@@ -1157,6 +1163,7 @@ def set_user_access(user_id: str, payload: AccessRequest, request: Request, admi
     return {"success": True, "changes": changes, "user": row}
 
 
+@admin_router.delete("/users/{user_id}/delete")
 @admin_router.delete("/users/{user_id}")
 def delete_user(user_id: str, request: Request, admin: User = Depends(admin_write_guard), db: Session = Depends(get_auth_db)):
     target = db.query(User).filter(User.id == user_id).first()

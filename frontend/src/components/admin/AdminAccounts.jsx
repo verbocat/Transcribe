@@ -155,9 +155,10 @@ export default function AdminAccounts({ refreshKey = 0, onOpenDossier }) {
   const [toast, setToast] = useState('');
   useEffect(() => { if (!toast) return undefined; const t = setTimeout(() => setToast(''), 3500); return () => clearTimeout(t); }, [toast]);
 
-  const load = useCallback(async () => {
+  // `manual` is the Refresh button: it calls .../users/refresh so the request is named for what was clicked
+  const load = useCallback(async (manual = false) => {
     try {
-      const data = await api(token, '/users?limit=200');
+      const data = await api(token, manual === true ? '/users/refresh?limit=200' : '/users?limit=200');
       setUsers(data.users || []);
       setError('');
     } catch (e) { setError(e.message); }
@@ -194,14 +195,14 @@ export default function AdminAccounts({ refreshKey = 0, onOpenDossier }) {
     e.preventDefault();
     run(async () => {
       const body = { name: form.name, email: form.email, ...(reset ? { reset_password: true } : form.newPassword ? { new_password: form.newPassword } : {}) };
-      const data = await api(token, `/users/${dialog.user.id}/profile`, { method: 'PATCH', body });
+      const data = await api(token, `/users/${dialog.user.id}/edit`, { method: 'PATCH', body });
       const roleBefore = dialog.user.role === 'linguist' ? 'linguist' : 'coordinator';
-      if (!dialog.user.is_admin && form.role && form.role !== roleBefore) await api(token, `/users/${dialog.user.id}/status`, { method: 'PATCH', body: { role: form.role } });
+      if (!dialog.user.is_admin && form.role && form.role !== roleBefore) await api(token, `/users/${dialog.user.id}/role`, { method: 'PATCH', body: { role: form.role } });
       setDialog(data.generated_password ? { type: 'secret', user: data.user, password: data.generated_password } : null);
     });
   };
-  const toggleBlock = (u) => run(() => api(token, `/users/${u.id}/status`, { method: 'PATCH', body: { is_blocked: !u.is_blocked } }));
-  const confirmDelete = () => run(async () => { const gone = dialog.user; await api(token, `/users/${gone.id}`, { method: 'DELETE' }); setDialog(null); setToast(`Account ${gone.email} deleted.`); });
+  const toggleBlock = (u) => run(() => api(token, `/users/${u.id}/${u.is_blocked ? 'enable' : 'disable'}`, { method: 'PATCH', body: { is_blocked: !u.is_blocked } }));
+  const confirmDelete = () => run(async () => { const gone = dialog.user; await api(token, `/users/${gone.id}/delete`, { method: 'DELETE' }); setDialog(null); setToast(`Account ${gone.email} deleted.`); });
   const confirmAdmin = () => run(async () => { await api(token, `/users/${dialog.user.id}/admin`, { method: 'PUT', body: { admin: dialog.grant } }); setDialog(null); });
 
   const card = isDark ? 'bg-[var(--kt-s1)] border-[var(--kt-s3)]' : 'bg-white border-slate-200 shadow-2xs';
@@ -224,7 +225,7 @@ export default function AdminAccounts({ refreshKey = 0, onOpenDossier }) {
           <p className={`text-xs ${muted}`}>Create accounts on any email domain and set how many minutes each person can use, for transcription and translation in any mix. Limits are enforced on the server.</p>
         </div>
         <div className="flex items-center gap-2">
-          <button type="button" onClick={load} className={`p-2 rounded-lg border cursor-pointer ${btn}`} title="Refresh" aria-label="Refresh"><RefreshCw size={14} /></button>
+          <button type="button" onClick={() => load(true)} className={`p-2 rounded-lg border cursor-pointer ${btn}`} title="Refresh" aria-label="Refresh"><RefreshCw size={14} /></button>
           <button type="button" onClick={openCreate} className={`px-3 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 cursor-pointer ${primary}`}><UserPlus size={14} /> Create account</button>
         </div>
       </div>

@@ -3025,7 +3025,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
       {layout.showHeader && (
       <header className="shrink-0 z-40 h-12 px-3 flex items-center gap-2 border-b border-[var(--ss-line)] bg-[var(--ss-bg)] select-none">
         {/* Left: back, brand, menus */}
-        <div className="flex items-center gap-1.5 min-w-0">
+        <div className="flex items-center gap-1.5 shrink-0">
           <IconButton icon={ArrowLeft} label="Back to hub" onClick={onBackToHome} />
           <div className="flex items-center gap-2 pl-1 pr-2">
             <BrandLogo size={24} />
@@ -3044,12 +3044,12 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
         </div>
 
         {/* Centre: media file */}
-        <div className="flex-1 min-w-0 flex justify-center px-2">
+        <div className="flex-1 min-w-0 overflow-hidden flex justify-center px-2">
           {layout.showMediaPill && (
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              className="h-8 max-w-[420px] min-w-0 px-2.5 rounded-lg inline-flex items-center gap-2 border border-[var(--ss-line)] bg-[var(--ss-raised)] hover:bg-[var(--ss-hover)] hover:border-[var(--ss-muted)] transition-colors cursor-pointer"
+              className="h-8 max-w-[420px] min-w-0 px-2.5 rounded-lg hidden sm:inline-flex items-center gap-2 border border-[var(--ss-line)] bg-[var(--ss-raised)] hover:bg-[var(--ss-hover)] hover:border-[var(--ss-muted)] transition-colors cursor-pointer"
               title={selectedFile ? `${selectedFile.name} (click to change)` : 'Open a video or audio file'}
             >
               <span className={`h-[18px] px-1.5 rounded inline-flex items-center text-[10px] font-bold shrink-0 border ${isAudioFile ? 'text-[var(--ss-accent)] border-[var(--ss-accent)]/40 bg-[var(--ss-accent)]/10' : 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10'}`}>
@@ -3059,7 +3059,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
               <ChevronDown size={13} className="text-[var(--ss-faint)] shrink-0" />
             </button>
           )}
-          <label className="ml-2 h-8 shrink-0 inline-flex items-center gap-1.5 text-[11.5px] text-[var(--ss-muted)]" title="The language spoken in the media. Pick it so transcription is exact; Auto-detect lets the engine decide.">
+          <label className="sm:ml-2 h-8 min-w-0 inline-flex items-center gap-1.5 text-[11.5px] text-[var(--ss-muted)]" title="The language spoken in the media. Pick it so transcription is exact; Auto-detect lets the engine decide.">
             <Languages size={13} className="shrink-0" />
             <span className="hidden lg:inline">Spoken</span>
             <select
@@ -3067,7 +3067,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
               disabled={isGenerating}
               onChange={(e) => handleSpokenLangChange(e.target.value)}
               aria-label="Spoken language"
-              className="h-8 max-w-[160px] rounded-lg border border-[var(--ss-line)] bg-[var(--ss-raised)] text-[var(--ss-text)] text-[12px] px-2 cursor-pointer outline-none focus:border-[var(--ss-accent)]"
+              className="h-8 max-w-[110px] sm:max-w-[160px] min-w-0 rounded-lg border border-[var(--ss-line)] bg-[var(--ss-raised)] text-[var(--ss-text)] text-[12px] px-2 cursor-pointer outline-none focus:border-[var(--ss-accent)]"
             >
               {SUBTITLE_SOURCE_LANGUAGES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
             </select>
