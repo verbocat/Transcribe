@@ -361,7 +361,7 @@ def test_admin_creates_user_on_any_domain_sets_hours_and_user_sees_them(main_app
     db = SessionLocal()
     assert db.query(UsageLedger).filter(UsageLedger.user_id == uid).count() >= 2
     db.close()
-    assert client.post("/api/auth/login", json={"email": email, "password": pwd}).status_code == 404
+    assert client.post("/api/auth/login", json={"email": email, "password": pwd}).status_code == 401
 
 
 def test_admin_accounts_are_protected(main_app, admin_env):

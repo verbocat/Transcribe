@@ -95,32 +95,29 @@ def _evict_expired_sessions():
 _client_request_history = defaultdict(list)
 RATE_LIMIT_PER_MINUTE = 300  # Generous rate limit (300 req/min) to accommodate sliced chunk uploads and telemetry
 
-# X-Forwarded-For is client-controlled unless it was added by our own reverse proxy, so it is honoured only when
-# the TCP peer is one of these (comma-separated IPs; the default is a proxy on the same machine, e.g. nginx).
-TRUSTED_PROXIES = {p.strip() for p in os.getenv("TRUSTED_PROXIES", "127.0.0.1,::1").split(",") if p.strip()}
+from app.client_ip import TRUSTED_PROXIES, get_client_ip  # noqa: E402,F401
 
-def get_client_ip(request: Request) -> str:
-    """Client IP for rate limiting. Behind our own proxy it is the last X-Forwarded-For hop (the one the proxy
-    appended); a direct caller's header is ignored."""
-    peer = request.client.host if request.client else "127.0.0.1"
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded and peer in TRUSTED_PROXIES:
-        hops = [h.strip() for h in forwarded.split(",") if h.strip()]
-        if hops:
-            return hops[-1]
-    return peer
+_rate_limit_last_sweep = 0.0
+
 
 def _check_rate_limit(client_ip: str):
     """BUG-W1: Enforce sliding window rate limit per client IP."""
+    global _rate_limit_last_sweep
     now = time.time()
-    history = _client_request_history[client_ip]
-    _client_request_history[client_ip] = [t for t in history if now - t < 60]
-    if len(_client_request_history[client_ip]) >= RATE_LIMIT_PER_MINUTE:
+    if now - _rate_limit_last_sweep > 60:
+        # drop IPs that have been silent for a minute so the table does not grow with every address ever seen
+        _rate_limit_last_sweep = now
+        for ip in [ip for ip, hist in _client_request_history.items() if not hist or now - hist[-1] >= 60]:
+            _client_request_history.pop(ip, None)
+    history = [t for t in _client_request_history.get(client_ip, ()) if now - t < 60]
+    if len(history) >= RATE_LIMIT_PER_MINUTE:
+        _client_request_history[client_ip] = history
         raise HTTPException(
             status_code=429,
             detail="Rate limit exceeded. Maximum 300 requests per minute allowed."
         )
-    _client_request_history[client_ip].append(now)
+    history.append(now)
+    _client_request_history[client_ip] = history
 
 
 def _cleanup_old_uploads():
@@ -404,6 +401,15 @@ async def health_check():
 MAX_UPLOAD_SIZE_BYTES = 200 * 1024 * 1024  # 200 MB limit
 
 
+def _clean_upload_name(name: Optional[str]) -> str:
+    """Client-supplied filename reduced to a safe single path component: no directories, no odd characters."""
+    base = (name or "").replace("\\", "/").split("/")[-1].strip()
+    suffix = Path(base).suffix.lower()
+    stem = re.sub(r'_+', '_', re.sub(r'[^\w\.-]', '_', Path(base).stem)).strip("._") or "upload"
+    suffix = re.sub(r'[^\w\.]', '', suffix)[:12]
+    return f"{stem[:120]}{suffix}"
+
+
 @app.post("/api/upload")
 async def upload_audio(request: Request, file: UploadFile = File(...)):
     """Upload single audio file and perform initial inspection."""
@@ -418,7 +424,7 @@ async def upload_audio(request: Request, file: UploadFile = File(...)):
         )
 
     unique_prefix = uuid.uuid4().hex[:8]
-    safe_filename = f"{unique_prefix}_{file.filename}"
+    safe_filename = f"{unique_prefix}_{_clean_upload_name(file.filename)}"
     file_path = UPLOAD_DIR / safe_filename
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
@@ -446,7 +452,7 @@ async def upload_audio(request: Request, file: UploadFile = File(...)):
     }
 
 
-def _save_transcription_to_db(result: "TranscriptionResult", target_path: str):
+def _save_transcription_to_db(result: "TranscriptionResult", target_path: str, owner_id: Optional[str] = None):
     """Synchronous helper: save transcription project & segments to Neon PostgreSQL DB."""
     session = get_db_session()
     if not session:
@@ -464,7 +470,8 @@ def _save_transcription_to_db(result: "TranscriptionResult", target_path: str):
                 compliance_score=result.compliance_score,
                 total_errors=result.total_errors,
                 total_warnings=result.total_warnings,
-                audio_info=result.audio_info.model_dump_json() if result.audio_info else "{}"
+                audio_info=result.audio_info.model_dump_json() if result.audio_info else "{}",
+                owner_id=owner_id
             )
             session.add(db_proj)
         else:
@@ -518,7 +525,7 @@ async def transcribe_audio(
     uploaded_here = bool(file)
     if file:
         unique_prefix = uuid.uuid4().hex[:8]
-        safe_filename = f"{unique_prefix}_{file.filename}"
+        safe_filename = f"{unique_prefix}_{_clean_upload_name(file.filename)}"
         file_path = UPLOAD_DIR / safe_filename
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
@@ -585,9 +592,16 @@ async def transcribe_audio(
     }
 
     # Automatically save transcription project & segments to Neon PostgreSQL DB
-    await asyncio.to_thread(_save_transcription_to_db, result, target_path)
+    await asyncio.to_thread(_save_transcription_to_db, result, target_path, current_user.id)
 
     return result
+
+
+def _can_access_project(proj, user) -> bool:
+    """Owner, or an admin. Rows saved before owners were recorded (owner_id NULL) are visible to admins only."""
+    if bool(getattr(user, "is_admin", False)):
+        return True
+    return proj.owner_id is not None and proj.owner_id == user.id
 
 
 _LIST_CACHE: dict = {}
@@ -606,12 +620,18 @@ def _cached_list(key: str, fn):
     return val
 
 
-def _list_projects_from_db():
+def _list_projects_from_db(user):
     session = get_db_session()
     if not session:
         return []
     try:
-        projects = session.query(DBProject).order_by(DBProject.updated_at.desc()).all()
+        q = session.query(DBProject)
+        if getattr(user, "is_admin", False):
+            # an admin's own list: their projects plus the legacy rows nobody owns
+            q = q.filter((DBProject.owner_id == user.id) | (DBProject.owner_id.is_(None)))
+        else:
+            q = q.filter(DBProject.owner_id == user.id)
+        projects = q.order_by(DBProject.updated_at.desc()).all()
         # one grouped count instead of lazy-loading every project's segments (N+1 round trips to Neon)
         from sqlalchemy import func as _func
         seg_counts = dict(session.query(DBSegment.project_id, _func.count(DBSegment.id)).group_by(DBSegment.project_id).all())
@@ -636,23 +656,23 @@ def _list_projects_from_db():
 
 
 @app.get("/api/projects")
-async def list_projects():
-    """List all saved projects from Neon PostgreSQL DB."""
+async def list_projects(current_user: User = Depends(get_current_user_from_token)):
+    """List the signed-in user's saved projects (admins also see legacy projects that have no owner)."""
     try:
-        projects = await asyncio.to_thread(_cached_list, "projects", _list_projects_from_db)
+        projects = await asyncio.to_thread(_cached_list, f"projects:{current_user.id}", lambda: _list_projects_from_db(current_user))
         return {"projects": projects}
     except Exception as e:
         return {"projects": [], "error": str(e)}
 
 
-def _get_project_details_from_db(project_id: str):
+def _get_project_details_from_db(project_id: str, user):
     session = get_db_session()
     if not session:
         raise ValueError("Database not available")
     try:
         proj = session.query(DBProject).filter(DBProject.id == project_id).first()
-        if not proj:
-            return None
+        if not proj or not _can_access_project(proj, user):
+            return None  # someone else's project looks exactly like a missing one
 
         segments_out = []
         for s in proj.segments:
@@ -716,10 +736,10 @@ def _get_project_details_from_db(project_id: str):
 
 
 @app.get("/api/projects/{project_id}")
-async def get_project_details(project_id: str):
+async def get_project_details(project_id: str, current_user: User = Depends(get_current_user_from_token)):
     """Retrieve full project details with all segments and word confidence from Neon DB."""
     try:
-        data = await asyncio.to_thread(_get_project_details_from_db, project_id)
+        data = await asyncio.to_thread(_get_project_details_from_db, project_id, current_user)
         if not data:
             raise HTTPException(status_code=404, detail="Project not found")
         return data
@@ -729,7 +749,7 @@ async def get_project_details(project_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-def _save_project_to_db(payload: dict):
+def _save_project_to_db(payload: dict, user):
     session = get_db_session()
     if not session:
         raise ValueError("Database not initialized")
@@ -739,9 +759,12 @@ def _save_project_to_db(payload: dict):
         filename = project_data.get("filename") or "audio_transcript.wav"
 
         db_proj = session.query(DBProject).filter(DBProject.id == proj_id).first()
+        if db_proj is not None and not _can_access_project(db_proj, user):
+            raise PermissionError("Project not found")
         if not db_proj:
             db_proj = DBProject(
                 id=proj_id,
+                owner_id=user.id,
                 filename=filename,
                 language=project_data.get("language", "Hindi"),
                 script=project_data.get("script", "Devanagari"),
@@ -800,21 +823,26 @@ def _save_project_to_db(payload: dict):
 
 
 @app.post("/api/projects/save")
-async def save_project(payload: dict):
+async def save_project(payload: dict, current_user: User = Depends(get_current_user_from_token)):
     """Save or update project edits into Neon PostgreSQL DB."""
     try:
-        proj_id = await asyncio.to_thread(_save_project_to_db, payload)
+        proj_id = await asyncio.to_thread(_save_project_to_db, payload, current_user)
         _LIST_CACHE.clear()
         return {"status": "success", "project_id": proj_id}
+    except PermissionError:
+        raise HTTPException(status_code=404, detail="Project not found")
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
 
-def _delete_project_from_db(project_id: str):
+def _delete_project_from_db(project_id: str, user):
     session = get_db_session()
     if not session:
         raise ValueError("Database not available")
     try:
+        proj = session.query(DBProject).filter(DBProject.id == project_id).first()
+        if proj is None or not _can_access_project(proj, user):
+            return False
         session.query(DBProjectExtras).filter(DBProjectExtras.project_id == project_id).delete()
         session.query(DBProject).filter(DBProject.id == project_id).delete()
         session.commit()
@@ -827,12 +855,16 @@ def _delete_project_from_db(project_id: str):
 
 
 @app.delete("/api/projects/{project_id}")
-async def delete_project(project_id: str):
+async def delete_project(project_id: str, current_user: User = Depends(get_current_user_from_token)):
     """Delete project from Neon DB."""
     try:
-        await asyncio.to_thread(_delete_project_from_db, project_id)
+        deleted = await asyncio.to_thread(_delete_project_from_db, project_id, current_user)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Project not found")
         _LIST_CACHE.clear()
         return {"status": "success", "deleted_id": project_id}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -920,7 +952,7 @@ async def _run_transcribe_job(job_id, target_path, original_media_path, language
         result.filename = Path(target_path).name
         active_sessions[result.audio_id] = {"filename": result.filename, "file_path": target_path, "result": result}
         set_state(stage="saving", percent=99.0, detail="Saving the project")
-        await asyncio.to_thread(_save_transcription_to_db, result, target_path)
+        await asyncio.to_thread(_save_transcription_to_db, result, target_path, current_user.id)
         if meter is not None:
             meter.finish(True)
         set_state(stage="done", percent=100.0, detail="Done", result=result.model_dump(mode="json"))
@@ -972,7 +1004,7 @@ async def transcribe_audio_async(
         from app.video_processor import get_supported_video_extensions as _vid_exts
         original_path = next((str(p) for p in UPLOAD_DIR.glob(f"{wav_path.stem}.*") if p.suffix.lower() in _vid_exts()), None)
     elif file:
-        file_path = UPLOAD_DIR / f"{uuid.uuid4().hex[:8]}_{file.filename}"
+        file_path = UPLOAD_DIR / f"{uuid.uuid4().hex[:8]}_{_clean_upload_name(file.filename)}"
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
         target_path = str(file_path)
@@ -1758,6 +1790,9 @@ async def _process_saved_media(file_path: Path, safe_filename: str, clean_stem: 
     }
 
 
+_chunk_state: dict = {}  # safe .part name -> byte offset where each received chunk starts (plus the end)
+
+
 @app.post("/api/subtitle/upload_chunk")
 async def upload_video_chunk(
     request: Request,
@@ -1784,11 +1819,23 @@ async def upload_video_chunk(
     safe_filename = f"{clean_upload_id}_{clean_stem}{ext}"
     part_path = UPLOAD_DIR / f"{safe_filename}.part"
 
-    # Append chunk data to .part file
-    mode = "ab" if (chunk_index > 0 and part_path.exists()) else "wb"
+    if total_chunks < 1 or not (0 <= chunk_index < total_chunks):
+        raise HTTPException(status_code=400, detail="Invalid chunk index.")
+
+    # Chunks are appended strictly in order. A retried chunk rewinds the file to where it started, so it is never
+    # written twice; a chunk that skips ahead (or arrives after a server restart) is refused instead of corrupting.
+    state = _chunk_state.get(safe_filename)
+    if chunk_index == 0:
+        state = _chunk_state[safe_filename] = {"offsets": [0]}
+    elif state is None or chunk_index >= len(state["offsets"]) or not part_path.exists():
+        raise HTTPException(status_code=409, detail=f"Chunk {chunk_index} arrived out of order. Restart the upload.")
     try:
-        with open(part_path, mode) as buffer:
+        with open(part_path, "r+b" if chunk_index else "wb") as buffer:
+            buffer.seek(state["offsets"][chunk_index])
+            buffer.truncate()
             shutil.copyfileobj(chunk.file, buffer)
+            del state["offsets"][chunk_index + 1:]
+            state["offsets"].append(buffer.tell())
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error writing chunk {chunk_index}: {e}")
 
@@ -1801,6 +1848,7 @@ async def upload_video_chunk(
         }
 
     # Final chunk reached: finalize file and run full media processing
+    _chunk_state.pop(safe_filename, None)
     final_file_path = UPLOAD_DIR / safe_filename
     if final_file_path.exists():
         final_file_path.unlink()
@@ -1816,6 +1864,8 @@ async def cancel_chunked_upload(upload_id: str):
     if not clean_upload_id:
         return {"removed": 0}
     removed = 0
+    for key in [k for k in _chunk_state if k.startswith(f"{clean_upload_id}_")]:
+        _chunk_state.pop(key, None)
     for part in UPLOAD_DIR.glob(f"{clean_upload_id}_*.part"):
         try:
             part.unlink()
@@ -2827,11 +2877,11 @@ async def export_subtitles_endpoint(payload: SubtitleExportRequest, request: Req
     auth_header = request.headers.get("authorization")
     if auth_header and auth_header.startswith("Bearer "):
         def _export_blocked(token: str) -> bool:
-            from app.auth_module.models import AuthSession
+            from app.auth_module.routes import _find_session
             from app.auth_module.database import SessionLocal
             db_s = SessionLocal()
             try:
-                sess = db_s.query(AuthSession).filter(AuthSession.session_token == token, AuthSession.is_active == True).first()
+                sess = _find_session(db_s, token)
                 return bool(sess and sess.user and not getattr(sess.user, "can_export", True))
             finally:
                 db_s.close()
@@ -2888,6 +2938,25 @@ async def export_subtitles_endpoint(payload: SubtitleExportRequest, request: Req
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _parse_byte_range(header: str, size: int):
+    """(start, end) for a single `bytes=a-b`, `bytes=a-` or `bytes=-n` range; anything malformed or outside the
+    file is a 416 with the Content-Range the spec asks for."""
+    bad = HTTPException(status_code=416, detail="Requested range not satisfiable.", headers={"Content-Range": f"bytes */{size}"})
+    m = re.fullmatch(r"\s*bytes\s*=\s*(\d*)\s*-\s*(\d*)\s*", header or "")
+    if not m or size <= 0 or (not m.group(1) and not m.group(2)):
+        raise bad
+    if not m.group(1):  # suffix range: the last n bytes
+        n = int(m.group(2))
+        if n == 0:
+            raise bad
+        return max(0, size - n), size - 1
+    start = int(m.group(1))
+    end = int(m.group(2)) if m.group(2) else size - 1
+    if start >= size or end < start:
+        raise bad
+    return start, min(end, size - 1)
+
+
 @app.get("/api/subtitle/video/{filename}")
 async def get_video_stream(request: Request, filename: str):
     """Stream video file for player with Range requests support."""
@@ -2919,13 +2988,7 @@ async def get_video_stream(request: Request, filename: str):
         media_type = "video/mp4"
         
     if range_header:
-        range_match = range_header.replace("bytes=", "").split("-")
-        start = int(range_match[0]) if range_match[0] else 0
-        end = int(range_match[1]) if len(range_match) > 1 and range_match[1] else file_size - 1
-        
-        start = max(0, min(start, file_size - 1))
-        end = max(start, min(end, file_size - 1))
-        
+        start, end = _parse_byte_range(range_header, file_size)
         chunk_size = (end - start) + 1
         
         def iterfile():

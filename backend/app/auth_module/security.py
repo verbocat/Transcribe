@@ -117,13 +117,23 @@ def generate_secure_otp() -> str:
     return f"{secrets.randbelow(1_000_000):06d}"
 
 
+_PLACEHOLDER_SECRETS = {"", "Arpit", "verbolabs_default_otp_secret_key_2026", "changeme"}
+
+
 def get_otp_secret() -> str:
-    """Reads server OTP secret from env or generates a consistent fallback."""
+    """Server signing secret (OTP hashes, bot challenges, share links). Fails closed when OTP_SECRET is unset or a
+    known placeholder, so a forgeable default is never used."""
     import os
     secret = os.getenv("OTP_SECRET", "").strip()
-    if not secret or secret == "Arpit":
-        secret = os.getenv("DATABASE_URL", "verbolabs_default_otp_secret_key_2026")
+    if secret in _PLACEHOLDER_SECRETS or len(secret) < 16:
+        raise RuntimeError("OTP_SECRET must be set to a random string of at least 16 characters.")
     return secret
+
+
+def hash_token(token: str) -> str:
+    """SHA-256 of a session / verification / reset token. Only the hash is stored, so a copy of the database
+    cannot be used to sign in or reset passwords. The raw value is only ever sent to the user."""
+    return hashlib.sha256((token or "").strip().encode("utf-8")).hexdigest()
 
 
 def hash_otp(otp: str) -> str:

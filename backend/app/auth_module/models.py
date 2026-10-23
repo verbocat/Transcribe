@@ -141,6 +141,14 @@ class LoginOTP(AuthBase):
     user = relationship("User", back_populates="login_otps")
 
 
+class UsedBotChallenge(AuthBase):
+    """A human-check challenge that was already accepted once; it cannot be replayed within its 5 minute lifetime."""
+    __tablename__ = "auth_used_bot_challenges"
+
+    challenge_id = Column(String(64), primary_key=True)
+    used_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
+
+
 class AuthFailedAttempt(AuthBase):
     """
     Tracks failed login attempts for IP & Account brute-force lockout

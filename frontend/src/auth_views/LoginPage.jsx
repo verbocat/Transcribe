@@ -181,7 +181,9 @@ export default function LoginPage({ onSwitchToSignup, onSwitchToForgotPassword, 
       }
 
       // Check if bot challenge required (403 or message trigger)
-      if ((err.status === 403 && !errMsg.toLowerCase().includes('not been verified') && !errMsg.toLowerCase().includes('suspended')) || errMsg.toLowerCase().includes('verification required') || errMsg.toLowerCase().includes('puzzle') || errMsg.toLowerCase().includes('security verification')) {
+      if ((err.status === 403 && !errMsg.toLowerCase().includes('not been verified') && !errMsg.toLowerCase().includes('suspended')) || errMsg.toLowerCase().includes('verification required') || errMsg.toLowerCase().includes('puzzle') || errMsg.toLowerCase().includes('security verification') || challengeToken) {
+        // a solved question is single-use on the server, so any failed attempt needs a fresh one
+        setBotAnswer('');
         loadBotChallenge();
       }
 

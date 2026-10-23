@@ -1,3 +1,4 @@
+import logging
 import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Optional
@@ -14,6 +15,7 @@ from .models import (
     PasswordResetToken,
     LoginOTP,
     AuthFailedAttempt,
+    UsedBotChallenge,
     AdminNotification,
     UserPreference
 )
@@ -28,8 +30,10 @@ from .security import (
     generate_secure_otp,
     hash_otp,
     verify_otp_hash,
-    get_otp_secret
+    get_otp_secret,
+    hash_token
 )
+from ..client_ip import get_client_ip
 from .usage import usage_summary
 from . import policy
 from .brevo_service import send_verification_email, send_password_reset_email, send_mfa_login_otp_email
@@ -47,12 +51,35 @@ OTP_VALID_MINUTES = 5
 OTP_RESEND_COOLDOWN_SECONDS = 60
 CHALLENGE_MAX_LIFETIME_MINUTES = 15  # hard cap on one sign-in attempt, however many codes are requested
 
-def get_client_ip(request: Request) -> str:
-    """Extract client IP address, handling proxy headers."""
-    x_forwarded = request.headers.get("x-forwarded-for")
-    if x_forwarded:
-        return x_forwarded.split(",")[0].strip()
-    return request.client.host if request.client else "127.0.0.1"
+def _is_stored_hash(value: str) -> bool:
+    """A SHA-256 hex digest. Never accepted as a raw token, so a copy of the database cannot be replayed."""
+    return len(value) == 64 and all(c in "0123456789abcdef" for c in value)
+
+
+def _find_session(db: Session, token: str, active_only: bool = True) -> Optional[AuthSession]:
+    """Session for a raw bearer token. Only its hash is stored; a session issued before hashing was introduced is
+    still found by its raw value and upgraded to a hash on first use, so nobody is signed out by the change."""
+    q = db.query(AuthSession).filter(AuthSession.session_token == hash_token(token))
+    if active_only:
+        q = q.filter(AuthSession.is_active == True)
+    session = q.first()
+    if session or _is_stored_hash(token):
+        return session
+    q = db.query(AuthSession).filter(AuthSession.session_token == token)
+    if active_only:
+        q = q.filter(AuthSession.is_active == True)
+    session = q.first()
+    if session:
+        session.session_token = hash_token(token)
+        db.commit()
+    return session
+
+
+def _find_one_time_token(db: Session, model, token: str):
+    """Verification / reset record for a raw emailed token (hash first, then pre-hashing raw rows)."""
+    candidates = [hash_token(token)] if _is_stored_hash(token) else [hash_token(token), token]
+    return db.query(model).filter(model.token.in_(candidates)).first()
+
 
 def get_device_summary(request: Request) -> str:
     """Creates a user-friendly device description."""
@@ -81,8 +108,9 @@ def get_device_summary(request: Request) -> str:
 
     return f"{os_name} {browser}"
 
-def verify_bot_challenge(token: Optional[str]) -> bool:
-    """Verifies a signed bot defense challenge token."""
+def verify_bot_challenge(token: Optional[str], db: Optional[Session] = None) -> bool:
+    """Verifies a signed bot defense challenge token. With a db the challenge is also consumed, so a solved answer
+    cannot be replayed."""
     if not token or ":" not in token:
         return False
     try:
@@ -97,7 +125,20 @@ def verify_bot_challenge(token: Optional[str]) -> bool:
             return False
         secret = get_otp_secret().encode('utf-8')
         expected_sig = hmac.new(secret, f"{challenge_id}:{user_ans.strip()}:{ts}".encode('utf-8'), hashlib.sha256).hexdigest()
-        return hmac.compare_digest(signature, expected_sig)
+        if not hmac.compare_digest(signature, expected_sig):
+            return False
+        if db is not None:
+            from sqlalchemy.exc import IntegrityError
+            db.query(UsedBotChallenge).filter(
+                UsedBotChallenge.used_at < datetime.now(timezone.utc) - timedelta(minutes=10)
+            ).delete()
+            try:
+                db.add(UsedBotChallenge(challenge_id=challenge_id[:64]))
+                db.commit()
+            except IntegrityError:
+                db.rollback()
+                return False
+        return True
     except Exception:
         return False
 
@@ -171,10 +212,7 @@ def get_current_user_from_token(
             detail="Missing or invalid authentication token."
         )
     token = authorization.split(" ")[1].strip()
-    session = db.query(AuthSession).filter(
-        AuthSession.session_token == token,
-        AuthSession.is_active == True
-    ).first()
+    session = _find_session(db, token)
 
     if not session or not session.user:
         raise HTTPException(
@@ -237,10 +275,7 @@ def get_optional_user_from_token(
     db = SessionLocal()
     try:
         token = authorization.split(" ")[1].strip()
-        session = db.query(AuthSession).filter(
-            AuthSession.session_token == token,
-            AuthSession.is_active == True
-        ).first()
+        session = _find_session(db, token)
         if not session or not session.user:
             return None
         user = session.user
@@ -315,7 +350,7 @@ def signup(payload: SignupRequest, request: Request, db: Session = Depends(get_a
     token_str = generate_token()
     token_record = VerificationToken(
         user_id=new_user.id,
-        token=token_str,
+        token=hash_token(token_str),
         expires_at=datetime.now(timezone.utc) + timedelta(hours=24)
     )
     db.add(token_record)
@@ -377,6 +412,26 @@ def get_bot_challenge():
     }
 
 
+def _decoy_challenge_id(email_clean: str) -> str:
+    """Challenge id handed out for an email with no account. It is deterministic so the verify/resend steps can
+    recognise it without storing anything, and is indistinguishable from a real uuid hex."""
+    import hmac, hashlib
+    return hmac.new(get_otp_secret().encode("utf-8"), f"decoy:{email_clean}".encode("utf-8"), hashlib.sha256).hexdigest()[:32]
+
+
+def _is_decoy_challenge(db: Session, challenge_id: str) -> Optional[str]:
+    """Email behind a decoy challenge id, or None. Checked against emails that recently failed to sign in."""
+    import hmac, hashlib
+    recent = db.query(AuthFailedAttempt.email).filter(
+        AuthFailedAttempt.attempt_time >= datetime.now(timezone.utc) - timedelta(minutes=30),
+        AuthFailedAttempt.email.isnot(None)
+    ).distinct().limit(500).all()
+    for (email,) in recent:
+        if hmac.compare_digest(_decoy_challenge_id(email), challenge_id):
+            return email
+    return None
+
+
 def _masked_email(email: str) -> str:
     parts = email.split("@")
     masked_name = parts[0][0] + "***" + (parts[0][-1] if len(parts[0]) > 1 else "")
@@ -405,6 +460,7 @@ def _check_login_throttle(db: Session, email_clean: str, client_ip: str, bot_cha
             lock_exp = latest_fail.attempt_time.replace(tzinfo=timezone.utc) if latest_fail.attempt_time.tzinfo is None else latest_fail.attempt_time
             lock_exp += timedelta(minutes=15)
             if now_utc < lock_exp:
+                _log.info("login refused: reason=locked email=%s ip=%s failures=%s", email_clean, client_ip, recent_failures)
                 rem_sec = max(1, int((lock_exp - now_utc).total_seconds()))
                 rem_min = int((rem_sec + 59) // 60)
                 raise HTTPException(
@@ -413,7 +469,8 @@ def _check_login_throttle(db: Session, email_clean: str, client_ip: str, bot_cha
                 )
 
     if recent_failures >= 2:
-        if not bot_challenge_token or not verify_bot_challenge(bot_challenge_token):
+        if not bot_challenge_token or not verify_bot_challenge(bot_challenge_token, db):
+            _log.info("login refused: reason=challenge_required email=%s ip=%s failures=%s", email_clean, client_ip, recent_failures)
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Security verification required. Please solve the human verification puzzle to proceed."
@@ -421,22 +478,24 @@ def _check_login_throttle(db: Session, email_clean: str, client_ip: str, bot_cha
     return recent_failures
 
 
-def _lookup_user_for_login(db: Session, email_clean: str, client_ip: str) -> User:
-    user = db.query(User).filter(User.email == email_clean).first()
-    if not user:
-        db.add(AuthFailedAttempt(email=email_clean, ip_address=client_ip, attempt_time=datetime.now(timezone.utc)))
-        db.commit()
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="No account found with this email address. Please sign up first."
-        )
+_log = logging.getLogger("auth.login")
+INVALID_LOGIN_MESSAGE = "Incorrect email or password."
+_DUMMY_SALT = "0" * 32
+
+
+def _record_failed_login(db: Session, email_clean: str, client_ip: str) -> None:
+    db.add(AuthFailedAttempt(email=email_clean, ip_address=client_ip, attempt_time=datetime.now(timezone.utc)))
+    db.commit()
+
+
+def _check_account_usable(user: User) -> None:
     if user.is_blocked:
+        _log.info("login refused: reason=blocked email=%s", user.email)
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Your account has been restricted or suspended by an administrator. Please contact support."
         )
     policy.ensure_active(user)
-    return user
 
 
 def _complete_login(db: Session, user: User, request: Request) -> dict:
@@ -460,7 +519,7 @@ def _complete_login(db: Session, user: User, request: Request) -> dict:
 
     db.add(AuthSession(
         user_id=user.id,
-        session_token=new_session_token,
+        session_token=hash_token(new_session_token),
         device_info=device_summary,
         is_active=True,
         expires_at=now_utc + timedelta(hours=4)
@@ -505,11 +564,19 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_aut
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=domain_err)
 
     recent_failures = _check_login_throttle(db, email_clean, client_ip, payload.bot_challenge_token)
-    user = _lookup_user_for_login(db, email_clean, client_ip)
+    user = db.query(User).filter(User.email == email_clean).first()
 
-    if not verify_password(payload.password, user.password_hash, user.salt):
-        db.add(AuthFailedAttempt(email=email_clean, ip_address=client_ip, attempt_time=now_utc))
-        db.commit()
+    # An unknown email takes the same path (including a password hash, so timing matches) and gets the same
+    # answer as a wrong password: the response never says whether an account exists.
+    if user:
+        password_ok = verify_password(payload.password, user.password_hash, user.salt)
+    else:
+        hash_password(payload.password, _DUMMY_SALT)
+        password_ok = False
+
+    if not password_ok:
+        _log.info("login refused: reason=%s email=%s ip=%s", "bad_password" if user else "unknown_email", email_clean, client_ip)
+        _record_failed_login(db, email_clean, client_ip)
         new_fail_count = recent_failures + 1
         rem = max(0, 5 - new_fail_count)
         if new_fail_count >= 5:
@@ -517,10 +584,13 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_aut
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail="Too many failed login attempts. Account temporarily locked for 15 minutes."
             )
-        err_msg = f"Incorrect password. {rem} attempt{'s' if rem != 1 else ''} remaining before temporary account lock."
+        err_msg = f"{INVALID_LOGIN_MESSAGE} {rem} attempt{'s' if rem != 1 else ''} remaining before temporary lock."
         if new_fail_count >= 2:
             err_msg += " (Security verification will be required on your next attempt)."
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=err_msg)
+
+    # Blocked / expired is only revealed to someone who proved they know the password
+    _check_account_usable(user)
 
     return _complete_login(db, user, request)
 
@@ -541,7 +611,20 @@ def request_login_otp(payload: RequestLoginOtpRequest, request: Request, db: Ses
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=domain_err)
 
     _check_login_throttle(db, email_clean, client_ip, payload.bot_challenge_token)
-    user = _lookup_user_for_login(db, email_clean, client_ip)
+    user = db.query(User).filter(User.email == email_clean).first()
+    if not user:
+        # Same answer as for a real account; the throttle still counts the attempt
+        _record_failed_login(db, email_clean, client_ip)
+        masked = _masked_email(email_clean)
+        return {
+            "success": True,
+            "challenge_id": _decoy_challenge_id(email_clean),
+            "email_masked": masked,
+            "message": f"A 6-digit verification code has been sent to {masked}.",
+            "expires_in_seconds": OTP_VALID_MINUTES * 60,
+            "resend_cooldown_seconds": OTP_RESEND_COOLDOWN_SECONDS
+        }
+    _check_account_usable(user)
 
     # The email address is only trusted once the verification link was used
     if not user.is_verified:
@@ -614,6 +697,24 @@ def verify_login_otp(
 
     challenge = db.query(LoginOTP).filter(LoginOTP.challenge_id == challenge_id).first()
     if not challenge:
+        decoy_email = _is_decoy_challenge(db, challenge_id)
+        if decoy_email:
+            # No account behind it: fail like a wrong code, with the same attempt countdown
+            _record_failed_login(db, decoy_email, get_client_ip(request))
+            used = db.query(AuthFailedAttempt).filter(
+                AuthFailedAttempt.email == decoy_email,
+                AuthFailedAttempt.attempt_time >= datetime.now(timezone.utc) - timedelta(minutes=10)
+            ).count()
+            left = max(0, 5 - used)
+            if left == 0:
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail="Too many incorrect attempts. This code has been revoked. Please request a new one."
+                )
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=f"Invalid verification code. {left} attempt{'s' if left > 1 else ''} remaining."
+            )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Verification challenge not found or has already been used. Please request a new code."
@@ -666,12 +767,7 @@ def verify_login_otp(
     db.delete(challenge)
     db.commit()
 
-    if user.is_blocked:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Your account has been restricted or suspended by an administrator. Please contact support."
-        )
-    policy.ensure_active(user)
+    _check_account_usable(user)
 
     return _complete_login(db, user, request)
 
@@ -689,6 +785,16 @@ def resend_login_otp(
     challenge_id = payload.challenge_id.strip()
     challenge = db.query(LoginOTP).filter(LoginOTP.challenge_id == challenge_id).first()
     if not challenge:
+        decoy_email = _is_decoy_challenge(db, challenge_id)
+        if decoy_email:
+            masked = _masked_email(decoy_email)
+            return {
+                "success": True,
+                "message": f"A 6-digit verification code has been sent to {masked}.",
+                "email_masked": masked,
+                "expires_in_seconds": OTP_VALID_MINUTES * 60,
+                "resend_cooldown_seconds": OTP_RESEND_COOLDOWN_SECONDS
+            }
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Verification challenge not found. Please request a new code."
@@ -750,7 +856,7 @@ def verify_email(token: str, db: Session = Depends(get_auth_db)):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Verification token is required.")
 
     token_clean = token.strip()
-    record = db.query(VerificationToken).filter(VerificationToken.token == token_clean).first()
+    record = _find_one_time_token(db, VerificationToken, token_clean)
 
     if not record:
         raise HTTPException(
@@ -798,23 +904,18 @@ def resend_verification(payload: ResendVerificationRequest, request: Request, db
     email_clean = payload.email.strip().lower()
     user = db.query(User).filter(User.email == email_clean).first()
 
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="No account found with this email address."
-        )
-
-    if user.is_verified:
-        return {
-            "success": True,
-            "message": "This account is already verified. You can log in directly."
-        }
+    generic = {
+        "success": True,
+        "message": "If this email has an account that still needs verifying, a fresh verification link has been sent."
+    }
+    if not user or user.is_verified:
+        return generic
 
     # Create a fresh token
     new_token_str = generate_token()
     token_record = VerificationToken(
         user_id=user.id,
-        token=new_token_str,
+        token=hash_token(new_token_str),
         expires_at=datetime.now(timezone.utc) + timedelta(hours=24)
     )
     db.add(token_record)
@@ -828,17 +929,10 @@ def resend_verification(payload: ResendVerificationRequest, request: Request, db
     )
 
     if not brevo_result.get("success"):
-        err = brevo_result.get("error", "Email service failure.")
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Brevo email dispatch failed: {err}"
-        )
+        # Logged, not returned: a visible failure would tell the caller the account exists
+        logging.getLogger(__name__).warning("Verification email dispatch failed: %s", brevo_result.get("error"))
 
-    return {
-        "success": True,
-        "message": "A fresh verification link has been sent to your email.",
-        "email_status": brevo_result
-    }
+    return generic
 
 
 @auth_router.post("/forgot-password")
@@ -859,17 +953,18 @@ def forgot_password(payload: ForgotPasswordRequest, request: Request, db: Sessio
 
     # 2. Check if user exists
     user = db.query(User).filter(User.email == email_clean).first()
+    generic = {
+        "success": True,
+        "message": "If an account exists for this email, password reset instructions have been sent to it."
+    }
     if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="No account found with this email address. Please sign up first."
-        )
+        return generic
 
     # 3. Create fresh single-use password reset token (1 hour expiry)
     reset_token_str = generate_token()
     reset_record = PasswordResetToken(
         user_id=user.id,
-        token=reset_token_str,
+        token=hash_token(reset_token_str),
         expires_at=datetime.now(timezone.utc) + timedelta(hours=1)
     )
     db.add(reset_record)
@@ -884,17 +979,9 @@ def forgot_password(payload: ForgotPasswordRequest, request: Request, db: Sessio
     )
 
     if not brevo_res.get("success"):
-        err = brevo_res.get("error", "Email service failure.")
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Brevo email dispatch failed: {err}"
-        )
+        logging.getLogger(__name__).warning("Password reset email dispatch failed: %s", brevo_res.get("error"))
 
-    return {
-        "success": True,
-        "message": "Password reset instructions have been sent to your @verbolabs.com email.",
-        "email_status": brevo_res
-    }
+    return generic
 
 
 @auth_router.post("/reset-password")
@@ -911,7 +998,7 @@ def reset_password(payload: ResetPasswordRequest, db: Session = Depends(get_auth
     if not token_clean:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Reset token is required.")
 
-    token_record = db.query(PasswordResetToken).filter(PasswordResetToken.token == token_clean).first()
+    token_record = _find_one_time_token(db, PasswordResetToken, token_clean)
     if not token_record:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invalid or expired reset token.")
 
@@ -975,7 +1062,7 @@ def get_current_user_profile(
     """
     user = get_current_user_from_token(authorization=authorization, db=db)
     token = authorization.split(" ")[1].strip()
-    session = db.query(AuthSession).filter(AuthSession.session_token == token).first()
+    session = _find_session(db, token, active_only=False)
     remaining = 4 * 3600
     now_utc = datetime.now(timezone.utc)
 
@@ -1022,7 +1109,7 @@ def logout(
     """
     if authorization and authorization.startswith("Bearer "):
         token = authorization.split(" ")[1].strip()
-        session = db.query(AuthSession).filter(AuthSession.session_token == token).first()
+        session = _find_session(db, token, active_only=False)
         if session:
             session.is_active = False
             db.commit()

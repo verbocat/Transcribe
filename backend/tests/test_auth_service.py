@@ -193,13 +193,13 @@ class TestAuthService(unittest.TestCase):
         self.assertEqual(dup_res.status_code, 409)
         self.assertIn("already exists", dup_res.json()["detail"].lower())
 
-        # 5. Attempt login with non-existent email -> should return 404
+        # 5. Attempt login with non-existent email -> same 401 as a wrong password (no enumeration)
         login_not_found = client.post("/api/auth/login", json={
             "email": "test_ghost@verbolabs.com",
             "password": test_password
         })
-        self.assertEqual(login_not_found.status_code, 404)
-        self.assertIn("no account found", login_not_found.json()["detail"].lower())
+        self.assertEqual(login_not_found.status_code, 401)
+        self.assertIn("incorrect email or password", login_not_found.json()["detail"].lower())
 
         # 6. Verify email using database token
         db = SessionLocal()
@@ -208,7 +208,10 @@ class TestAuthService(unittest.TestCase):
             self.assertIsNotNone(user)
             token_obj = db.query(VerificationToken).filter(VerificationToken.user_id == user.id).first()
             self.assertIsNotNone(token_obj)
-            token_str = token_obj.token
+            token_str = mock_email.call_args.kwargs["verification_token"]  # the emailed value; the DB holds only its hash
+            self.assertNotEqual(token_obj.token, token_str)
+            # the stored hash is not itself a working link
+            self.assertEqual(client.get(f"/api/auth/verify-email?token={token_obj.token}").status_code, 404)
         finally:
             db.close()
 
@@ -222,7 +225,7 @@ class TestAuthService(unittest.TestCase):
             "password": "Wrong Pass!999"
         })
         self.assertEqual(login_wrong_pwd.status_code, 401)
-        self.assertIn("incorrect password", login_wrong_pwd.json()["detail"].lower())
+        self.assertIn("incorrect email or password", login_wrong_pwd.json()["detail"].lower())
 
         # 8. Two failures so far (unknown email, wrong password): login now needs the bot check
         login_needs_check = client.post("/api/auth/login", json={
@@ -289,9 +292,9 @@ class TestAuthService(unittest.TestCase):
         finally:
             db.close()
 
-        # 2. Request forgot password for non-existent email -> 404
+        # 2. Request forgot password for non-existent email -> same answer as for a real account (no enumeration)
         bad_fp = client.post("/api/auth/forgot-password", json={"email": "test_ghost@verbolabs.com"})
-        self.assertEqual(bad_fp.status_code, 404)
+        self.assertEqual(bad_fp.status_code, 200)
 
         # 3. Request forgot password for Bob -> 200
         fp_res = client.post("/api/auth/forgot-password", json={"email": test_email})
@@ -303,7 +306,8 @@ class TestAuthService(unittest.TestCase):
         try:
             reset_record = db.query(PasswordResetToken).filter(PasswordResetToken.user_id == user_id, PasswordResetToken.used == False).first()
             self.assertIsNotNone(reset_record)
-            reset_token = reset_record.token
+            reset_token = mock_reset.call_args.kwargs["reset_token"]
+            self.assertNotEqual(reset_record.token, reset_token)
         finally:
             db.close()
 

@@ -96,13 +96,20 @@ def export_to_txt(result: TranscriptionResult) -> str:
     return "\n".join(lines)
 
 
+def _clock_parts(seconds) -> tuple:
+    """(hours, minutes, seconds, milliseconds) of a time in seconds. Rounds to whole milliseconds first, so
+    59.9997 becomes 00:01:00.000 and never 00:00:59.1000 or 00:00:60."""
+    total_ms = max(0, int(round(float(seconds or 0.0) * 1000)))
+    secs, ms = divmod(total_ms, 1000)
+    mins, secs = divmod(secs, 60)
+    hrs, mins = divmod(mins, 60)
+    return hrs, mins, secs, ms
+
+
 def export_to_srt(result: TranscriptionResult) -> str:
     """Generate standard SRT subtitle file."""
     def srt_time(seconds: float) -> str:
-        hrs = int(seconds // 3600)
-        mins = int((seconds % 3600) // 60)
-        secs = int(seconds % 60)
-        millis = int(round((seconds - int(seconds)) * 1000))
+        hrs, mins, secs, millis = _clock_parts(seconds)
         return f"{hrs:02d}:{mins:02d}:{secs:02d},{millis:03d}"
 
     entries = []
@@ -121,10 +128,7 @@ def export_to_srt(result: TranscriptionResult) -> str:
 def export_to_vtt(result: TranscriptionResult) -> str:
     """Generate standard WebVTT subtitle file (.vtt)."""
     def vtt_time(seconds: float) -> str:
-        hrs = int(seconds // 3600)
-        mins = int((seconds % 3600) // 60)
-        secs = int(seconds % 60)
-        millis = int(round((seconds - int(seconds)) * 1000))
+        hrs, mins, secs, millis = _clock_parts(seconds)
         return f"{hrs:02d}:{mins:02d}:{secs:02d}.{millis:03d}"
 
     lines = ["WEBVTT", ""]
@@ -356,16 +360,7 @@ def export_netflix_srt(events: list) -> str:
     """Generate Netflix-compliant SRT format."""
     events = _prepare_sorted_events(events)
     def format_time(seconds: float) -> str:
-        if seconds is None:
-            seconds = 0.0
-        seconds = float(seconds)
-        hrs = int(seconds // 3600)
-        mins = int((seconds % 3600) // 60)
-        secs = int(seconds % 60)
-        millis = int(round((seconds - int(seconds)) * 1000))
-        if millis >= 1000:
-            millis -= 1000
-            secs += 1
+        hrs, mins, secs, millis = _clock_parts(seconds)
         return f"{hrs:02d}:{mins:02d}:{secs:02d},{millis:03d}"
 
     entries = []
@@ -386,16 +381,7 @@ def export_netflix_vtt(events: list) -> str:
     """Generate Netflix-compliant WebVTT format."""
     events = _prepare_sorted_events(events)
     def format_time(seconds: float) -> str:
-        if seconds is None:
-            seconds = 0.0
-        seconds = float(seconds)
-        hrs = int(seconds // 3600)
-        mins = int((seconds % 3600) // 60)
-        secs = int(seconds % 60)
-        millis = int(round((seconds - int(seconds)) * 1000))
-        if millis >= 1000:
-            millis -= 1000
-            secs += 1
+        hrs, mins, secs, millis = _clock_parts(seconds)
         return f"{hrs:02d}:{mins:02d}:{secs:02d}.{millis:03d}"
 
     lines = ["WEBVTT\n"]
@@ -419,16 +405,7 @@ def export_netflix_ttml(events: list, language: str = "en") -> str:
     """Generate Netflix TTML/DFXP format."""
     events = _prepare_sorted_events(events)
     def format_time(seconds: float) -> str:
-        if seconds is None:
-            seconds = 0.0
-        seconds = float(seconds)
-        hrs = int(seconds // 3600)
-        mins = int((seconds % 3600) // 60)
-        secs = int(seconds % 60)
-        millis = int(round((seconds - int(seconds)) * 1000))
-        if millis >= 1000:
-            millis -= 1000
-            secs += 1
+        hrs, mins, secs, millis = _clock_parts(seconds)
         return f"{hrs:02d}:{mins:02d}:{secs:02d}.{millis:03d}"
 
     xml = []

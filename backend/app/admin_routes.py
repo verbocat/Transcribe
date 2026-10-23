@@ -116,7 +116,7 @@ def claim_initial_admin(
     if not is_super_admin(current_user.email):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access forbidden: Super Administrator role is strictly reserved for Divyanshu Singh Chouhan."
+            detail="Access forbidden: this action is reserved for the platform owner."
         )
 
     current_user.is_admin = True
