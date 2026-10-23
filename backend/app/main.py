@@ -2310,7 +2310,7 @@ async def generate_subtitles_stream_endpoint(request: Request, payload: dict, cu
             )
 
     # Hours are held before the stream opens (so "out of hours" is a clean 402, not a broken stream).
-    meter = await metering.Metered(
+    meter = metering.Metered(
         metering.user_ref(current_user), usage_mod.TRANSCRIBE, await metering.probe_duration_ms(video_path),
         "/api/subtitle/generate_stream", video_id,
     )
@@ -2581,7 +2581,7 @@ async def centroid_translate(payload: dict, current_user: User = Depends(get_cur
         bill_ms = base_ms * langs_n
         name = (active_sessions.get(media_id, {}) or {}).get("filename") if media_id else None
         bill_ref = f"{name or (Path(media_path).name if media_path else 'Subtitles')} · {langs_n} {lang_word}"
-    meter = metering.Metered(
+    meter = await metering.Metered(
         metering.user_ref(current_user), usage_mod.TRANSLATE, bill_ms, "/api/centroid/translate", bill_ref,
     ).reserve_async()
     meter.work_started = True
