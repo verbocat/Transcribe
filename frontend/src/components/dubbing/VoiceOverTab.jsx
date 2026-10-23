@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Play, Pause, Mic2, Wand2, Download, SlidersHorizontal, Volume2, VolumeX, AudioLines } from 'lucide-react';
 import { api, call, send, GRAD, fmtTime } from './dubApi';
+import { confirmDialog } from '../ui/feedback';
 
 const CONTROLS = [
   ['stability', 'Stability', 0, 1, 0.05, 'Low = more emotion and variation, high = steady and even.'],
@@ -106,7 +107,7 @@ export default function VoiceOverTab({ projectId, project, segs, edit, dirty, sa
     <div className="flex flex-col gap-3">
       <div className="rounded-xl border border-[var(--kt-s4)] bg-[var(--kt-s1)] p-3 flex flex-wrap items-center gap-2">
         <Btn primary icon={Mic2} disabled={busy || running || !todo.length} onClick={() => speak(undefined, true)}>Generate {todo.length ? `${todo.length} missing or changed` : 'lines'}</Btn>
-        <Btn icon={Wand2} disabled={busy || running || !withText.length} onClick={() => window.confirm(`Regenerate all ${withText.length} lines? This uses about ${chars(withText)} ElevenLabs characters.`) && speak(undefined, false)}>Regenerate all</Btn>
+        <Btn icon={Wand2} disabled={busy || running || !withText.length} onClick={async () => { if (await confirmDialog({ title: `Regenerate all ${withText.length} lines?`, message: `This uses about ${chars(withText)} ElevenLabs characters.`, confirmLabel: 'Regenerate all' })) speak(undefined, false); }}>Regenerate all</Btn>
         <Btn icon={AudioLines} disabled={busy || running || !lines.some((s) => s.audio?.ready)} onClick={mix}>Mix the dub</Btn>
         <span className="text-xs text-[var(--kt-faint)]">{todo.length ? `About ${chars(todo)} ElevenLabs characters to generate. ` : ''}Speech uses your ElevenLabs credits, not your hours.</span>
       </div>

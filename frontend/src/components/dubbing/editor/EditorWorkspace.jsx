@@ -19,6 +19,7 @@ import {
   addText, setText, subtitlesFromLines, setEffects, setTransition, applyDefaultTransition, videoClips, transitionAt, SUB_TRACK,
 } from './videoModel';
 import { useOverlayUploads } from './overlayDraw';
+import { confirmDialog } from '../../ui/feedback';
 
 const SHORTCUTS = [
   ['Playback', [['Space', 'Play or pause'], ['J / K / L', 'Shuttle back, stop, forward (press again for faster)'], ['Left / Right', 'One frame (Shift: five frames)'],
@@ -229,10 +230,10 @@ export default function EditorWorkspace({ projectId, project, mediaUrl, dirtySeg
     if (r.error) { setError(r.error); return; }
     commit(r.edit); setSelection([r.id]); setPanelTab('clip'); setError('');
   };
-  const makeSubtitles = () => {
+  const makeSubtitles = async () => {
     if (!dims) return;
     const n = edit.clips.filter((c) => c.track === SUB_TRACK).length;
-    if (n && !window.confirm(`Replace the ${n} subtitles on the Subtitles track with new ones from the dub lines?`)) return;
+    if (n && !(await confirmDialog({ title: `Replace ${n} subtitles?`, message: 'New ones are made from the dub lines and replace the Subtitles track.', confirmLabel: 'Replace subtitles' }))) return;
     const next = subtitlesFromLines(edit, ctx, dims);
     if (!next.clips.some((c) => c.track === SUB_TRACK)) { setError('No translated dub lines to make subtitles from.'); return; }
     commit(next); setError('');
@@ -259,7 +260,7 @@ export default function EditorWorkspace({ projectId, project, mediaUrl, dirtySeg
     await refresh(true);
   });
   const resetEdit = async () => {
-    if (!window.confirm('Undo every timeline edit: the media uncut and every line back at its own time? This cannot be undone.')) return;
+    if (!(await confirmDialog({ title: 'Reset the whole timeline?', message: 'The media is uncut and every line goes back to its own time. This cannot be undone.', confirmLabel: 'Reset timeline', danger: true }))) return;
     try { const d = await send('DELETE', `/projects/${projectId}/edit`); saved.current = d.edit; dispatch({ type: 'reset', edit: d.edit }); setSelection([]); setGap(null); } catch (e) { setError(e.message); }
   };
 

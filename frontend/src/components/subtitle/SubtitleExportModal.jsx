@@ -8,6 +8,7 @@ import { langName } from './languages';
 import { stripFormatting } from './formatTags';
 import { exportLanguageOptions, isValidExportLanguage, eventsForExport, exportLanguageSuffix, parseExportLanguage, segmentsForExport } from '../../utils/exportLanguage';
 import { exportSrtLocally, exportVttLocally, exportTtmlLocally, exportTxtLocally, downloadLocally } from '../../utils/localExporter';
+import { notify } from '../ui/feedback';
 
 const EXPORT_FORMATS = [
   {
@@ -151,7 +152,7 @@ export default function SubtitleExportModal({ isOpen, onClose, events: liveEvent
     } catch (err) {
       if (isCancelError(err)) return;
       console.error('Dubbing export error:', err);
-      alert('Dubbing script export failed. Please verify the backend connection.');
+      notify('Could not export the dubbing script. Check your connection and try again.', 'error');
     } finally {
       if (exportJob.current === job) exportJob.current = null;
       setIsExporting(false);
@@ -218,7 +219,7 @@ export default function SubtitleExportModal({ isOpen, onClose, events: liveEvent
       } catch (backupErr) {
         if (isCancelError(backupErr)) return; // cancelled on purpose: no file, no error
         console.error('Export error:', backupErr);
-        alert('Export failed. Please verify the backend connection.');
+        notify('Could not export. Check your connection and try again.', 'error');
       } finally {
         if (exportJob.current === job) exportJob.current = null;
       }

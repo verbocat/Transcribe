@@ -41,6 +41,7 @@ import AppearanceHost from './theme/AppearanceHost';
 import AuthScreen from './auth_views/AuthScreen';
 import Lenis from 'lenis';
 import { xhrPostForm, formatBytes, formatSpeed, formatEta } from './utils/xhrUpload';
+import { notify, confirmDialog } from './components/ui/feedback';
 
 export default function App() {
   return (
@@ -1171,7 +1172,7 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
         setTimeout(() => setAutoSaveStatus(''), 3000);
       } else {
         console.error("Transcribe failed:", err);
-        alert(`Transcription request failed: ${err.message || err}`);
+        notify(`Transcription request failed: ${err.message || err}`, 'error');
       }
     } finally {
       if (transcribeJobRef.current === job) transcribeJobRef.current = null;
@@ -1247,7 +1248,7 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
         })
       });
       if (!res.ok) {
-        alert("Failed to export dubbing script.");
+        notify("Failed to export dubbing script.", 'error');
         return;
       }
       const blob = await res.blob();
@@ -1262,7 +1263,7 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
     } catch (err) {
       if (!(job.cancelled || isCancelError(err))) {
         console.error("Dubbing export failed:", err);
-        alert("Export failed: " + err);
+        notify("Export failed: " + err, 'error');
       }
     } finally {
       if (exportJobRef.current === job) exportJobRef.current = null;
@@ -1326,12 +1327,12 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
         document.body.removeChild(a);
         window.URL.revokeObjectURL(url);
       } else {
-        alert("Failed to export deliverables.");
+        notify("Failed to export deliverables.", 'error');
       }
     } catch (err) {
       if (!(job.cancelled || isCancelError(err))) {
         console.error("Multi export failed:", err);
-        alert("Export failed: " + err);
+        notify("Export failed: " + err, 'error');
       }
     } finally {
       if (exportJobRef.current === job) exportJobRef.current = null;
@@ -1457,10 +1458,10 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
           setDbSaveToast(`Imported ${parsed.length} subtitles from ${file.name} ✓`);
           setTimeout(() => setDbSaveToast(''), 3000);
         } else {
-          alert('Could not parse subtitles from this file.');
+          notify('Could not parse subtitles from this file.', 'error');
         }
       } catch (err) {
-        alert('Failed to parse subtitle file: ' + err);
+        notify('Failed to parse subtitle file: ' + err, 'error');
       }
     };
     reader.readAsText(file);
@@ -1528,7 +1529,7 @@ function TranscribeApp({ onBackToHome, user, onLogout, onOpenLogoutModal }) {
   }, []);
 
   const handleDeleteProject = async (projectId) => {
-    if (!window.confirm("Are you sure you want to delete this project?")) return;
+    if (!(await confirmDialog({ title: 'Delete this project?', message: 'The project and its saved transcript are removed. This cannot be undone.', confirmLabel: 'Delete project', danger: true }))) return;
     try {
       const res = await fetch(`${API_BASE}/api/projects/${projectId}`, { method: 'DELETE' });
       if (res.ok) {

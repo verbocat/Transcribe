@@ -144,3 +144,18 @@
   .nx-tile, .nx-tile-art .hv, .nx-btn { transition: none; }
   .nx-slab.drag .nx-slab-play { animation: none; }
 }
+
+/* ---------- dialogs and toasts (components/ui/feedback.jsx) ---------- */
+.fb-scrim { position: fixed; inset: 0; z-index: 400; display: grid; place-items: center; padding: 16px; background: rgba(3,5,16,.72); backdrop-filter: blur(3px); animation: nx-cue-in 160ms ease both; }
+.fb-dialog { width: min(440px, 100%); border-radius: 18px; padding: 22px; background: var(--kt-s1); border: 1px solid var(--kt-s5); color: var(--kt-text); box-shadow: 0 40px 100px -20px #000; animation: nx-cue-in 220ms cubic-bezier(.2,.8,.2,1) both; }
+.fb-title { margin: 0 0 6px; font-size: 19px; font-weight: 700; }
+.fb-msg { margin: 0; color: var(--kt-muted); font-size: 14px; line-height: 1.5; white-space: pre-line; }
+.fb-field { display: block; margin-top: 14px; }
+.fb-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+.fb-danger { height: 36px; padding: 0 16px; border-radius: 10px; font-size: 13px; font-weight: 650; cursor: pointer; color: #fff; background: #d63a55; border: 0; }
+.fb-danger:hover { filter: brightness(1.1); }
+.fb-actions button:focus-visible { outline: 2px solid var(--kt-accent-soft); outline-offset: 2px; }
+.fb-toasts { position: fixed; top: 68px; right: 16px; z-index: 410; display: flex; flex-direction: column; gap: 8px; width: min(380px, calc(100vw - 32px)); pointer-events: none; }
+.fb-toast { pointer-events: auto; display: flex; gap: 10px; align-items: flex-start; padding: 11px 12px 11px 14px; border-radius: 12px; font-size: 13px; line-height: 1.45; background: var(--kt-s2); border: 1px solid var(--kt-s5); color: var(--kt-text); box-shadow: 0 20px 40px -14px #000; animation: nx-cue-in 260ms cubic-bezier(.2,.8,.2,1) both; }
+.fb-x { background: none; border: 0; color: var(--kt-faint); cursor: pointer; padding: 2px; display: grid; }
+.fb-x:hover { color: var(--kt-text); }

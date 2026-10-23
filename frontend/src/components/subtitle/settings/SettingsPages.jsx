@@ -5,6 +5,7 @@ import { API_BASE, setCustomApiBase, cleanUrl } from '../../../config';
 import { Button, Segmented, Section, Row, SwitchRow, Slider, Select, TextInput, Badge, Kbd } from '../ui/controls';
 import { SHORTCUT_GROUPS } from '../shortcuts';
 import { AUTOSAVE_CHOICES, DEFAULT_PREFS } from '../prefs';
+import { confirmDialog } from '../../ui/feedback';
 
 /* ─────────────────────────── Timing & QC ─────────────────────────── */
 
@@ -301,7 +302,7 @@ export function GlossaryPage({ c }) {
       </div>
       {terms.length > 0 && (
         <div className="px-3 py-2.5 flex justify-end">
-          <Button size="sm" variant="danger" icon={Trash2} onClick={() => { if (window.confirm(`Remove all ${terms.length} glossary terms?`)) c.setGlossaryTerms([]); }}>Clear all</Button>
+          <Button size="sm" variant="danger" icon={Trash2} onClick={async () => { if (await confirmDialog({ title: `Remove all ${terms.length} glossary terms?`, message: 'Generated subtitles will no longer use them.', confirmLabel: 'Remove all terms', danger: true })) c.setGlossaryTerms([]); }}>Clear all</Button>
         </div>
       )}
     </Section>
@@ -481,8 +482,8 @@ export function DataPage({ c }) {
     }
   };
 
-  const clearDrafts = () => {
-    if (!window.confirm(`Delete ${drafts.length} saved draft${drafts.length === 1 ? '' : 's'} from this browser? This cannot be undone.`)) return;
+  const clearDrafts = async () => {
+    if (!(await confirmDialog({ title: `Delete ${drafts.length} saved draft${drafts.length === 1 ? '' : 's'}?`, message: 'They are removed from this browser. This cannot be undone.', confirmLabel: `Delete ${drafts.length === 1 ? 'draft' : 'drafts'}`, danger: true }))) return;
     drafts.forEach((k) => { try { localStorage.removeItem(k); } catch (_) { /* ignore */ } });
     setDrafts([]);
     flash('Drafts deleted.');

@@ -9,6 +9,7 @@ import { stripFormatting, toggleWrap, getAlignment, setAlignment, alignmentParts
 import { langName } from './languages';
 import { getPlayhead } from '../../utils/playheadBus';
 import { usePlayheadSelector } from '../../utils/usePlayheadSelector';
+import { confirmDialog } from '../ui/feedback';
 
 function toSMPTE(seconds) {
   if (seconds === undefined || seconds === null || isNaN(seconds)) return '00:00:00.000';
@@ -660,8 +661,8 @@ export default function SubtitleTablePanel({
           {selectedIds.size > 0 && (
             <button
               type="button"
-              onClick={() => {
-                if (!window.confirm(`Delete ${selectedIds.size} selected subtitle${selectedIds.size > 1 ? 's' : ''}?`)) return;
+              onClick={async () => {
+                if (!(await confirmDialog({ title: `Delete ${selectedIds.size} subtitle${selectedIds.size > 1 ? 's' : ''}?`, message: 'They are removed from the timeline. You can undo this.', confirmLabel: `Delete ${selectedIds.size} subtitle${selectedIds.size > 1 ? 's' : ''}`, danger: true }))) return;
                 onBulkDelete([...selectedIds]);
                 setSelectedIds(new Set());
               }}

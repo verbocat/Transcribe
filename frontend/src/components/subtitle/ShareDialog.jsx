@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { X, Loader2, Share2, Download, Trash2, Users } from 'lucide-react';
 import { API_BASE } from '../../config';
+import { confirmDialog } from '../ui/feedback';
 
 // Coordinator-only: share the subtitles on screen with linguist accounts so they can review and edit them.
 // The server keeps one copy per shared project; saving here replaces it, "Load" brings the linguists' edits back.
@@ -55,7 +56,7 @@ export default function ShareDialog({ filename, videoId, getDraft, onLoadVersion
   };
 
   const publish = () => run(async () => {
-    if (editedByOthers && !window.confirm(`${project.updated_by} edited the shared copy. Sharing again replaces their edits with what is on your screen. Load their version first if you want to keep it. Continue?`)) return;
+    if (editedByOthers && !(await confirmDialog({ title: 'Replace their edits?', message: `${project.updated_by} edited the shared copy. Sharing again replaces their edits with what is on your screen. Load their version first if you want to keep it.`, confirmLabel: 'Share and replace', cancelLabel: 'Go back' }))) return;
     const draft = getDraft();
     if (!draft || !Array.isArray(draft.events) || draft.events.length === 0) throw new Error('There are no subtitles to share yet.');
     const data = await call('/projects', {
@@ -74,7 +75,7 @@ export default function ShareDialog({ filename, videoId, getDraft, onLoadVersion
   });
 
   const stop = () => run(async () => {
-    if (!window.confirm('Stop sharing? Linguists lose access immediately and the shared copy is deleted. Your own work here stays.')) return;
+    if (!(await confirmDialog({ title: 'Stop sharing this project?', message: 'Linguists lose access immediately and the shared copy is deleted. Your own work here stays.', confirmLabel: 'Stop sharing', cancelLabel: 'Keep sharing', danger: true }))) return;
     await call(`/projects/${project.id}`, { method: 'DELETE' });
     try { localStorage.removeItem(idKey(filename)); } catch { /* ignore */ }
     setProject(null); setPicked(new Set()); setNote('Sharing stopped.');

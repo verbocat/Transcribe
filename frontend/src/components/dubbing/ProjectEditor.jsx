@@ -5,6 +5,7 @@ import {
 import { api, call, send, GRAD, fmtTime } from './dubApi';
 import VoiceOverTab from './VoiceOverTab';
 import EditorWorkspace from './editor/EditorWorkspace';
+import { promptDialog } from '../ui/feedback';
 
 const TABS = [['transcript', 'Transcript'], ['speakers', 'Speakers & voices'], ['translation', 'Translation'], ['voiceover', 'Voice-over'], ['editor', 'Editor']];
 const BUSY = new Set(['transcribing', 'profiling', 'translating', 'speaking', 'separating', 'rendering']);
@@ -190,8 +191,8 @@ export default function ProjectEditor({ projectId, onClose, onWide }) {
                 <input type="number" step="0.05" min="0" value={s.end} disabled={running} onChange={(e) => edit(key(s), { end: Number(e.target.value) })} className={`${inputCls} w-[58px] h-7`} aria-label="End seconds" />
               </div>
               <div className="flex items-center gap-1">
-                <select value={s.speaker} disabled={running} onChange={(e) => {
-                  if (e.target.value === '__new') { const n = window.prompt('Name of the new speaker'); if (n && n.trim()) edit(key(s), { speaker: n.trim().slice(0, 40) }); } else edit(key(s), { speaker: e.target.value });
+                <select value={s.speaker} disabled={running} onChange={async (e) => {
+                  if (e.target.value === '__new') { const n = await promptDialog({ title: 'New speaker', label: 'Speaker name', placeholder: 'For example, Narrator', confirmLabel: 'Add speaker' }); if (n) edit(key(s), { speaker: n.slice(0, 40) }); } else edit(key(s), { speaker: e.target.value });
                 }} className={`${inputCls} h-7 w-full`}>
                   {speakerNames.map((n) => <option key={n}>{n}</option>)}<option value="__new">+ New speaker…</option>
                 </select>

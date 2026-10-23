@@ -7,6 +7,7 @@ import { takeLaunchIntent } from '../../utils/launchIntent';
 import { api, call, send, GRAD, MEDIA_RE, VIDEO_RE } from './dubApi';
 import ProjectEditor from './ProjectEditor';
 import QuickDub from './QuickDub';
+import { confirmDialog } from '../ui/feedback';
 
 function timeAgo(t) {
   const s = Math.max(0, Date.now() / 1000 - (t || 0));
@@ -48,7 +49,7 @@ export default function DubbingStudio({ onBackToHome, user, onOpenLogoutModal })
     } catch (e) { setError(e.message); } finally { setBusy(false); setUpload(null); }
   };
   const remove = async (id) => {
-    if (!window.confirm('Delete this project and its files?')) return;
+    if (!(await confirmDialog({ title: 'Delete this project?', message: 'The project, its voices and the generated audio are removed. This cannot be undone.', confirmLabel: 'Delete project', danger: true }))) return;
     await send('DELETE', `/projects/${id}`).catch(() => {});
     load();
   };

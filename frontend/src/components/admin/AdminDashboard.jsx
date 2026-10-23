@@ -16,6 +16,7 @@ import AdminJobs from './AdminJobs';
 import AdminMedia from './AdminMedia';
 import AdminLimitsModal from './AdminLimitsModal';
 import BrandLogo from '../BrandLogo';
+import { notify, confirmDialog } from '../ui/feedback';
 
 export default function AdminDashboard({ onBackToStudio, onOpenStudio, user: currentUser, onLogout }) {
   const { user: authUser, token } = useAuth();
@@ -72,10 +73,10 @@ export default function AdminDashboard({ onBackToStudio, onOpenStudio, user: cur
           openUserDossier(targetUser.id);
         }
       } else {
-        alert(data.detail || 'Failed to approve user into active workflow');
+        notify(data.detail || 'Failed to approve user into active workflow', 'error');
       }
     } catch (e) {
-      alert('Error: ' + e.message);
+      notify('Error: ' + e.message, 'error');
     }
   };
 
@@ -93,15 +94,15 @@ export default function AdminDashboard({ onBackToStudio, onOpenStudio, user: cur
           openUserDossier(targetUser.id);
         }
       } else {
-        alert(data.detail || 'Failed to permit user access');
+        notify(data.detail || 'Failed to permit user access', 'error');
       }
     } catch (e) {
-      alert('Error: ' + e.message);
+      notify('Error: ' + e.message, 'error');
     }
   };
 
   const handleRestrictUser = async (targetUser) => {
-    if (!confirm(`Are you sure you want to restrict account access for ${targetUser.name || targetUser.email}?`)) return;
+    if (!(await confirmDialog({ title: `Block ${targetUser.name || targetUser.email}?`, message: 'They are signed out and cannot sign in until you allow access again.', confirmLabel: 'Block access', danger: true }))) return;
     try {
       const res = await fetch(`${API_BASE}/api/admin/users/${targetUser.id}/disable`, {
         method: 'PATCH',
@@ -115,10 +116,10 @@ export default function AdminDashboard({ onBackToStudio, onOpenStudio, user: cur
           openUserDossier(targetUser.id);
         }
       } else {
-        alert(data.detail || 'Failed to restrict user access');
+        notify(data.detail || 'Failed to restrict user access', 'error');
       }
     } catch (e) {
-      alert('Error: ' + e.message);
+      notify('Error: ' + e.message, 'error');
     }
   };
 
@@ -187,7 +188,7 @@ export default function AdminDashboard({ onBackToStudio, onOpenStudio, user: cur
       const data = await res.json();
       if (data.success) setSelectedUserDossier(data);
     } catch (e) {
-      alert('Failed to load user dossier: ' + e.message);
+      notify('Failed to load user dossier: ' + e.message, 'error');
     }
   };
 
@@ -225,10 +226,10 @@ export default function AdminDashboard({ onBackToStudio, onOpenStudio, user: cur
           setFeedbackSuccessMsg('');
         }, 1200);
       } else {
-        alert(data.detail || 'Failed to send feedback');
+        notify(data.detail || 'Failed to send feedback', 'error');
       }
     } catch (err) {
-      alert('Error sending feedback: ' + err.message);
+      notify('Error sending feedback: ' + err.message, 'error');
     } finally {
       setIsSendingFeedback(false);
     }

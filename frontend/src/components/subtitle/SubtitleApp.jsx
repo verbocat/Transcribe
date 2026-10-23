@@ -51,6 +51,7 @@ import { startJob, jobHeaders, isCancelError, CancelledError, sleepCancellable, 
 import ContextPanel, { loadContext, saveContext, contextForRequest } from './ContextPanel';
 import { draftKey, buildDraft, readDraft } from './draftStorage';
 import ShareDialog from './ShareDialog';
+import { notify, confirmDialog, promptDialog } from '../ui/feedback';
 
 function formatTime(seconds) {
   if (isNaN(seconds) || seconds == null) return "00:00.000";
@@ -1146,7 +1147,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
   }, [loadTrackEvents]);
 
   /** "Show in editor" from the translate drawer: refresh that language from the translation result and switch to it. */
-  const showTranslatedTrack = useCallback(({ code, sourceLang, events: evs }) => {
+  const showTranslatedTrack = useCallback(async ({ code, sourceLang, events: evs }) => {
     const active = activeTrackRef.current;
     const saved = { ...tracksRef.current };
     if (!active) {
@@ -1157,7 +1158,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
     }
     const existing = saved[code];
     const edited = existing && JSON.stringify(existing.map((e) => e.text)) !== JSON.stringify(evs.map((e) => e.text));
-    if (edited && !window.confirm(`Replace your ${langName(code)} edits with the latest ${langName(code)} translation?`)) {
+    if (edited && !(await confirmDialog({ title: `Replace your ${langName(code)} edits?`, message: `A new ${langName(code)} translation will overwrite the changes you made to that language.`, confirmLabel: 'Replace with new translation', cancelLabel: 'Keep my edits' }))) {
       // keep the user's version and just switch to it
       setTracks(saved);
       setActiveTrack(code);
@@ -1982,7 +1983,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
     } catch (err) {
       if (job.cancelled) return;
       console.error('Re-break all failed:', err);
-      alert(`Could not re-break lines: ${err.message || err}`);
+      notify(`Could not re-break the lines. The text is unchanged. ${err.message || err}`, 'error');
     }
     });
   };
@@ -2438,7 +2439,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
               if (finalEvents.length === 0) {
                 setProgressStage('No Dialogue Detected');
                 setProgressDetail(res.error || '0 subtitles found across recording.');
-                alert(res.error || `No Subtitles Generated: No audible dialogue was transcribed.\n\nTip: Ensure the audio has audible speech and your speech engine API key / quota is active in Settings.`);
+                notify(res.error || 'No subtitles were generated because no speech was found. Check that the file has audible speech and that the spoken language is right, then try again.', 'error');
               } else {
                 setProgressStage('Complete');
                 setProgressDetail(`All ${finalEvents.length} subtitles generated following the subtitle guidelines!`);
@@ -2519,13 +2520,9 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
         err.message?.includes('Network error') ||
         err.message?.includes('Load failed');
       if (isNetwork) {
-        alert(
-          `Connection Notice: Backend Server is currently unreachable or waking up.\n\n` +
-          `Backend URL: ${API_BASE || '(relative / localhost)'}\n\n` +
-          `Render Free-Tier Notice: If the server was idle, it spins down and takes 30-50 seconds to boot. Once running, media uploads automatically in resilient sliced chunks. Please wait a moment and click 'Auto-Generate Subtitles' again.`
-        );
+        notify(`Could not reach the server. It may be waking up, which can take up to a minute. Wait a moment, then generate again.\n${API_BASE || ''}`, 'error', 12000);
       } else {
-        alert(`Error generating subtitles: ${err.message}`);
+        notify(`Could not generate subtitles. ${err.message}`, 'error');
       }
     } finally {
       if (genJobRef.current === genJob) genJobRef.current = null;
@@ -2642,12 +2639,12 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
           setShowApiKeyModal(true);
           return;
         }
-        alert(err.detail || "Acoustic audio synchronization failed.");
+        notify(err.detail || 'Could not re-sync the subtitles to the audio.', 'error');
       }
     } catch (err) {
       if (job.cancelled) return;
       console.error("Acoustic sync failed:", err);
-      alert("Acoustic sync failed: " + err.message);
+      notify('Could not re-sync the subtitles to the audio. ' + err.message, 'error');
     } finally {
       setIsSyncingAudio(false);
     }
@@ -2800,8 +2797,8 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
     if (document.fullscreenElement) document.exitFullscreen?.();
     else document.documentElement.requestFullscreen?.().catch(() => {});
   };
-  const confirmGenerate = () => {
-    if (hasEvents && prefs.confirmGenerate && !window.confirm('Generate new subtitles? This replaces the current subtitles (you can undo) and uses transcription credits.')) return;
+  const confirmGenerate = async () => {
+    if (hasEvents && prefs.confirmGenerate && !(await confirmDialog({ title: 'Generate new subtitles?', message: 'This replaces the current subtitles and uses transcription hours. You can undo it afterwards.', confirmLabel: 'Generate subtitles' }))) return;
     handleGenerate();
   };
   // Shared with linguists: the draft on screen goes up; a linguist's saved version comes back through here.
