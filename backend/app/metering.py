@@ -191,6 +191,10 @@ class Metered:
             db.close()
         return self
 
+    async def reserve_async(self) -> "Metered":
+        """reserve() off the event loop: it waits on the database, and many requests at once must not stall every route."""
+        return await asyncio.to_thread(self.reserve)
+
     def finish(self, charge: bool, note: Optional[str] = None) -> None:
         if not self.rid or self.closed:
             return

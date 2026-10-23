@@ -6,6 +6,7 @@ budget. When the job ends the reservation is settled (charged) or refunded. Ever
 to the append-only usage_ledger.
 """
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
@@ -125,7 +126,7 @@ def reserve(db: Session, user_id: str, kind: str, ms: int, route: str, ref: Opti
     ms = int(ms)
     if ms <= 0:
         raise HTTPException(status_code=422, detail="Could not measure the length of this job.")
-    reap_stale(db)
+    _reap_stale_throttled(db)
     account = db.query(User).filter(User.id == user_id).first()
     if account is not None and not account.is_blocked:
         from .policy import check_job
@@ -193,6 +194,20 @@ def settle(db: Session, rid: str, note: Optional[str] = None) -> bool:
 
 def refund(db: Session, rid: str, note: Optional[str] = None) -> bool:
     return _close(db, rid, "refunded", note)
+
+
+_REAP_EVERY_SEC = 60.0
+_last_reap = 0.0
+
+
+def _reap_stale_throttled(db: Session) -> None:
+    """reserve() used to sweep for orphaned reservations on every call; reservations only go stale after hours, so once a minute is enough."""
+    global _last_reap
+    now = time.monotonic()
+    if now - _last_reap < _REAP_EVERY_SEC:
+        return
+    _last_reap = now
+    reap_stale(db)
 
 
 def reap_stale(db: Session, older_than: Optional[timedelta] = STALE_AFTER) -> int:

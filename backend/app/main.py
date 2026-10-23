@@ -589,10 +589,10 @@ async def transcribe_audio(
 
     # Hours are held before any work starts; the length comes from ffprobe on the stored file, not from the client.
     try:
-        meter = metering.Metered(
+        meter = await metering.Metered(
             owner, usage_mod.TRANSCRIBE, await metering.probe_duration_ms(target_path),
             "/api/transcribe", Path(target_path).name,
-        ).reserve()
+        ).reserve_async()
         _last_media_by_user[owner["id"]] = (target_path, time.time())
     except HTTPException:
         if uploaded_here:
@@ -1068,10 +1068,10 @@ async def transcribe_audio_async(
 
     # Reserve the hours (length measured here with ffprobe) before the background job exists.
     try:
-        meter = metering.Metered(
+        meter = await metering.Metered(
             metering.user_ref(current_user), usage_mod.TRANSCRIBE, await metering.probe_duration_ms(target_path),
             "/api/transcribe_async", Path(target_path).name,
-        ).reserve()
+        ).reserve_async()
         _last_media_by_user[current_user.id] = (target_path, time.time())
     except HTTPException:
         if uploaded_here:
@@ -2178,10 +2178,10 @@ async def generate_subtitles_endpoint(request: Request, payload: dict, current_u
     log_terminal("SUBTITLE-API", f"     Params -> Language: {language} | Content: {content_type} | SDH: {sdh_mode}")
     log_terminal("SUBTITLE-API", f"     Limits -> CPL: {cpl_limit} | Max CPS: {max_cps} | Min Dur: {min_duration}s | Max Dur: {max_duration}s")
 
-    meter = metering.Metered(
+    meter = await metering.Metered(
         metering.user_ref(current_user), usage_mod.TRANSCRIBE, await metering.probe_duration_ms(video_path),
         "/api/subtitle/generate", video_id,
-    ).reserve()
+    ).reserve_async()
     _last_media_by_user[current_user.id] = (video_path, time.time())
     meter.work_started = True  # one provider call; from here on a dropped connection is still charged
     try:
@@ -2310,7 +2310,7 @@ async def generate_subtitles_stream_endpoint(request: Request, payload: dict, cu
             )
 
     # Hours are held before the stream opens (so "out of hours" is a clean 402, not a broken stream).
-    meter = metering.Metered(
+    meter = await metering.Metered(
         metering.user_ref(current_user), usage_mod.TRANSCRIBE, await metering.probe_duration_ms(video_path),
         "/api/subtitle/generate_stream", video_id,
     )
@@ -2582,7 +2582,7 @@ async def centroid_translate(payload: dict, current_user: User = Depends(get_cur
         bill_ref = f"{name or (Path(media_path).name if media_path else 'Subtitles')} · {langs_n} {lang_word}"
     meter = metering.Metered(
         metering.user_ref(current_user), usage_mod.TRANSLATE, bill_ms, "/api/centroid/translate", bill_ref,
-    ).reserve()
+    ).reserve_async()
     meter.work_started = True
     try:
         data = await _centroid_translate_inner(payload)
@@ -2857,10 +2857,10 @@ async def acoustic_sync_subtitles_endpoint(request: Request, payload: dict, curr
 
         from app.elevenlabs_service import transcribe_with_scribe_v2
         # A fresh speech-to-text run costs transcription hours (cached words in the session do not).
-        meter = metering.Metered(
+        meter = await metering.Metered(
             metering.user_ref(current_user), usage_mod.TRANSCRIBE, await metering.probe_duration_ms(audio_path),
             "/api/subtitle/acoustic_sync", video_id,
-        ).reserve()
+        ).reserve_async()
         meter.work_started = True
         try:
             stt_res = await transcribe_with_scribe_v2(
