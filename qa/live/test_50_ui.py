@@ -13,6 +13,10 @@ sync_api = pytest.importorskip("playwright.sync_api", reason="playwright not ins
 pytestmark = pytest.mark.ui
 
 IGNORED_CONSOLE = re.compile(r"favicon|ResizeObserver|DevTools", re.I)
+# Match the login form by input type / wording, not exact placeholder text, so a redesign of the
+# sign-in screen does not break the checks.
+EMAIL_INPUT = "input[type=email]"
+PASSWORD_INPUT = 'input[placeholder*="password" i]'
 
 
 @pytest.fixture(scope="module")
@@ -55,8 +59,8 @@ def test_sign_in_button_opens_login(page):
     page.goto(UI_BASE, wait_until="networkidle")
     page.get_by_role("button", name="Sign in", exact=True).click()
     page.wait_for_url("**/login", timeout=10000)
-    assert page.get_by_placeholder("name@email.com").is_visible(), "email field not visible"
-    assert page.get_by_placeholder("Enter your password").is_visible(), "password field not visible"
+    assert page.locator(EMAIL_INPUT).first.is_visible(), "email field not visible"
+    assert page.locator(PASSWORD_INPUT).first.is_visible(), "password field not visible"
     assert not page.console_errors, f"JS errors: {page.console_errors[:3]}"
 
 
@@ -70,9 +74,9 @@ def test_sign_in_and_home(page):
     if not (TEST_EMAIL and TEST_PASSWORD):
         pytest.skip("LIVE_TEST_EMAIL / LIVE_TEST_PASSWORD not set")
     page.goto(f"{UI_BASE}/login", wait_until="networkidle")
-    page.get_by_placeholder("name@email.com").fill(TEST_EMAIL)
-    page.get_by_placeholder("Enter your password").fill(TEST_PASSWORD)
-    page.locator("button[type=submit]", has_text="Sign In").click()
+    page.locator(EMAIL_INPUT).first.fill(TEST_EMAIL)
+    page.locator(PASSWORD_INPUT).first.fill(TEST_PASSWORD)
+    page.locator("button[type=submit]", has_text=re.compile(r"sign in", re.I)).click()
     page.locator('section[aria-label="Studios"]').wait_for(state="visible", timeout=20000)
     assert page.locator('section[aria-label="Start from a media file"]').is_visible(), "home drop zone not visible"
     assert not page.console_errors, f"JS errors after sign-in: {page.console_errors[:3]}"
