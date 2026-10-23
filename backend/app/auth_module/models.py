@@ -4,6 +4,15 @@ from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, Integer, T
 from sqlalchemy.orm import relationship
 from .database import AuthBase
 
+class AdminGrant(AuthBase):
+    """An account an administrator made admin in the admin panel (see admin_config.py)."""
+    __tablename__ = "auth_admin_grants"
+
+    email = Column(String(255), primary_key=True)
+    granted_by = Column(String(255), nullable=False)
+    granted_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+
+
 class User(AuthBase):
     __tablename__ = "auth_users"
 

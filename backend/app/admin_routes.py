@@ -16,8 +16,9 @@ except ImportError:
 from app.auth_module.database import get_auth_db
 from app.auth_module.models import (
     User, AuthSession, LoginHistory, UserMediaAsset, SubtitleGenerationRun,
-    SystemHardwareSnapshot, AdminAuditLog, AdminNotification, UsageReservation
+    SystemHardwareSnapshot, AdminAuditLog, AdminNotification, UsageReservation, AdminGrant
 )
+from app.auth_module.admin_config import admin_source, granted_admin_emails
 from app.auth_module.routes import get_current_user_from_token, get_current_admin_user, is_super_admin
 from app.auth_module.security import (
     validate_verbolabs_email, validate_password, hash_password, generate_token,
@@ -284,6 +285,7 @@ def list_users(
             "employee_id": u.employee_id,
             "role": u.role or "coordinator",
             "is_admin": is_super_admin(u.email),
+            "admin_source": admin_source(u.email),
             "is_blocked": bool(u.is_blocked),
             "is_verified": u.is_verified,
             "is_online": has_active_sess,
@@ -925,9 +927,53 @@ def _resolve_limit(hours: Optional[float], unlimited: bool, label: str) -> Optio
 def _user_row(u: User) -> Dict[str, Any]:
     return {
         "id": u.id, "name": u.name, "email": u.email, "role": u.role or "coordinator",
-        "is_admin": is_super_admin(u.email), "is_blocked": bool(u.is_blocked),
+        "is_admin": is_super_admin(u.email), "admin_source": admin_source(u.email), "is_blocked": bool(u.is_blocked),
         "is_verified": bool(u.is_verified), "usage": usage_summary(u), "access": policy.summary(u),
     }
+
+
+class AdminRightsRequest(BaseModel):
+    admin: bool
+
+
+@admin_router.put("/users/{user_id}/admin")
+def set_admin_rights(user_id: str, payload: AdminRightsRequest, request: Request, admin: User = Depends(admin_write_guard), db: Session = Depends(get_auth_db)):
+    """Make an account an administrator, or take that away. Admins set on the server (built-in or ADMIN_EMAILS) cannot
+    be changed here, and nobody can remove their own admin access (so the panel always keeps an admin)."""
+    target = db.query(User).filter(User.id == user_id).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found.")
+    email = target.email.strip().lower()
+    source = admin_source(email)
+    if payload.admin:
+        if source:
+            return {"success": True, "message": f"{target.email} is already an administrator.", "user": _user_row(target)}
+        if target.is_blocked:
+            raise HTTPException(status_code=400, detail="This account is disabled. Enable it first, then make it an administrator.")
+        db.merge(AdminGrant(email=email, granted_by=admin.email))
+        target.is_admin, target.role = True, "admin"
+        _audit(db, admin, "admin_granted", f"{admin.email} made {target.email} an administrator", request)
+        db.add(AdminNotification(user_id=target.id, admin_email=admin.email, title="You are now an administrator",
+                                 message=f"{admin.email} gave your account administrator access. Sign in again to see the admin panel.",
+                                 notification_type="notice"))
+        message = f"{target.email} is now an administrator."
+    else:
+        if source in ("builtin", "server"):
+            raise HTTPException(status_code=400, detail="This administrator is set on the server (built in, or in ADMIN_EMAILS), so it cannot be removed here.")
+        if not source:
+            return {"success": True, "message": f"{target.email} is not an administrator.", "user": _user_row(target)}
+        if target.id == admin.id:
+            raise HTTPException(status_code=400, detail="You cannot remove your own administrator access. Ask another administrator.")
+        db.query(AdminGrant).filter(AdminGrant.email == email).delete()
+        target.is_admin, target.role = False, "coordinator"
+        _audit(db, admin, "admin_revoked", f"{admin.email} removed administrator access from {target.email}", request)
+        db.add(AdminNotification(user_id=target.id, admin_email=admin.email, title="Administrator access removed",
+                                 message=f"{admin.email} removed administrator access from your account.", notification_type="notice"))
+        message = f"{target.email} is no longer an administrator."
+    db.commit()
+    granted_admin_emails(force=True)
+    db.refresh(target)
+    return {"success": True, "message": message, "user": _user_row(target)}
 
 
 class CreateUserRequest(BaseModel):

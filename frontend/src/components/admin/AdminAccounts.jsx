@@ -1,7 +1,15 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   UserPlus, Search, Eye, SlidersHorizontal, X, Copy, Check, Trash2, KeyRound, Ban, UserCheck, ListOrdered, Pencil, RefreshCw, AlertTriangle,
+  ShieldCheck, ShieldOff,
 } from 'lucide-react';
+
+// Where an administrator's rights come from (only those granted in this panel can be removed here).
+const ADMIN_SOURCE = {
+  builtin: 'Built-in super administrator',
+  server: 'Set on the server (ADMIN_EMAILS), cannot be removed here',
+  granted: 'Made administrator in this panel',
+};
 import { API_BASE } from '../../config';
 import { useAuth } from '../../auth_views/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
@@ -192,6 +200,7 @@ export default function AdminAccounts({ refreshKey = 0, onOpenDossier }) {
   };
   const toggleBlock = (u) => run(() => api(token, `/users/${u.id}/status`, { method: 'PATCH', body: { is_blocked: !u.is_blocked } }));
   const confirmDelete = () => run(async () => { await api(token, `/users/${dialog.user.id}`, { method: 'DELETE' }); setDialog(null); });
+  const confirmAdmin = () => run(async () => { await api(token, `/users/${dialog.user.id}/admin`, { method: 'PUT', body: { admin: dialog.grant } }); setDialog(null); });
 
   const card = isDark ? 'bg-[var(--kt-s1)] border-[var(--kt-s3)]' : 'bg-white border-slate-200 shadow-2xs';
   const input = isDark ? 'bg-[var(--kt-s2)] border-[var(--kt-s4)] text-white placeholder-slate-500' : 'bg-white border-slate-300 text-slate-900 placeholder-slate-400';
@@ -235,7 +244,7 @@ export default function AdminAccounts({ refreshKey = 0, onOpenDossier }) {
             {shown.map((u) => (
               <tr key={u.id} className={`border-b last:border-0 ${isDark ? 'border-[var(--kt-s3)]' : 'border-slate-100'}`}>
                 <td className="p-3">
-                  <div className={`font-semibold ${strong}`}>{u.name} {u.is_admin && <span className="ml-1 text-[9px] px-1.5 py-0.5 rounded bg-[var(--kt-accent)]/20 text-[var(--kt-accent)] font-bold">ADMIN</span>} {u.is_blocked && <span className="ml-1 text-[9px] px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-400 font-bold">DISABLED</span>} {!u.is_admin && <span className={`ml-1 text-[9px] px-1.5 py-0.5 rounded font-bold ${u.role === 'linguist' ? 'bg-violet-500/20 text-violet-400' : 'bg-sky-500/20 text-sky-400'}`}>{u.role === 'linguist' ? 'LINGUIST' : 'COORDINATOR'}</span>}</div>
+                  <div className={`font-semibold ${strong}`}>{u.name} {u.is_admin && <span className="ml-1 text-[9px] px-1.5 py-0.5 rounded bg-[var(--kt-accent)]/20 text-[var(--kt-accent)] font-bold" title={ADMIN_SOURCE[u.admin_source] || 'Administrator'}>ADMIN</span>} {u.is_blocked && <span className="ml-1 text-[9px] px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-400 font-bold">DISABLED</span>} {!u.is_admin && <span className={`ml-1 text-[9px] px-1.5 py-0.5 rounded font-bold ${u.role === 'linguist' ? 'bg-violet-500/20 text-violet-400' : 'bg-sky-500/20 text-sky-400'}`}>{u.role === 'linguist' ? 'LINGUIST' : 'COORDINATOR'}</span>}</div>
                   <AccessBadges a={u.access} />
                   <div className={`font-mono ${muted}`}>{u.email}</div>
                 </td>
@@ -246,6 +255,12 @@ export default function AdminAccounts({ refreshKey = 0, onOpenDossier }) {
                     {onOpenDossier && <button type="button" onClick={() => onOpenDossier(u.id)} className={`p-1.5 rounded-lg border cursor-pointer ${btn}`} title="Details: sessions, logins, productions, send a notice" aria-label="Details"><Eye size={13} /></button>}
                     <button type="button" onClick={() => openLedger(u)} className={`p-1.5 rounded-lg border cursor-pointer ${btn}`} title="Usage history" aria-label="Usage history"><ListOrdered size={13} /></button>
                     <button type="button" onClick={() => openEdit(u)} className={`p-1.5 rounded-lg border cursor-pointer ${btn}`} title="Edit account" aria-label="Edit account"><Pencil size={13} /></button>
+                    {!u.is_admin && !u.is_blocked && (
+                      <button type="button" onClick={() => { setError(''); setDialog({ type: 'admin', user: u, grant: true }); }} className={`p-1.5 rounded-lg border cursor-pointer ${btn}`} title="Make administrator" aria-label="Make administrator"><ShieldCheck size={13} /></button>
+                    )}
+                    {u.is_admin && u.admin_source === 'granted' && u.id !== me?.id && (
+                      <button type="button" onClick={() => { setError(''); setDialog({ type: 'admin', user: u, grant: false }); }} className="p-1.5 rounded-lg border border-amber-500/40 text-amber-400 hover:bg-amber-500/10 cursor-pointer" title="Remove administrator access" aria-label="Remove administrator access"><ShieldOff size={13} /></button>
+                    )}
                     {!u.is_admin && (
                       <>
                         <button type="button" onClick={() => toggleBlock(u)} className={`p-1.5 rounded-lg border cursor-pointer ${btn}`} title={u.is_blocked ? 'Enable account' : 'Disable account'} aria-label={u.is_blocked ? 'Enable account' : 'Disable account'}>{u.is_blocked ? <UserCheck size={13} /> : <Ban size={13} />}</button>
@@ -314,6 +329,21 @@ export default function AdminAccounts({ refreshKey = 0, onOpenDossier }) {
           <p className={strong}>Delete <strong>{dialog.user.email}</strong>? They are signed out and cannot sign in again. Their usage history is kept.</p>
           {error && <div className="text-rose-400">{error}</div>}
           <div className="flex justify-end gap-2"><button type="button" onClick={() => setDialog(null)} className={`px-3 py-2 rounded-lg border cursor-pointer ${btn}`}>Cancel</button><button disabled={busy} onClick={confirmDelete} className="px-4 py-2 rounded-lg font-bold bg-rose-600 text-white cursor-pointer disabled:opacity-50">Delete</button></div>
+        </Modal>
+      )}
+
+      {dialog?.type === 'admin' && (
+        <Modal title={dialog.grant ? 'Make administrator' : 'Remove administrator access'} onClose={() => setDialog(null)} isDark={isDark}>
+          {dialog.grant ? (
+            <p className={strong}>Make <strong>{dialog.user.email}</strong> an administrator? They get this admin panel: every account, limits, usage and media, and they can make or remove other administrators too. They see it after signing in again.</p>
+          ) : (
+            <p className={strong}>Remove administrator access from <strong>{dialog.user.email}</strong>? They become a coordinator and lose the admin panel straight away.</p>
+          )}
+          {error && <div className="text-rose-400">{error}</div>}
+          <div className="flex justify-end gap-2">
+            <button type="button" onClick={() => setDialog(null)} className={`px-3 py-2 rounded-lg border cursor-pointer ${btn}`}>Cancel</button>
+            <button disabled={busy} onClick={confirmAdmin} className={`px-4 py-2 rounded-lg font-bold text-white cursor-pointer disabled:opacity-50 ${dialog.grant ? 'bg-[var(--kt-accent)]' : 'bg-amber-600'}`}>{dialog.grant ? 'Make administrator' : 'Remove access'}</button>
+          </div>
         </Modal>
       )}
 
