@@ -1,3 +1,4 @@
+import glob
 import os
 import re
 import sys
@@ -94,12 +95,20 @@ def _evict_expired_sessions():
 _client_request_history = defaultdict(list)
 RATE_LIMIT_PER_MINUTE = 300  # Generous rate limit (300 req/min) to accommodate sliced chunk uploads and telemetry
 
+# X-Forwarded-For is client-controlled unless it was added by our own reverse proxy, so it is honoured only when
+# the TCP peer is one of these (comma-separated IPs; the default is a proxy on the same machine, e.g. nginx).
+TRUSTED_PROXIES = {p.strip() for p in os.getenv("TRUSTED_PROXIES", "127.0.0.1,::1").split(",") if p.strip()}
+
 def get_client_ip(request: Request) -> str:
-    """Extract real client IP behind reverse proxy (Render, Cloudflare, etc.)."""
+    """Client IP for rate limiting. Behind our own proxy it is the last X-Forwarded-For hop (the one the proxy
+    appended); a direct caller's header is ignored."""
+    peer = request.client.host if request.client else "127.0.0.1"
     forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else "127.0.0.1"
+    if forwarded and peer in TRUSTED_PROXIES:
+        hops = [h.strip() for h in forwarded.split(",") if h.strip()]
+        if hops:
+            return hops[-1]
+    return peer
 
 def _check_rate_limit(client_ip: str):
     """BUG-W1: Enforce sliding window rate limit per client IP."""
@@ -125,106 +134,34 @@ def _cleanup_old_uploads():
             pass
 
 
-def purge_media_files_for_stem(
-    clean_stem: Optional[str] = None,
-    raw_stem: Optional[str] = None,
-    video_id: Optional[str] = None,
-    exclude_prefixes: Optional[List[str]] = None
-) -> List[str]:
+def discard_session_files(video_id: str) -> List[str]:
     """
-    Surgically purge all previous media files (.wav, .mp3, .mp4, .peaks.json, .part, temp_chunk_*.wav)
-    and active_sessions matching a given media stem.
-    If exclude_prefixes is provided, leaves current active upload prefix untouched.
+    Delete the files of ONE upload session and drop its in-memory session.
+    Matching is exact: a file belongs to the session only when its name is the
+    session id itself (``<prefix>_<name>``) followed by an extension or one of
+    the derived suffixes (``_audio``, ``_16k``, ``.peaks.json``). Never a substring
+    match, so other uploads with similar names are never touched.
     """
-    stems_to_match = set()
-    if clean_stem:
-        c = re.sub(r'[^\w\.-]', '_', str(clean_stem)).strip('_')
-        c = re.sub(r'_+', '_', c)
-        if len(c) >= 2:
-            stems_to_match.add(c.lower())
-    if raw_stem:
-        r = Path(str(raw_stem)).stem
-        if len(r) >= 2:
-            stems_to_match.add(r.lower())
-            r_clean = re.sub(r'[^\w\.-]', '_', r).strip('_')
-            r_clean = re.sub(r'_+', '_', r_clean)
-            if len(r_clean) >= 2:
-                stems_to_match.add(r_clean.lower())
-    if video_id:
-        v_unquoted = urllib.parse.unquote(str(video_id)).strip()
-        stems_to_match.add(v_unquoted.lower())
-        v_stem = Path(v_unquoted).stem
-        if len(v_stem) >= 2:
-            stems_to_match.add(v_stem.lower())
-        unprefixed = re.sub(r'^(?:up_[a-z0-9]+|[a-f0-9]{8})_', '', v_unquoted, flags=re.IGNORECASE).strip('_')
-        if len(unprefixed) >= 2:
-            stems_to_match.add(unprefixed.lower())
-
-    valid_stems = {s for s in stems_to_match if len(s) >= 2}
-    extra_stems = set()
-    for s in valid_stems:
-        base = re.sub(r'_(?:audio|16k)$', '', s, flags=re.IGNORECASE).strip('_')
-        if len(base) >= 2:
-            extra_stems.add(base.lower())
-        if '_' in s:
-            extra_stems.add(s.replace('_', ' ').strip().lower())
-        if ' ' in s:
-            extra_stems.add(s.replace(' ', '_').strip().lower())
-    valid_stems.update(extra_stems)
-
-    if not valid_stems:
+    sid = Path(urllib.parse.unquote(str(video_id)).strip()).stem
+    if len(sid) < 10:
         return []
-
+    sid_lower = sid.lower()
     deleted_files = []
-    upload_root = UPLOAD_DIR.resolve()
-    supported_media = get_supported_media_extensions()
-    exclude_list = [p.lower() for p in (exclude_prefixes or []) if p]
-
     for file_path in list(UPLOAD_DIR.glob("*")):
         if not file_path.is_file():
             continue
-
+        name = file_path.name.lower()
+        if not name.startswith(sid_lower):
+            continue
+        rest = name[len(sid_lower):]
+        if not (rest.startswith(".") or re.match(r"_(?:audio|16k)(?:\.|_|$)", rest)):
+            continue
         try:
-            if upload_root not in file_path.resolve().parents:
-                continue
-        except Exception:
-            continue
-
-        fname_lower = file_path.name.lower()
-        fext_lower = file_path.suffix.lower()
-
-        # Check if this file belongs to an excluded current prefix (e.g. current in-flight upload)
-        if any(fname_lower.startswith(prefix) for prefix in exclude_list):
-            continue
-
-        is_peaks_cache = fname_lower.endswith(".peaks.json")
-        is_wav = fext_lower == ".wav"
-        is_part = fext_lower == ".part"
-        is_media = fext_lower in supported_media
-        is_temp_chunk = fname_lower.startswith("temp_chunk_") and fext_lower == ".wav"
-
-        if not (is_peaks_cache or is_wav or is_part or is_media or is_temp_chunk):
-            continue
-
-        if any(s in fname_lower for s in valid_stems):
-            try:
-                file_path.unlink(missing_ok=True)
-                deleted_files.append(file_path.name)
-            except Exception as e:
-                print(f"Non-fatal error deleting {file_path.name}: {e}")
-
-    # Evict matching entries from active_sessions
-    for sess_id in list(active_sessions.keys()):
-        if any(sess_id.lower().startswith(p) for p in exclude_list):
-            continue
-        sess_info = active_sessions.get(sess_id, {})
-        sess_fname = str(sess_info.get("filename", "")).lower()
-        sess_path = str(sess_info.get("file_path", "")).lower()
-        sess_id_lower = str(sess_id).lower()
-
-        if any(s in sess_id_lower or s in sess_fname or s in sess_path for s in valid_stems):
-            active_sessions.pop(sess_id, None)
-
+            file_path.unlink(missing_ok=True)
+            deleted_files.append(file_path.name)
+        except Exception as e:
+            print(f"Non-fatal error deleting {file_path.name}: {e}")
+    active_sessions.pop(sid, None)
     return deleted_files
 
 
@@ -237,37 +174,42 @@ from app.admin_routes import (
 )
 
 
-async def _hardware_monitor_loop():
-    """Background sampler recording system hardware snapshots every 60s."""
+def _record_hardware_snapshot():
+    """One hardware sample into the DB. Blocking (psutil + SQLite), so the loop runs it in a worker thread."""
     from sqlalchemy import func
     from datetime import datetime, timezone, timedelta
+    stats = get_live_hardware_stats()
+    db = SessionLocal()
+    try:
+        snap = SystemHardwareSnapshot(
+            cpu_percent=stats["cpu_percent"],
+            memory_used_mb=stats["memory_used_mb"],
+            memory_total_mb=stats["memory_total_mb"],
+            memory_percent=stats["memory_percent"],
+            disk_used_gb=stats["disk_used_gb"],
+            disk_free_gb=stats["disk_free_gb"],
+            disk_percent=stats["disk_percent"],
+            active_sse_streams=stats["active_sse_streams"],
+        )
+        db.add(snap)
+        # Keep maximum last 1440 snapshots (24 hours)
+        total_snaps = db.query(func.count(SystemHardwareSnapshot.id)).scalar() or 0
+        if total_snaps > 1440:
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+            db.query(SystemHardwareSnapshot).filter(SystemHardwareSnapshot.recorded_at < cutoff).delete()
+        db.commit()
+    except Exception:
+        db.rollback()
+    finally:
+        db.close()
+
+
+async def _hardware_monitor_loop():
+    """Background sampler recording system hardware snapshots every 60s."""
     while True:
         try:
             await asyncio.sleep(60)
-            stats = get_live_hardware_stats()
-            db = SessionLocal()
-            try:
-                snap = SystemHardwareSnapshot(
-                    cpu_percent=stats["cpu_percent"],
-                    memory_used_mb=stats["memory_used_mb"],
-                    memory_total_mb=stats["memory_total_mb"],
-                    memory_percent=stats["memory_percent"],
-                    disk_used_gb=stats["disk_used_gb"],
-                    disk_free_gb=stats["disk_free_gb"],
-                    disk_percent=stats["disk_percent"],
-                    active_sse_streams=stats["active_sse_streams"],
-                )
-                db.add(snap)
-                # Keep maximum last 1440 snapshots (24 hours)
-                total_snaps = db.query(func.count(SystemHardwareSnapshot.id)).scalar() or 0
-                if total_snaps > 1440:
-                    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
-                    db.query(SystemHardwareSnapshot).filter(SystemHardwareSnapshot.recorded_at < cutoff).delete()
-                db.commit()
-            except Exception as e:
-                db.rollback()
-            finally:
-                db.close()
+            await asyncio.to_thread(_record_hardware_snapshot)
         except asyncio.CancelledError:
             break
         except Exception:
@@ -283,6 +225,12 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
     _cleanup_old_uploads()
+    try:
+        from app.metering import check_ffmpeg_available
+        if not check_ffmpeg_available():
+            logger.error("ffmpeg was not found (./bin, imageio-ffmpeg or PATH): transcription and Generate will fail until it is installed")
+    except Exception:
+        logger.exception("ffmpeg startup check failed")
     _evict_expired_sessions()
     init_db()
     init_auth_db()
@@ -468,10 +416,6 @@ async def upload_audio(request: Request, file: UploadFile = File(...)):
             status_code=413,
             detail=f"File too large. Maximum supported audio file size is 200MB."
         )
-
-    # Surgically delete any older uploads of this same media
-    raw_stem = Path(file.filename).stem
-    purge_media_files_for_stem(raw_stem=raw_stem)
 
     unique_prefix = uuid.uuid4().hex[:8]
     safe_filename = f"{unique_prefix}_{file.filename}"
@@ -1064,17 +1008,26 @@ async def transcribe_status(job_id: str):
     return {k: v for k, v in job.items() if k != "updated"}
 
 
+def _resolve_upload_file(filename: str, not_found: str) -> Path:
+    """Map a request filename to a file inside UPLOAD_DIR. Exact name first, then name + extension.
+    Never a wildcard or path walk: the name is matched literally and must stay inside UPLOAD_DIR."""
+    name = urllib.parse.unquote(filename or "")
+    if not name or name != Path(name).name or name.startswith("."):
+        raise HTTPException(status_code=404, detail=not_found)
+    file_path = UPLOAD_DIR / name
+    if not file_path.is_file():
+        matches = sorted(UPLOAD_DIR.glob(glob.escape(name) + ".*"))
+        matches = [m for m in matches if not m.name.endswith((".part", ".peaks.json"))]
+        if not matches:
+            raise HTTPException(status_code=404, detail=not_found)
+        file_path = matches[0]
+    return file_path
+
+
 @app.get("/api/audio/{filename}")
 async def get_audio_stream(filename: str):
     """Stream audio file for WaveSurfer browser player."""
-    file_path = UPLOAD_DIR / filename
-    if not file_path.exists():
-        # Search in uploads directory
-        matches = list(UPLOAD_DIR.glob(f"{filename}*"))
-        if matches:
-            file_path = matches[0]
-        else:
-            raise HTTPException(status_code=404, detail="Audio file not found.")
+    file_path = _resolve_upload_file(filename, "Audio file not found.")
 
     suffix = file_path.suffix.lower()
     media_type = "audio/wav"
@@ -1638,7 +1591,7 @@ async def export_multi_deliverables(payload: dict, current_user: Optional[User] 
 # --- NETFLIX SUBTITLE ENDPOINTS ---
 
 @app.post("/api/subtitle/upload")
-async def upload_video(request: Request, file: UploadFile = File(...)):
+async def upload_video(request: Request, file: UploadFile = File(...), current_user: Optional[User] = Depends(get_optional_user_from_token)):
     """Upload media file (video or pure audio) and perform initial inspection."""
     client_ip = get_client_ip(request)
     _check_rate_limit(client_ip)
@@ -1662,9 +1615,6 @@ async def upload_video(request: Request, file: UploadFile = File(...)):
     clean_stem = re.sub(r'[^\w\.-]', '_', raw_stem).strip()
     clean_stem = re.sub(r'_+', '_', clean_stem)
 
-    # Surgically delete any previous files from older uploads of this same media (prevents stale baggage)
-    purge_media_files_for_stem(clean_stem=clean_stem, raw_stem=raw_stem)
-
     unique_prefix = uuid.uuid4().hex[:8]
     safe_filename = f"{unique_prefix}_{clean_stem}{ext}"
     file_path = UPLOAD_DIR / safe_filename
@@ -1677,10 +1627,48 @@ async def upload_video(request: Request, file: UploadFile = File(...)):
             file_path.unlink()
         raise HTTPException(status_code=500, detail=f"Error writing media upload: {str(e)}")
 
-    return await _process_saved_media(file_path, safe_filename, clean_stem, raw_stem, ext, request=request)
+    return await _process_saved_media(file_path, safe_filename, clean_stem, raw_stem, ext, user_id=current_user.id if current_user else None)
 
 
-async def _process_saved_media(file_path: Path, safe_filename: str, clean_stem: str, raw_stem: str, ext: str, request: Optional[Request] = None):
+def _record_media_asset(user_id: Optional[str], video_id: str, safe_filename: str, file_path: Path, metadata: dict) -> Optional[str]:
+    """Insert the UserMediaAsset audit row for an upload. Returns its id, or None when there is no user or it fails."""
+    if not user_id:
+        return None
+    import hashlib
+    from app.auth_module.models import UserMediaAsset
+    file_hash = None
+    try:
+        with open(file_path, "rb") as f:
+            file_hash = hashlib.sha256(f.read(4 * 1024 * 1024)).hexdigest()
+    except Exception:
+        pass
+    db_aud = SessionLocal()
+    try:
+        asset = UserMediaAsset(
+            user_id=user_id,
+            video_id=video_id,
+            filename=safe_filename,
+            file_size_bytes=file_path.stat().st_size if file_path.exists() else 0,
+            duration_seconds=float(metadata.get("duration", 0.0)) if metadata else 0.0,
+            video_resolution=f"{metadata.get('width', '')}x{metadata.get('height', '')}" if metadata and metadata.get("width") else "",
+            frame_rate=float(metadata.get("frame_rate", 24.0)) if metadata else 24.0,
+            audio_sample_rate=int(metadata.get("sample_rate", 16000)) if metadata else 16000,
+            audio_channels=int(metadata.get("channels", 1)) if metadata else 1,
+            file_hash=file_hash,
+            storage_path=str(file_path)
+        )
+        db_aud.add(asset)
+        db_aud.commit()
+        return asset.id
+    except Exception as aud_err:
+        db_aud.rollback()
+        print(f"Non-fatal media asset audit note: {aud_err}")
+        return None
+    finally:
+        db_aud.close()
+
+
+async def _process_saved_media(file_path: Path, safe_filename: str, clean_stem: str, raw_stem: str, ext: str, user_id: Optional[str] = None):
     """Validate media, resolve audio, precalculate waveform, register active session, and audit UserMediaAsset."""
     try:
         val = validate_media_file(str(file_path))
@@ -1728,20 +1716,6 @@ async def _process_saved_media(file_path: Path, safe_filename: str, clean_stem: 
                 peaks_payload = cdata.get("peaks", [])
         except Exception:
             pass
-    else:
-        # Check if pre-computed peaks already exist for this media stem (instant reuse)
-        existing_caches = list(UPLOAD_DIR.glob(f"*{clean_stem}*.peaks.json"))
-        if not existing_caches and raw_stem != clean_stem:
-            existing_caches = list(UPLOAD_DIR.glob(f"*{raw_stem}*.peaks.json"))
-        if existing_caches:
-            try:
-                with open(existing_caches[0], "r", encoding="utf-8") as f:
-                    cdata = json.load(f)
-                peaks_payload = cdata.get("peaks", [])
-                with open(cache_path, "w", encoding="utf-8") as f:
-                    json.dump(cdata, f)
-            except Exception:
-                pass
 
     if not peaks_payload and audio_path and os.path.exists(audio_path):
         try:
@@ -1762,61 +1736,11 @@ async def _process_saved_media(file_path: Path, safe_filename: str, clean_stem: 
         "created_at": time.time()
     }
 
-    # Record UserMediaAsset for admin observability
-    try:
-        from app.auth_module.database import SessionLocal
-        from app.auth_module.models import UserMediaAsset, User, AuthSession
-        import hashlib
-
-        file_hash = None
-        try:
-            with open(file_path, "rb") as f:
-                head_bytes = f.read(4 * 1024 * 1024)
-                file_hash = hashlib.sha256(head_bytes).hexdigest()
-        except Exception:
-            pass
-
-        db_aud = SessionLocal()
-        try:
-            detected_user_id = None
-            if request:
-                auth_hdr = request.headers.get("authorization")
-                if auth_hdr and auth_hdr.startswith("Bearer "):
-                    tok = auth_hdr.split(" ")[1].strip()
-                    sess = db_aud.query(AuthSession).filter(AuthSession.session_token == tok, AuthSession.is_active == True).first()
-                    if sess:
-                        detected_user_id = sess.user_id
-
-            if not detected_user_id:
-                first_u = db_aud.query(User).first()
-                if first_u:
-                    detected_user_id = first_u.id
-
-            if detected_user_id:
-                asset = UserMediaAsset(
-                    user_id=detected_user_id,
-                    video_id=video_id,
-                    filename=safe_filename,
-                    file_size_bytes=file_path.stat().st_size if file_path.exists() else 0,
-                    duration_seconds=float(metadata.get("duration", 0.0)) if metadata else 0.0,
-                    video_resolution=f"{metadata.get('width', '')}x{metadata.get('height', '')}" if metadata and metadata.get("width") else "",
-                    frame_rate=float(metadata.get("frame_rate", 24.0)) if metadata else 24.0,
-                    audio_sample_rate=int(metadata.get("sample_rate", 16000)) if metadata else 16000,
-                    audio_channels=int(metadata.get("channels", 1)) if metadata else 1,
-                    file_hash=file_hash,
-                    storage_path=str(file_path)
-                )
-                db_aud.add(asset)
-                db_aud.commit()
-                active_sessions[video_id]["user_id"] = detected_user_id
-                active_sessions[video_id]["media_asset_id"] = asset.id
-        except Exception as aud_err:
-            db_aud.rollback()
-            print(f"Non-fatal media asset audit note: {aud_err}")
-        finally:
-            db_aud.close()
-    except Exception:
-        pass
+    # Record UserMediaAsset for admin observability (DB write runs in a worker thread, not on the event loop)
+    asset_id = await asyncio.to_thread(_record_media_asset, user_id, video_id, safe_filename, file_path, metadata)
+    if asset_id is not None:
+        active_sessions[video_id]["user_id"] = user_id
+        active_sessions[video_id]["media_asset_id"] = asset_id
 
     fps = round(float(metadata.get("frame_rate", 24.0)), 3) if metadata else 24.0
     audio_filename = Path(audio_path).name if (audio_path and os.path.exists(str(audio_path))) else None
@@ -1841,7 +1765,8 @@ async def upload_video_chunk(
     upload_id: str = Form(...),
     chunk_index: int = Form(...),
     total_chunks: int = Form(...),
-    filename: str = Form(...)
+    filename: str = Form(...),
+    current_user: Optional[User] = Depends(get_optional_user_from_token),
 ):
     """Receive sliced file chunk (<=20MB) to bypass cloud proxy request limits seamlessly."""
 
@@ -1858,14 +1783,6 @@ async def upload_video_chunk(
     clean_stem = re.sub(r'_+', '_', clean_stem)
     safe_filename = f"{clean_upload_id}_{clean_stem}{ext}"
     part_path = UPLOAD_DIR / f"{safe_filename}.part"
-
-    # Surgically purge previous files for this media on the very first chunk (excluding current upload_id)
-    if chunk_index == 0:
-        purge_media_files_for_stem(
-            clean_stem=clean_stem,
-            raw_stem=raw_stem,
-            exclude_prefixes=[f"{clean_upload_id}_"]
-        )
 
     # Append chunk data to .part file
     mode = "ab" if (chunk_index > 0 and part_path.exists()) else "wb"
@@ -1889,7 +1806,7 @@ async def upload_video_chunk(
         final_file_path.unlink()
     shutil.move(str(part_path), str(final_file_path))
 
-    return await _process_saved_media(final_file_path, safe_filename, clean_stem, raw_stem, ext, request=request)
+    return await _process_saved_media(final_file_path, safe_filename, clean_stem, raw_stem, ext, user_id=current_user.id if current_user else None)
 
 
 @app.delete("/api/subtitle/upload_chunk/{upload_id}")
@@ -1954,22 +1871,15 @@ def resolve_active_session_video(video_id: str) -> Optional[str]:
 
 
 @app.get("/api/subtitle/waveform/{video_id}")
-async def get_subtitle_waveform_endpoint(video_id: str, request: Request, points_per_sec: int = 50):
+async def get_subtitle_waveform_endpoint(
+    video_id: str,
+    request: Request,
+    points_per_sec: int = 50,
+    current_user: Optional[User] = Depends(get_optional_user_from_token),
+):
     """Return high-precision acoustic waveform peaks for video_id with instant disk cache lookup."""
-    auth_header = request.headers.get("authorization")
-    if auth_header and auth_header.startswith("Bearer "):
-        try:
-            token = auth_header.split(" ")[1].strip()
-            from app.auth_module.models import AuthSession
-            from app.auth_module.database import SessionLocal
-            db_s = SessionLocal()
-            sess = db_s.query(AuthSession).filter(AuthSession.session_token == token, AuthSession.is_active == True).first()
-            if sess and sess.user and not getattr(sess.user, "can_audio_peaks", True):
-                db_s.close()
-                return {"video_id": video_id, "duration": 0.0, "points_per_sec": points_per_sec, "peaks": [], "disabled": True}
-            db_s.close()
-        except Exception:
-            pass
+    if current_user is not None and not getattr(current_user, "can_audio_peaks", True):
+        return {"video_id": video_id, "duration": 0.0, "points_per_sec": points_per_sec, "peaks": [], "disabled": True}
 
     video_id = urllib.parse.unquote(str(video_id)).strip()
 
@@ -2122,16 +2032,12 @@ async def discard_media_endpoint(payload: DiscardMediaRequest):
       - In-memory active_sessions for this media
     Guarantees no other user's files or unrelated uploads are affected.
     """
-    raw_filename = (payload.filename or "").strip()
     raw_video_id = (payload.video_id or "").strip()
 
-    if not raw_filename and not raw_video_id:
-        raise HTTPException(status_code=400, detail="Either filename or video_id must be provided.")
+    if not raw_video_id:
+        raise HTTPException(status_code=400, detail="video_id must be provided.")
 
-    deleted_files = purge_media_files_for_stem(
-        raw_stem=raw_filename if raw_filename else None,
-        video_id=raw_video_id if raw_video_id else None
-    )
+    deleted_files = discard_session_files(raw_video_id)
 
     return {
         "success": True,
@@ -2285,13 +2191,15 @@ async def generate_subtitles_stream_endpoint(request: Request, payload: dict, cu
     # Video-count quota (older per-account limit) and the AI-optimise switch, from the authenticated account
     if current_user.max_videos_quota is not None and current_user.max_videos_quota >= 0:
         from app.auth_module.models import SubtitleGenerationRun
-        from app.auth_module.database import SessionLocal
-        db_s = SessionLocal()
-        try:
-            runs = db_s.query(SubtitleGenerationRun.video_id).filter(SubtitleGenerationRun.user_id == user_id).all()
-        finally:
-            db_s.close()
-        distinct_video_ids = {r[0] for r in runs if r[0]}
+
+        def _previous_video_ids():
+            db_s = SessionLocal()
+            try:
+                return {r[0] for r in db_s.query(SubtitleGenerationRun.video_id).filter(SubtitleGenerationRun.user_id == user_id).all() if r[0]}
+            finally:
+                db_s.close()
+
+        distinct_video_ids = await asyncio.to_thread(_previous_video_ids)
         if video_id not in distinct_video_ids and len(distinct_video_ids) >= current_user.max_videos_quota:
             raise HTTPException(
                 status_code=403,
@@ -2302,7 +2210,8 @@ async def generate_subtitles_stream_endpoint(request: Request, payload: dict, cu
     meter = metering.Metered(
         metering.user_ref(current_user), usage_mod.TRANSCRIBE, await metering.probe_duration_ms(video_path),
         "/api/subtitle/generate_stream", video_id,
-    ).reserve()
+    )
+    await asyncio.to_thread(meter.reserve)  # DB write: off the event loop
     _last_media_by_user[current_user.id] = (video_path, time.time())
 
     generator = generate_subtitles_stream(
@@ -2971,6 +2880,8 @@ async def export_subtitles_endpoint(payload: SubtitleExportRequest, request: Req
             media_type=media_type,
             headers={"Content-Disposition": f'attachment; filename="{base_name}.{ext}"'}
         )
+    except HTTPException:
+        raise
     except Exception as e:
         import traceback
         traceback.print_exc()
@@ -2980,13 +2891,7 @@ async def export_subtitles_endpoint(payload: SubtitleExportRequest, request: Req
 @app.get("/api/subtitle/video/{filename}")
 async def get_video_stream(request: Request, filename: str):
     """Stream video file for player with Range requests support."""
-    file_path = UPLOAD_DIR / filename
-    if not file_path.exists():
-        matches = list(UPLOAD_DIR.glob(f"{filename}*"))
-        if matches:
-            file_path = matches[0]
-        else:
-            raise HTTPException(status_code=404, detail="Video file not found.")
+    file_path = _resolve_upload_file(filename, "Video file not found.")
 
     file_size = file_path.stat().st_size
     range_header = request.headers.get("Range")

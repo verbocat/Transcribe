@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from app import dubbing_engines as eng
 from app import dubbing_projects as dp
-from app.auth_module.routes import get_current_user_from_token
+from app.auth_module.routes import get_current_user_from_token, get_optional_user_from_token
 from app.main import app
 
 
@@ -50,6 +50,7 @@ def test_project_stages(monkeypatch, tmp_path):
     wav = tmp_path / "in.wav"
     sf.write(str(wav), np.zeros(16000 * 8, dtype="float32"), 16000)
     app.dependency_overrides[get_current_user_from_token] = lambda: SimpleNamespace(id="u1", email="a@b.c")
+    app.dependency_overrides[get_optional_user_from_token] = lambda: SimpleNamespace(id="u1", email="a@b.c", role="coordinator", is_admin=False)
     try:
         with TestClient(app) as c:
             def wait(pid):
@@ -87,8 +88,10 @@ def test_project_stages(monkeypatch, tmp_path):
             assert j["segments"][0]["translation"] == "English:नमस्ते" and j["segments"][1]["translation"] == ""
 
             app.dependency_overrides[get_current_user_from_token] = lambda: SimpleNamespace(id="other", email="x@y.z")
+            app.dependency_overrides[get_optional_user_from_token] = lambda: SimpleNamespace(id="other", email="x@y.z", role="coordinator", is_admin=False)
             assert c.get(f"/api/dubbing/projects/{pid}").status_code == 404
             app.dependency_overrides[get_current_user_from_token] = lambda: SimpleNamespace(id="u1", email="a@b.c")
+            app.dependency_overrides[get_optional_user_from_token] = lambda: SimpleNamespace(id="u1", email="a@b.c", role="coordinator", is_admin=False)
             assert c.delete(f"/api/dubbing/projects/{pid}").status_code == 200
     finally:
         app.dependency_overrides.clear()
@@ -124,6 +127,7 @@ def test_speech_per_line_controls_and_mix(monkeypatch, tmp_path):
     dp._projects[pid] = proj
     dp._save(proj)
     app.dependency_overrides[get_current_user_from_token] = lambda: SimpleNamespace(id="u1", email="a@b.c")
+    app.dependency_overrides[get_optional_user_from_token] = lambda: SimpleNamespace(id="u1", email="a@b.c", role="coordinator", is_admin=False)
     try:
         with TestClient(app) as c:
             def wait():

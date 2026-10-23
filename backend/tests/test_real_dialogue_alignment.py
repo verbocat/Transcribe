@@ -6,6 +6,9 @@ try:
 except Exception:
     pass
 
+import pytest
+pytest.importorskip("torch", reason="torch is not in requirements.txt")
+
 from app.audio_processor import snap_to_acoustic_boundaries
 from app.vad_processor import get_speech_timestamps_vad
 from app.netflix_linter import auto_chain_gaps

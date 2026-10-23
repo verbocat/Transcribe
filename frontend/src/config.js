@@ -140,6 +140,10 @@ export const detectAndSelectLiveBackend = async () => {
   if (!isLocalhostHost()) {
     return API_BASE;
   }
+  // A build that names its backend (VITE_API_URL) never probes other ports
+  if (cleanUrl(import.meta.env.VITE_API_URL)) {
+    return API_BASE;
+  }
 
   // If user explicitly saved a manual override, verify that first
   try {

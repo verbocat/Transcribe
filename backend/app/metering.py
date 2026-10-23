@@ -5,8 +5,11 @@ received for translation), never taken from a client-supplied "duration" field.
 """
 import asyncio
 import logging
+import os
 import re
+import shutil
 import subprocess
+from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
 from fastapi import HTTPException
@@ -29,12 +32,35 @@ def user_ref(user: User) -> Dict[str, str]:
     return {"id": user.id, "email": user.email}
 
 
+def _ffmpeg_exe() -> str:
+    """The ffmpeg binary: ./bin, the imageio-ffmpeg download (its Windows file is not named plain ffmpeg.exe), or PATH."""
+    from app.video_processor import get_ffmpeg_path
+    return get_ffmpeg_path()
+
+
+def _ffprobe_exe() -> Optional[str]:
+    """ffprobe next to the chosen ffmpeg, or on PATH; None when there is none (imageio-ffmpeg ships ffmpeg only)."""
+    ffmpeg = _ffmpeg_exe()
+    if ffmpeg != "ffmpeg":
+        for name in ("ffprobe.exe", "ffprobe"):
+            cand = Path(ffmpeg).parent / name
+            if cand.exists():
+                return str(cand)
+    return shutil.which("ffprobe")
+
+
+def check_ffmpeg_available() -> bool:
+    """True when ffmpeg can be run. Called at startup so a missing install is logged once, not discovered per job."""
+    exe = _ffmpeg_exe()
+    return os.path.isfile(exe) or shutil.which(exe) is not None
+
+
 def _decoded_seconds(path: str) -> float:
     """Length of the audio that actually decodes, not what the container header claims (a doctored header
     could otherwise understate a long file). Skips video, so it runs far faster than real time."""
     try:
         out = subprocess.run(
-            ["ffmpeg", "-nostdin", "-v", "error", "-i", str(path), "-vn", "-f", "null", "-progress", "pipe:1", "-"],
+            [_ffmpeg_exe(), "-nostdin", "-v", "error", "-i", str(path), "-vn", "-f", "null", "-progress", "pipe:1", "-"],
             capture_output=True, text=True, timeout=900,
         ).stdout
         last = 0.0
@@ -50,13 +76,24 @@ def _decoded_seconds(path: str) -> float:
 
 
 def _header_seconds(path: str) -> float:
+    """Container-declared length: ffprobe when available, otherwise the 'Duration:' line of `ffmpeg -i`."""
     try:
-        out = subprocess.run(
-            ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", str(path)],
-            capture_output=True, text=True, timeout=60,
-        ).stdout.strip()
-        v = float(out)
-        return v if v == v and v != float("inf") else 0.0
+        probe = _ffprobe_exe()
+        if probe:
+            out = subprocess.run(
+                [probe, "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", str(path)],
+                capture_output=True, text=True, timeout=60,
+            ).stdout.strip()
+            v = float(out)
+            return v if v == v and v != float("inf") else 0.0
+        err = subprocess.run(
+            [_ffmpeg_exe(), "-nostdin", "-hide_banner", "-i", str(path)],
+            capture_output=True, text=True, errors="replace", timeout=60,
+        ).stderr
+        m = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", err)
+        if not m:
+            return 0.0
+        return int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
     except Exception:
         return 0.0
 

@@ -8,7 +8,7 @@ import soundfile as sf
 from fastapi.testclient import TestClient
 
 from app import dubbing_routes as routes
-from app.auth_module.routes import get_current_user_from_token
+from app.auth_module.routes import get_current_user_from_token, get_optional_user_from_token
 from app.main import app
 
 
@@ -38,6 +38,7 @@ def _setup(monkeypatch, tmp_path, handler):
     real = httpx.AsyncClient
     monkeypatch.setattr(routes.httpx, "AsyncClient", lambda *a, **k: real(transport=httpx.MockTransport(handler)))
     app.dependency_overrides[get_current_user_from_token] = lambda: SimpleNamespace(id="u1", email="a@b.c")
+    app.dependency_overrides[get_optional_user_from_token] = lambda: SimpleNamespace(id="u1", email="a@b.c", role="coordinator", is_admin=False)
     FakeMeter.instances.clear()
     wav = tmp_path / "in.wav"
     sf.write(str(wav), np.zeros(16000 * 6, dtype="float32"), 16000)
@@ -96,8 +97,9 @@ def test_failed_dub_is_refunded_and_message_shown(monkeypatch, tmp_path):
             assert j["status"] == "error" and "Upgrade your plan" in j["error"]
             assert not FakeMeter.instances[0].closed  # refunded
             assert c.post("/api/dubbing/jobs", files={"file": ("in.wav", b"x", "audio/wav")}, data={"target_language": "Klingon"}).status_code == 400
-            other = SimpleNamespace(id="other", email="x@y.z")
+            other = SimpleNamespace(id="other", email="x@y.z", role="coordinator", is_admin=False)
             app.dependency_overrides[get_current_user_from_token] = lambda: other
+            app.dependency_overrides[get_optional_user_from_token] = lambda: other
             assert c.get(f"/api/dubbing/jobs/{j['id']}").status_code == 404
     finally:
         app.dependency_overrides.clear()

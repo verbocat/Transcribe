@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 from fastapi import APIRouter, Depends, HTTPException, Header, Request, status
 from sqlalchemy.orm import Session
 
-from .database import get_auth_db, init_auth_db
+from .database import get_auth_db, init_auth_db, SessionLocal
 from .models import (
     User,
     VerificationToken,
@@ -202,9 +202,12 @@ def get_current_user_from_token(
         )
     policy.ensure_active(session.user)
 
-    # Slide 4-hour inactivity window forward on active use
-    session.expires_at = now_utc + timedelta(hours=4)
-    db.commit()
+    # Slide the 4-hour inactivity window forward on active use, but write at most once every few minutes
+    # (this runs on every call to /api/auth/me and every authenticated route).
+    new_expiry = now_utc + timedelta(hours=4)
+    if new_expiry - expires_at > timedelta(minutes=5):
+        session.expires_at = new_expiry
+        db.commit()
 
     return session.user
 
@@ -223,11 +226,15 @@ def get_current_admin_user(
 
 def get_optional_user_from_token(
     authorization: Optional[str] = Header(None),
-    db: Session = Depends(get_auth_db)
 ) -> Optional[User]:
-    """Dependency that extracts user if Bearer token is provided, or None if anonymous/unauthenticated."""
+    """Dependency that extracts user if Bearer token is provided, or None if anonymous/unauthenticated.
+
+    Uses its own short-lived session, closed right after the lookup, so a request does not hold a
+    database connection for its whole life (the global gate runs this on every request).
+    """
     if not authorization or not authorization.startswith("Bearer "):
         return None
+    db = SessionLocal()
     try:
         token = authorization.split(" ")[1].strip()
         session = db.query(AuthSession).filter(
@@ -236,13 +243,17 @@ def get_optional_user_from_token(
         ).first()
         if not session or not session.user:
             return None
+        user = session.user
         now_utc = datetime.now(timezone.utc)
         exp = session.expires_at.replace(tzinfo=timezone.utc) if session.expires_at.tzinfo is None else session.expires_at
-        if now_utc > exp or session.user.is_blocked or policy.is_expired(session.user):
+        if now_utc > exp or user.is_blocked or policy.is_expired(user):
             return None
-        return session.user
+        db.expunge(user)  # keep the loaded columns usable after the session is closed
+        return user
     except Exception:
         return None
+    finally:
+        db.close()
 
 
 @auth_router.post("/signup", status_code=status.HTTP_201_CREATED)

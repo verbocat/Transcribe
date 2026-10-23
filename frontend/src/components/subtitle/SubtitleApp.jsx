@@ -1005,6 +1005,17 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
     }, prefs.autosaveSec * 1000);
     return () => clearInterval(interval);
   }, [prefs.autosaveSec, saveDraftNow]);
+  // First content for this file (Generate finished, a file or draft opened): write the draft right away, so a reload
+  // before the next timer tick does not find an empty studio.
+  const firstSaveFileRef = useRef(null);
+  useEffect(() => {
+    if (!events.length) { firstSaveFileRef.current = null; return undefined; }
+    const key = selectedFile?.name || '';
+    if (firstSaveFileRef.current === key) return undefined;
+    firstSaveFileRef.current = key;
+    const t = setTimeout(() => { saveDraftNow(); }, 600);
+    return () => clearTimeout(t);
+  }, [events.length > 0, selectedFile?.name, saveDraftNow]);
   const hasUnsavedDraftChanges = events.length > 0 && (events !== lastSavedEventsRef.current || tracks !== lastSavedTracksRef.current);
 
   // Workspace shortcuts (handlers are read from a ref so the listener is attached once)

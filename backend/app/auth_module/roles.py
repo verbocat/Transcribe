@@ -23,6 +23,12 @@ ASSIGNABLE = (COORDINATOR, LINGUIST)
 LINGUIST_PATHS = ("/api/auth/", "/api/shares/", "/api/health", "/health")
 LINGUIST_EXACT = ("/", "/api/shares")
 
+# Reachable without signing in. Everything else needs a valid session token (see make_role_gate).
+#  - /api/auth/      sign-in, sign-up, password reset, verification
+#  - /api/shares/    each share route checks its own session or signed link (e.g. the video link carries ?t=)
+#  - /api/audio/, /api/subtitle/video/  media GETs: <audio>/<video> elements cannot send an Authorization header
+PUBLIC_EXACT = ("/", "/api/shares", "/docs", "/redoc", "/openapi.json")
+
 
 def normalize(role: Optional[str]) -> str:
     r = (role or "").strip().lower()
@@ -37,6 +43,13 @@ def linguist_may_call(path: str) -> bool:
     return path in LINGUIST_EXACT or path.startswith(LINGUIST_PATHS)
 
 
+def is_public(path: str, method: str) -> bool:
+    if path in PUBLIC_EXACT or path.startswith(("/api/auth/", "/api/shares/", "/api/health", "/health")):
+        return True
+    # Media playback is GET/HEAD only
+    return method in ("GET", "HEAD") and path.startswith(("/api/audio/", "/api/subtitle/video/"))
+
+
 def forbid_linguist(user: Optional[User]) -> None:
     if is_linguist(user):
         raise HTTPException(status_code=403, detail="Linguist accounts can only review and edit subtitles shared with them. Ask a project coordinator.")
@@ -45,6 +58,13 @@ def forbid_linguist(user: Optional[User]) -> None:
 def make_role_gate(get_optional_user):
     """Dependency for the whole app (FastAPI(dependencies=[Depends(gate)])): blocks linguists from every other route."""
     def role_gate(request: Request, user: Optional[User] = Depends(get_optional_user)) -> None:
-        if request.method != "OPTIONS" and is_linguist(user) and not linguist_may_call(request.url.path):
+        if request.method == "OPTIONS":
+            return
+        path = request.url.path
+        if user is None:
+            if not is_public(path, request.method):
+                raise HTTPException(status_code=401, detail="Please sign in to use this feature.")
+            return
+        if is_linguist(user) and not linguist_may_call(path):
             forbid_linguist(user)
     return role_gate

@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from app import dubbing_edit as ed
 from app import dubbing_engines as eng
 from app import dubbing_projects as dp
-from app.auth_module.routes import get_current_user_from_token
+from app.auth_module.routes import get_current_user_from_token, get_optional_user_from_token
 from app.main import app
 
 
@@ -106,6 +106,7 @@ def test_edit_endpoints_and_mix_follow_the_edit(monkeypatch, tmp_path):
     dp._projects[pid] = proj
     dp._save(proj)
     app.dependency_overrides[get_current_user_from_token] = lambda: SimpleNamespace(id="u1", email="a@b.c")
+    app.dependency_overrides[get_optional_user_from_token] = lambda: SimpleNamespace(id="u1", email="a@b.c", role="coordinator", is_admin=False)
     try:
         with TestClient(app) as c:
             j = c.get(f"/api/dubbing/projects/{pid}/edit").json()
@@ -209,6 +210,7 @@ def test_mix_renders_cut_video_and_background(monkeypatch, tmp_path):
     dp._projects[pid] = proj
     dp._save(proj)
     app.dependency_overrides[get_current_user_from_token] = lambda: SimpleNamespace(id="u1", email="a@b.c")
+    app.dependency_overrides[get_optional_user_from_token] = lambda: SimpleNamespace(id="u1", email="a@b.c", role="coordinator", is_admin=False)
     try:
         with TestClient(app) as c:
             assert c.post(f"/api/dubbing/projects/{pid}/mix").status_code == 200
@@ -281,6 +283,7 @@ def test_mix_applies_ducking_clip_levels_and_master(monkeypatch, tmp_path):
     dp._projects[pid] = proj
     dp._save(proj)
     app.dependency_overrides[get_current_user_from_token] = lambda: SimpleNamespace(id="u1", email="a@b.c")
+    app.dependency_overrides[get_optional_user_from_token] = lambda: SimpleNamespace(id="u1", email="a@b.c", role="coordinator", is_admin=False)
     try:
         with TestClient(app) as c:
             assert c.post(f"/api/dubbing/projects/{pid}/mix").status_code == 200
@@ -380,6 +383,7 @@ def test_render_with_dissolve_effects_overlay_and_thumbnails(monkeypatch, tmp_pa
     dp._projects[pid] = proj
     dp._save(proj)
     app.dependency_overrides[get_current_user_from_token] = lambda: SimpleNamespace(id="u1", email="a@b.c")
+    app.dependency_overrides[get_optional_user_from_token] = lambda: SimpleNamespace(id="u1", email="a@b.c", role="coordinator", is_admin=False)
     try:
         with TestClient(app) as c:
             assert c.get(f"/api/dubbing/projects/{pid}/edit").json()["video"] == {"width": 320, "height": 240, "fps": 25.0}
