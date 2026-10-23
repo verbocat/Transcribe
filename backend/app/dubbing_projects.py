@@ -43,6 +43,27 @@ _tasks: Dict[str, asyncio.Task] = {}
 _PRIVATE = {"media_path", "owner", "updated", "lines", "edit"}
 BUSY = ("transcribing", "profiling", "translating", "speaking", "separating", "rendering")
 
+# Paid provider work inside a project (ElevenLabs speech and voice clones, Gemini translation and voice profiles) is
+# covered by the hours charged when the project was created, so it is capped per project instead of billed again.
+# The caps leave room for many re-takes; they stop a project from being used as an unlimited text-to-speech service.
+SPEECH_CHARS_PER_SEC = 25        # generous speaking rate for the dubbed language
+SPEECH_PASSES = 5                # the whole dub can be voiced about this many times over
+MAX_LINE_CHARS = 2000            # one line's translation
+MAX_CLONES = 10                  # voice clones per project
+MAX_AI_RUNS = 10                 # translation runs and voice-profile runs per project, each
+
+
+def speech_budget(p: Dict[str, Any]) -> int:
+    """Characters of speech this project may generate in total."""
+    return int(max(60.0, float(p.get("duration") or 0.0)) * SPEECH_CHARS_PER_SEC * SPEECH_PASSES)
+
+
+def _use_allowance(p: Dict[str, Any], key: str, limit: int, what: str) -> None:
+    """Count one more run of a capped step, or refuse it once the project has used its allowance."""
+    if int(p.get(key) or 0) >= limit:
+        raise HTTPException(status_code=429, detail=f"This project has used its {limit} {what}. Start a new project to do more.")
+    p[key] = int(p.get(key) or 0) + 1
+
 
 # --------------------------------------------------------------------------------------------- storage
 def _dir(pid: str) -> Path:
@@ -326,6 +347,8 @@ async def save_segments(pid: str, payload: dict, current_user: User = Depends(ge
             sid, next_id = next_id, next_id + 1
         seen.add(sid)
         speaker = str(r.get("speaker") or "Speaker 1").strip()[:40] or "Speaker 1"
+        if len(str(r.get("translation") or "").strip()) > MAX_LINE_CHARS:
+            raise HTTPException(status_code=400, detail=f"A line's translation is longer than {MAX_LINE_CHARS} characters. Split it into shorter lines.")
         out.append({"id": sid, "speaker": speaker, "gender": (old.get(sid) or {}).get("gender", "Unknown"),
                     "start": start, "end": end, "text": str(r.get("text") or "").strip(),
                     "translation": str(r.get("translation") or "").strip(),
@@ -342,6 +365,7 @@ async def save_segments(pid: str, payload: dict, current_user: User = Depends(ge
 async def rerun_profiles(pid: str, current_user: User = Depends(get_current_user_from_token)):
     p = _get(pid, current_user)
     _idle(p)
+    _use_allowance(p, "profile_runs", MAX_AI_RUNS, "voice-profile runs")
 
     async def run():
         try:
@@ -391,6 +415,7 @@ async def clone_speaker(pid: str, name: str, current_user: User = Depends(get_cu
     sample = _dir(pid) / "samples" / (sp.get("sample_file") or "-")
     if not sample.exists() or sp.get("sample_seconds", 0) < eng.MIN_SAMPLE_SECONDS:
         raise HTTPException(status_code=400, detail="This speaker has too little clean speech to clone. Use a stock voice.")
+    _use_allowance(p, "clones", MAX_CLONES, "voice clones")
     try:
         async with httpx.AsyncClient() as client:
             if sp["voice"].get("cloned_id"):
@@ -431,6 +456,11 @@ async def translate(pid: str, payload: dict, current_user: User = Depends(get_cu
     segs = [s for s in p["segments"] if not ids or s["id"] in set(ids)]
     if not segs:
         raise HTTPException(status_code=400, detail="No lines to translate.")
+    # counted in lines, so re-translating single lines while editing never runs into it
+    allowed = max(1, len(p["segments"])) * MAX_AI_RUNS
+    if int(p.get("translated_lines") or 0) + len(segs) > allowed:
+        raise HTTPException(status_code=429, detail="This project has used its translation allowance. Start a new project to do more.")
+    p["translated_lines"] = int(p.get("translated_lines") or 0) + len(segs)
 
     async def run():
         try:
@@ -490,13 +520,18 @@ def _public(p: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+def _lines_to_speak(p: Dict[str, Any], ids: Optional[List[int]], only_stale: bool) -> List[Dict[str, Any]]:
+    segs = [s for s in p["segments"] if (s.get("translation") or "").strip() and (not ids or s["id"] in set(ids))]
+    if only_stale:
+        segs = [s for s in segs if not line_state(p, s).get("ready") or line_state(p, s).get("stale")]
+    return segs
+
+
 async def _speak_lines(p: Dict[str, Any], ids: Optional[List[int]], only_stale: bool) -> None:
     pdir = _dir(p["id"])
     (pdir / "lines").mkdir(exist_ok=True)
     try:
-        segs = [s for s in p["segments"] if (s.get("translation") or "").strip() and (not ids or s["id"] in set(ids))]
-        if only_stale:
-            segs = [s for s in segs if not line_state(p, s).get("ready") or line_state(p, s).get("stale")]
+        segs = _lines_to_speak(p, ids, only_stale)
         if not segs:
             p.update(status="ready", stage="speech", detail="Nothing to generate", percent=100.0)
             return
@@ -519,6 +554,7 @@ async def _speak_lines(p: Dict[str, Any], ids: Optional[List[int]], only_stale: 
                     mp3 = pdir / "lines" / f"{sid}.mp3"
                     wav = pdir / "lines" / f"{sid}.wav"
                     mp3.write_bytes(await eng.speak(client, vid, s["translation"], eng.voice_settings(sp, 1.0, c), sem))
+                    p["speech_chars"] = int(p.get("speech_chars") or 0) + len(s["translation"])
                     pitch = c.get("pitch", 0.0)
                     raw = await asyncio.to_thread(eng.to_wav, str(mp3), str(wav), 1.0, pitch)
                     slot = max(0.4, s["end"] - s["start"])
@@ -557,7 +593,14 @@ async def speak_lines(pid: str, payload: dict, current_user: User = Depends(get_
     _idle(p)
     if not p.get("target_language"):
         raise HTTPException(status_code=400, detail="Translate the lines first.")
-    _tasks[pid] = asyncio.create_task(_speak_lines(p, payload.get("ids") or None, bool(payload.get("only_stale"))))
+    ids, only_stale = payload.get("ids") or None, bool(payload.get("only_stale"))
+    wanted = sum(len(s["translation"]) for s in _lines_to_speak(p, ids, only_stale))
+    used, budget = int(p.get("speech_chars") or 0), speech_budget(p)
+    if used + wanted > budget:
+        raise HTTPException(status_code=429, detail=(
+            f"This project's speech allowance is used up ({used:,} of {budget:,} characters spoken; this needs {wanted:,}). "
+            "Start a new project to voice more."))
+    _tasks[pid] = asyncio.create_task(_speak_lines(p, ids, only_stale))
     return {"ok": True}
 
 

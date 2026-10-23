@@ -595,16 +595,19 @@ export default function CentroidModal({
     if (!list.length) return { texts, failed };
     const lang = qc.target === 'editor' ? targets[0] || sourceLang : qc.target;
     const cps = Number(limits.max_cps) || 20;
+    // QC fixes are free on the server for up to QC_FIX_BATCH lines per call, so longer lists go in batches
+    const QC_FIX_BATCH = 60;
     const groups = [
       { items: list.filter((i) => catOf(i) === 'untranslated'), constraints: buildLimits() },
       { items: list.filter((i) => catOf(i) !== 'untranslated'), constraints: { ...buildLimits(), max_cps: Math.max(8, cps - 3) } },
-    ].filter((g) => g.items.length);
+    ].flatMap((g) => Array.from({ length: Math.ceil(g.items.length / QC_FIX_BATCH) },
+      (_, n) => ({ ...g, items: g.items.slice(n * QC_FIX_BATCH, (n + 1) * QC_FIX_BATCH) })));
     for (const g of groups) {
       try {
         const data = await api('/api/centroid/translate', {
           events: g.items.map((i) => ({ start_time: i.start, end_time: i.end, text: i.source })),
           source_lang: sourceLang, target_langs: [lang], context: buildContext(), glossary: buildGlossary(), constraints: g.constraints, ...hint, quality,
-          purpose: 'fix', // only these lines are re-translated, so only their time is billed
+          purpose: 'fix', // a QC fix: free, and not written to the usage history
         });
         const cues = (data.results || {})[lang]?.cues || [];
         g.items.forEach((i, n) => {

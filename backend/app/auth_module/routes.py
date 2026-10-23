@@ -34,7 +34,8 @@ from .security import (
     hash_token
 )
 from ..client_ip import get_client_ip
-from .usage import usage_summary
+
+from .usage import signup_limit_ms, usage_summary
 from . import policy
 from .brevo_service import send_verification_email, send_password_reset_email, send_mfa_login_otp_email
 
@@ -341,7 +342,8 @@ def signup(payload: SignupRequest, request: Request, db: Session = Depends(get_a
         email=email_clean,
         password_hash=pwd_hash,
         salt=salt,
-        is_verified=False
+        is_verified=False,
+        hours_limit_ms=signup_limit_ms(),  # no minutes until an admin gives some (SIGNUP_DEFAULT_MINUTES)
     )
     db.add(new_user)
     db.flush()

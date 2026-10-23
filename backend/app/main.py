@@ -1,4 +1,5 @@
 import glob
+import hashlib
 import os
 import re
 import sys
@@ -14,7 +15,7 @@ import tempfile
 from collections import defaultdict
 from pathlib import Path
 from contextlib import asynccontextmanager
-from typing import List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from pydantic import BaseModel
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Response, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
@@ -71,6 +72,55 @@ from app.auth_module import policy as access_policy
 from app.auth_module.models import User
 from app.auth_module import usage as usage_mod
 from app import metering
+
+# AI helpers and checks (Gemini fixes and context, glossary, speaker review, Centroid QC) spend no user minutes but do
+# cost money per call, so each user may make this many of them per minute in total
+AI_CALLS_PER_MINUTE = 30
+_ai_calls: Dict[str, List[float]] = defaultdict(list)
+
+
+def _ai_rate_limit(user_id: str) -> None:
+    now = time.time()
+    calls = [t for t in _ai_calls[user_id] if now - t < 60]
+    if len(calls) >= AI_CALLS_PER_MINUTE:
+        _ai_calls[user_id] = calls
+        raise HTTPException(status_code=429, detail="Too many AI requests in a minute. Wait a moment and try again.")
+    calls.append(now)
+    _ai_calls[user_id] = calls
+
+
+# Most lines one QC-fix translation may carry; the QC panel sends its fixes in batches of this size
+QC_FIX_MAX_LINES = 60
+# A QC fix is free only for lines the user has already paid to translate into that language (a fix re-translates
+# lines of a translation they bought). Remembered per (user, language) as text hashes for this long, in memory, so
+# after a restart a fix is billed by its lines' time again until the next paid translation.
+PAID_LINES_TTL_SEC = 48 * 3600
+_paid_lines: Dict[Tuple[str, str], Dict[str, float]] = {}
+
+
+def _line_key(text: Any) -> str:
+    return hashlib.sha1(" ".join(str(text or "").split()).lower().encode("utf-8")).hexdigest()
+
+
+def _remember_paid_lines(user_id: str, langs: List[str], cues: List[Dict[str, Any]]) -> None:
+    now = time.time()
+    keys = {_line_key(c.get("text")) for c in cues if isinstance(c, dict) and str(c.get("text") or "").strip()}
+    for lang in langs:
+        seen = _paid_lines.setdefault((user_id, str(lang).lower()), {})
+        for k in [k for k, t in seen.items() if now - t > PAID_LINES_TTL_SEC]:
+            del seen[k]
+        seen.update(dict.fromkeys(keys, now))
+
+
+def _lines_already_paid(user_id: str, langs: List[str], cues: List[Dict[str, Any]]) -> bool:
+    now = time.time()
+    for lang in langs:
+        seen = _paid_lines.get((user_id, str(lang).lower()), {})
+        for c in cues:
+            t = seen.get(_line_key(c.get("text") if isinstance(c, dict) else None))
+            if t is None or now - t > PAID_LINES_TTL_SEC:
+                return False
+    return bool(langs and cues)
 
 # Lengths (ms) of media already measured, and the media each user last transcribed (used to bill translations)
 _media_len_by_id: dict = {}
@@ -1263,6 +1313,7 @@ async def extract_audio_status_endpoint(job_id: str, current_user: User = Depend
 @app.post("/api/speakers/refine")
 async def refine_speakers_endpoint(payload: dict, current_user: User = Depends(get_current_user_from_token)):
     """AI second pass on speaker labels. Returns suggestions only; the editor applies them (and can undo)."""
+    _ai_rate_limit(current_user.id)
     access_policy.require(current_user, "can_ai_optimize")
     from app.speaker_refine import lines_from_segments, suggest_corrections
     segments_raw = [s for s in payload.get("segments", []) if isinstance(s, dict) and "segment_id" in s]
@@ -2346,6 +2397,7 @@ async def generate_subtitles_stream_endpoint(request: Request, payload: dict, cu
 @app.post("/api/subtitle/context_autofill")
 async def subtitle_context_autofill(payload: dict, current_user: User = Depends(get_current_user_from_token)):
     """Read the current subtitles and draft the context (type, topic, speakers, key terms, misheard names)."""
+    _ai_rate_limit(current_user.id)
     access_policy.require(current_user, "can_ai_optimize")
     from app import context_polisher
     events = payload.get("events") or []
@@ -2360,6 +2412,7 @@ async def subtitle_context_autofill(payload: dict, current_user: User = Depends(
 @app.post("/api/subtitle/context_polish")
 async def subtitle_context_polish(payload: dict, current_user: User = Depends(get_current_user_from_token)):
     """Proofread existing subtitles against the user's context. Timing never changes; only text fixes are returned."""
+    _ai_rate_limit(current_user.id)
     access_policy.require(current_user, "can_ai_optimize")
     from app import context_polisher as cp
     events = payload.get("events") or []
@@ -2400,8 +2453,9 @@ async def subtitle_context_polish(payload: dict, current_user: User = Depends(ge
 
 
 @app.post("/api/subtitle/extract_glossary_file")
-async def extract_glossary_file_endpoint(file: UploadFile = File(...)):
+async def extract_glossary_file_endpoint(file: UploadFile = File(...), current_user: User = Depends(get_current_user_from_token)):
     """Extract vocabulary terms / proper nouns from uploaded Word (.docx), Excel (.xlsx/.xls), CSV, TXT, or JSON files."""
+    _ai_rate_limit(current_user.id)
     filename = file.filename or ""
     ext = os.path.splitext(filename)[1].lower()
     raw_terms = []
@@ -2490,13 +2544,19 @@ async def centroid_translate(payload: dict, current_user: User = Depends(get_cur
     # Translation hours, held before calling out:
     #  * a full translation costs the media's exact length (measured on the server) x target languages, never less
     #    than where the last subtitle ends;
-    #  * a QC fix (purpose="fix": a few flagged lines re-translated) costs only those lines' on-screen time.
-    langs_n = len({str(l) for l in (payload.get("target_langs") or [payload.get("target_lang")]) if l}) or 1
+    #  * a QC fix (purpose="fix": a few flagged lines re-translated from the QC panel) is free when the user already
+    #    paid to translate those lines into that language: no hours are held or charged and nothing is written to the
+    #    usage history. Otherwise it costs only those lines' on-screen time.
+    target_langs = [str(l) for l in (payload.get("target_langs") or [payload.get("target_lang")]) if l]
+    langs_n = len(set(target_langs)) or 1
     cues_in = payload.get("cues") or payload.get("events") or []
     lang_word = "language" if langs_n == 1 else "languages"
-    # "fix" is the client's word, so it only earns the small bill for a handful of lines; a whole track is always full price
-    if payload.get("purpose") == "fix" and len(cues_in) <= 60:
-        bill_ms = metering.translation_ms(cues_in, langs_n, payload.get("srt"))
+    is_fix = payload.get("purpose") == "fix" and 0 < len(cues_in) <= QC_FIX_MAX_LINES and not payload.get("srt")
+    # "fix" is the client's word: it is free only for lines already paid for, and a whole track is always full price
+    if is_fix and _lines_already_paid(current_user.id, target_langs, cues_in):
+        return await _centroid_translate_inner(payload)
+    if is_fix:
+        bill_ms = metering.translation_ms(cues_in, langs_n)
         bill_ref = f"QC fix · {len(cues_in)} line{'s' if len(cues_in) != 1 else ''} · {langs_n} {lang_word}"
     else:
         media_id = payload.get("video_id") or payload.get("audio_id")
@@ -2525,7 +2585,10 @@ async def centroid_translate(payload: dict, current_user: User = Depends(get_cur
     ).reserve()
     meter.work_started = True
     try:
-        return await _centroid_translate_inner(payload)
+        data = await _centroid_translate_inner(payload)
+        if not is_fix:
+            _remember_paid_lines(current_user.id, target_langs, cues_in)  # later QC fixes of these lines are free
+        return data
     except BaseException as e:
         meter.on_error(e)
         raise
@@ -2592,6 +2655,7 @@ async def _retry_untranslated(data: dict, body: dict) -> None:
 @app.post("/api/centroid/analyze")
 async def centroid_analyze(payload: dict, current_user: User = Depends(get_current_user_from_token)):
     """Ask Centroid to read the whole script and propose context, characters and a name glossary."""
+    _ai_rate_limit(current_user.id)
     access_policy.require(current_user, "can_ai_optimize")
     from app import centroid_client
     cues = payload.get("cues") or payload.get("events") or []
@@ -2636,6 +2700,7 @@ async def centroid_qc(payload: dict, current_user: User = Depends(get_current_us
                  source, target, suggestion (full replacement text for the cue, or null), origin "ai"|"local"}]
       centroid_error: present only when the AI review failed; local checks are still returned and ai_checked is false.
     """
+    _ai_rate_limit(current_user.id)
     from app import centroid_client
     from app.subtitle_qc import run_local_qc, merge_qc
     access_policy.require(current_user, "can_ai_optimize")
@@ -2703,6 +2768,7 @@ async def lint_subtitles_endpoint(payload: SubtitleLintRequest):
 @app.post("/api/subtitle/gemini_fix")
 async def gemini_fix_subtitles_endpoint(payload: dict, current_user: User = Depends(get_current_user_from_token)):
     """Coordinate with Gemini AI to fix QC violations (CPL, CPS, line breaks)."""
+    _ai_rate_limit(current_user.id)
     access_policy.require(current_user, "can_ai_optimize")
     video_id = payload.get("video_id")
     events = payload.get("events", [])

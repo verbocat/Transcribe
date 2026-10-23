@@ -19,9 +19,10 @@ from app.auth_module.models import User
 
 logger = logging.getLogger(__name__)
 
-# A real person cannot speak or read faster than this; used as a floor so a client cannot shrink the
-# billed time of a translation by sending falsified cue timings.
-MAX_CHARS_PER_SECOND = 25.0
+# Text per second of timeline that real tracks stay under (35 saved projects: median 8.5, highest 17.1); used as a
+# floor so a client cannot shrink the billed time of a translation by squeezing the cue timings. At 25 a squeezed
+# 10-minute track still saved about 40%.
+MAX_CHARS_PER_SECOND = 18.0
 MIN_CHARGE_MS = 1000
 _media_ms_cache: Dict[str, int] = {}
 MAX_CUE_SECONDS = 600.0  # a single cue longer than 10 min is not subtitle data

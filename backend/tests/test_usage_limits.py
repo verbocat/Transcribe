@@ -410,9 +410,13 @@ def test_fix_purpose_cannot_discount_a_whole_track(main_app, monkeypatch):
     many = {"events": [{"start_time": i * 5, "end_time": i * 5 + 0.5, "text": "hi"} for i in range(100)],
             "source_lang": "hi", "target_langs": ["en"], "purpose": "fix"}
     assert client.post("/api/centroid/translate", json=few, headers=headers).status_code == 200
-    assert _state(uid)["translate_used_ms"] == 6_000          # only the three lines' time
+    assert _state(uid)["translate_used_ms"] == 6_000          # only the three lines' time (never paid for, so not free)
     assert client.post("/api/centroid/translate", json=many, headers=headers).status_code == 200
     assert _state(uid)["translate_used_ms"] >= 6_000 + 495_000  # a 100-line "fix" is billed up to the last subtitle's end
+    srt = {"srt": "1\n00:00:00,000 --> 00:10:00,000\nhi\n", "events": [], "source_lang": "hi", "target_langs": ["en"], "purpose": "fix"}
+    before = _state(uid)["translate_used_ms"]
+    assert client.post("/api/centroid/translate", json=srt, headers=headers).status_code == 200
+    assert _state(uid)["translate_used_ms"] >= before + 600_000  # a whole SRT sent as a "fix" is full price
 
 
 # ---- one shared pool -----------------------------------------------------------------------------------

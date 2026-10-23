@@ -172,6 +172,7 @@ Some older modules (`gemini_subtitle_generator.py`, `gemini_subtitle_structurer.
    * `ALLOWED_ORIGINS`: extra comma-separated CORS origins. Localhost, `*.verbolabs.com` and `transcribe.verbolabs.com` are always allowed; `ALLOWED_ORIGIN_REGEX` replaces the default origin pattern.
    * `ENABLE_SHOT_DETECTION`: shot detection is on by default locally but **off when `PORT` or `RENDER` is set** (treated as a cloud host). Set `ENABLE_SHOT_DETECTION=true` to force it on.
    * `CENTROID_TIMEOUT_SEC`: Centroid request timeout, default 600.
+   * `SIGNUP_DEFAULT_MINUTES`: minutes a self-registered account starts with, default `0` (`unlimited` restores the old behaviour). Accounts created from the admin panel use the limit chosen there.
 
 4. Start the API:
 

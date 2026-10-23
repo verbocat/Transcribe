@@ -61,7 +61,34 @@ def test_without_media_the_subtitle_timeline_is_billed(main_app, monkeypatch):
     assert _state(uid)["translate_used_ms"] == 190_000
 
 
-def test_qc_fix_bills_only_the_lines_it_redoes(main_app, monkeypatch):
+def _jobs(uid):
+    db = SessionLocal()
+    try:
+        return db.query(UsageReservation).filter(UsageReservation.user_id == uid).count()
+    finally:
+        db.close()
+
+
+def test_qc_fix_of_paid_lines_is_free_and_not_logged(main_app, monkeypatch):
+    _fake_centroid(monkeypatch)
+    client = TestClient(main_app.app)
+    uid, email = _make_user(hours=1)
+    headers = _login(client, email)
+    track = [{"start_time": a, "end_time": a + 2, "text": f"line {a}"} for a in range(0, 60, 3)]
+    assert client.post("/api/centroid/translate", json={"events": track, "source_lang": "hi", "target_langs": ["en"]},
+                       headers=headers).status_code == 200
+    paid, jobs = _state(uid)["translate_used_ms"], _jobs(uid)
+    fix = {"events": track[:2], "source_lang": "hi", "target_langs": ["en"], "purpose": "fix"}
+    assert client.post("/api/centroid/translate", json=fix, headers=headers).status_code == 200
+    assert _state(uid)["translate_used_ms"] == paid  # free
+    assert _jobs(uid) == jobs                         # no job, no ledger entry
+    # the same lines into a language that was never paid for are billed by their time
+    fix["target_langs"] = ["ta"]
+    assert client.post("/api/centroid/translate", json=fix, headers=headers).status_code == 200
+    assert _state(uid)["translate_used_ms"] == paid + 4_000
+
+
+def test_qc_fix_of_unpaid_lines_bills_only_their_time(main_app, monkeypatch):
     _fake_centroid(monkeypatch)
     client = TestClient(main_app.app)
     uid, email = _make_user(hours=1)
@@ -70,6 +97,18 @@ def test_qc_fix_bills_only_the_lines_it_redoes(main_app, monkeypatch):
     assert client.post("/api/centroid/translate", json=body, headers=headers).status_code == 200
     assert _state(uid)["translate_used_ms"] == 5_000
     assert _last_ref(uid).startswith("QC fix · 2 lines")
+
+
+def test_a_track_split_into_qc_fixes_is_not_free(main_app, monkeypatch):
+    _fake_centroid(monkeypatch)
+    client = TestClient(main_app.app)
+    uid, email = _make_user(hours=0)
+    headers = _login(client, email)
+    track = [{"start_time": i * 2, "end_time": i * 2 + 1.9, "text": f"never translated {i}"} for i in range(300)]
+    for n in range(0, 300, 60):
+        r = client.post("/api/centroid/translate", headers=headers,
+                        json={"events": track[n:n + 60], "source_lang": "hi", "target_langs": ["en"], "purpose": "fix"})
+        assert r.status_code == 402
 
 
 def test_missing_media_id_falls_back_to_the_media_the_user_last_transcribed(main_app, tmp_path, monkeypatch):

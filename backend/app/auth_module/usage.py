@@ -73,6 +73,20 @@ def hours_to_ms(hours: Optional[float]) -> Optional[int]:
     return int(round(h * MS_PER_HOUR))
 
 
+def signup_limit_ms() -> Optional[int]:
+    """Hours pool of an account created through public sign-up. SIGNUP_DEFAULT_MINUTES (default 0): a new account can
+    sign in but cannot spend anything until an admin gives it minutes. "unlimited" restores the old behaviour.
+    Accounts an admin creates get the limit chosen in the admin panel instead."""
+    import os
+    raw = os.getenv("SIGNUP_DEFAULT_MINUTES", "0").strip().lower()
+    if raw == "unlimited":
+        return None
+    try:
+        return max(0, int(round(float(raw) * 60_000)))
+    except ValueError:
+        return 0
+
+
 def _h(ms: int) -> float:
     return round(ms / MS_PER_HOUR, 4)
 
