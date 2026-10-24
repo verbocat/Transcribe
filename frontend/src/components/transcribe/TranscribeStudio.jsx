@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { CueLangContext } from '../../utils/rtl';
 import './transcribe.css';
 import TopBar from './TopBar';
 import TranscribeRail from './TranscribeRail';
@@ -323,7 +324,7 @@ export default function TranscribeStudio(p) {
             onPlaySegment={p.onPlaySegment} onStopSegment={p.onStopSegment}
             onLint={p.onLint} onSplit={p.onSplit} onMerge={p.onMerge} onAdd={p.onAdd}
             onOpenSrtPreview={p.onOpenSrtPreview}
-            translation={translation} viewMode={listView} onViewMode={setListView}
+            translation={translation} sourceCode={detectedCode} viewMode={listView} onViewMode={setListView}
             trackCodes={trackCodes} sourceLabel={p.detectedLanguage || p.language} onSelectTrack={setActiveTrack} onTranslateMore={openTranslate}
           />
           </div>
@@ -369,7 +370,8 @@ export default function TranscribeStudio(p) {
             ? { height: 0, overflow: 'hidden', visibility: 'hidden' }
             : { background: 'var(--ts-panel)', borderTop: '1px solid var(--ts-line)', height: layout.timelineH ? `min(${layout.timelineH}px, 60vh)` : '42vh', minHeight: layout.timelineH ? undefined : 310, maxHeight: '75vh', ...(cards ? { margin: `0 ${layout.gap}px ${layout.gap}px`, borderRadius: layout.radius, border: '1px solid var(--ts-line)', overflow: 'hidden' } : {}) }}
         >
-          <TranscribeTimeline
+          <CueLangContext.Provider value={activeTrack || detectedCode}>
+            <TranscribeTimeline
             audioUrl={p.audioUrl}
             videoUrl={p.videoUrl}
             restoredPeaks={p.restoredPeaks}
@@ -391,6 +393,7 @@ export default function TranscribeStudio(p) {
             onTimeUpdate={(t) => mediaBus.emit({ time: t })}
             onPlayStateChange={(playing) => mediaBus.emit({ playing })}
           />
+          </CueLangContext.Provider>
         </footer>
       )}
 

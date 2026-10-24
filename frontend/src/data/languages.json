@@ -1,5 +1,11 @@
 [
  {
+  "name": "Arabic",
+  "translate": "ar",
+  "scribe": "ara",
+  "native": null
+ },
+ {
   "name": "Assamese",
   "translate": "as",
   "scribe": "asm",
@@ -88,6 +94,12 @@
   "translate": "gu",
   "scribe": "guj",
   "native": "ગુજરાતી"
+ },
+ {
+  "name": "Hebrew",
+  "translate": "he",
+  "scribe": "heb",
+  "native": null
  },
  {
   "name": "Hindi",
@@ -192,6 +204,18 @@
   "native": null
  },
  {
+  "name": "Pashto",
+  "translate": "ps",
+  "scribe": "pus",
+  "native": null
+ },
+ {
+  "name": "Persian",
+  "translate": "fa",
+  "scribe": "fas",
+  "native": null
+ },
+ {
   "name": "Polish",
   "translate": "pl",
   "scribe": "pol",
@@ -282,9 +306,27 @@
   "native": null
  },
  {
+  "name": "Urdu",
+  "translate": "ur",
+  "scribe": "urd",
+  "native": null
+ },
+ {
+  "name": "Uyghur",
+  "translate": "ug",
+  "scribe": null,
+  "native": null
+ },
+ {
   "name": "Vietnamese",
   "translate": "vi",
   "scribe": "vie",
+  "native": null
+ },
+ {
+  "name": "Yiddish",
+  "translate": "yi",
+  "scribe": null,
   "native": null
  }
 ]

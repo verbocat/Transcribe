@@ -232,6 +232,9 @@ select.ts-field { padding-right: 4px; }
 .ts-text::placeholder { color: var(--ts-faint); }
 .ts-translation { border-left-color: var(--ts-accent); background: rgba(var(--ts-accent-rgb), 0.06); border-radius: 0 6px 6px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 
+/* Right-to-left languages: the translation bar moves to the right edge (dir and alignment come from the element) */
+.ts-translation[dir='rtl'] { border-left-color: transparent; border-right: 2px solid var(--ts-accent); border-radius: 6px 0 0 6px; }
+
 .ts-time {
   width: 62px; height: 26px; padding: 0 6px; border-radius: var(--kt-r1); border: 1px solid var(--ts-line);
   background: var(--ts-panel); color: var(--ts-text); text-align: center; font-size: 12px;

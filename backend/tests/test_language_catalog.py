@@ -30,3 +30,22 @@ def test_guess_source_lang():
     assert guess_source_lang(["வணக்கம்"]) == "ta"
     assert guess_source_lang(["hello there"]) == "en"
     assert guess_source_lang(["hello"], "fr") == "fr"
+
+
+def test_rtl_languages_are_offered_and_translatable():
+    names = {n: (t, s) for n, t, s in CATALOG}
+    for name, code in [("Arabic", "ar"), ("Hebrew", "he"), ("Persian", "fa"), ("Urdu", "ur"), ("Pashto", "ps"), ("Uyghur", "ug"), ("Yiddish", "yi")]:
+        assert names[name][0] == code, name
+
+
+def test_guess_source_lang_reads_rtl_scripts():
+    assert guess_source_lang(["مرحبا بالعالم"]) == "ar"
+    assert guess_source_lang(["שלום עולם"]) == "he"
+
+
+def test_ttml_marks_only_rtl_languages():
+    from app.export_service import export_netflix_ttml
+    ev = [{"start_time": 0, "end_time": 1, "text": "مرحبا"}]
+    assert 'tts:direction="rtl"' in export_netflix_ttml(ev, "ar")
+    assert 'tts:direction="rtl"' in export_netflix_ttml(ev, "ur")
+    assert "tts:direction" not in export_netflix_ttml(ev, "en")

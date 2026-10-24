@@ -29,6 +29,7 @@ import { useStudioLayout, BUILTIN_PRESETS } from './layout/layoutModel';
 import StudioMenuBar from './StudioMenuBar';
 import LanguageTracks from './LanguageTracks';
 import { langName } from './languages';
+import { CueLangContext } from '../../utils/rtl';
 import { SUBTITLE_SOURCE_LANGUAGES, AUTO_DETECT, engineLanguage, spokenVariantCode, translateCodeForName } from '../../data/languageCatalog';
 import { ShiftTimingsDialog, GoToDialog, FindReplaceDialog } from './ToolDialogs';
 import { Button, IconButton, Segmented } from './ui/controls';
@@ -478,7 +479,7 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
   const [language, setLanguage] = useState(() => {
     try {
       const saved = localStorage.getItem('karya_sub_language');
-      // RTL languages were removed from the tool; a saved one falls back to English
+      // Rule-book language: no RTL rule books exist, so a saved RTL code falls back to English (RTL display follows the cue language instead)
       return (saved && saved !== 'hi' && !['ar', 'he', 'ur', 'fa', 'ps', 'sd', 'ku'].includes(saved)) ? saved : 'en';
     } catch (_) { return 'en'; }
   });
@@ -2976,7 +2977,11 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
     </>
   );
 
+  // Language of the cues on screen: the active translation track, else the spoken language (empty = judge by the text)
+  const cueLang = activeTrack || (spokenLang !== AUTO_DETECT ? translateCodeForName(engineLanguage(spokenLang)) : null);
+
   return (
+    <CueLangContext.Provider value={cueLang}>
     <div className={`subtitle-studio h-screen w-screen overflow-hidden flex flex-col select-none animate-studio-entrance bg-[var(--ss-bg)] text-[var(--ss-text)]`}>
       {/* Hidden File Upload Inputs */}
       <input
@@ -3698,5 +3703,6 @@ export default function SubtitleApp({ onBackToHome, user, onLogout, onOpenLogout
         description="Are you sure you want to reload? Any active AI subtitle streaming, acoustic audio syncing, or unsaved draft changes will be interrupted."
       />
     </div>
+    </CueLangContext.Provider>
   );
 }

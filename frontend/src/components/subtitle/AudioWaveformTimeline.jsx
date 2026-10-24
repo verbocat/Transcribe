@@ -2,6 +2,7 @@ import { subscribePlayhead, publishPlayhead, getPlayhead } from '../../utils/pla
 import { usePlayheadSelector } from '../../utils/usePlayheadSelector';
 import { themeColor, withAlpha } from '../../theme/themeEngine';
 import { stripFormatting } from './formatTags';
+import { useCueLang, cueDirProps } from '../../utils/rtl';
 import React, { useRef, useState, useEffect, useLayoutEffect, useCallback, useMemo } from 'react';
 import {
   ZoomIn, ZoomOut, Volume2, Split, AlertCircle,
@@ -59,6 +60,7 @@ const TimelineSubtitleBlock = React.memo(function TimelineSubtitleBlock({
 
   const dur    = Math.max(0.1, end - start);
   const text   = event.text || '';
+  const dirProps = cueDirProps(useCueLang(), text);
   const rawLen = stripFormatting(text).trim().length;
   const cps    = rawLen / dur;
   const maxCpl = Math.max(...stripFormatting(text).split('\n').map(l => l.trim().length), 0);
@@ -106,7 +108,7 @@ const TimelineSubtitleBlock = React.memo(function TimelineSubtitleBlock({
         className="flex-1 px-1.5 flex flex-col justify-center overflow-hidden cursor-grab active:cursor-grabbing min-w-0"
         style={{ pointerEvents: 'auto' }}
       >
-        <span className="ss-script text-[12px] font-medium leading-tight truncate select-none">
+        <span {...dirProps} className="ss-script text-[12px] font-medium leading-tight truncate select-none">
           {hideText ? '' : (text ? stripFormatting(text).replace(/\n/g, ' ') : `#${id}`)}
         </span>
       </div>

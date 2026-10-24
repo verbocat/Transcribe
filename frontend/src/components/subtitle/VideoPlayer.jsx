@@ -7,6 +7,7 @@ import {
   ArrowUpDown, Camera, ChevronDown, Crop, Layers, Sparkles
 } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
+import { useCueLang, cueDir } from '../../utils/rtl';
 import { stripFormatting, getAlignment, alignmentParts, formattedRuns } from './formatTags';
 
 
@@ -74,6 +75,7 @@ export default function VideoPlayer({
   const [subtitlePosition, setSubtitlePosition] = useState('bottom'); // 'bottom' | 'top'
   const [subtitleFontSize, setSubtitleFontSize] = useState(24); // px relative
 
+  const cueLang = useCueLang();
   const [hoverTime, setHoverTime] = useState(null);
   const [hoverPosition, setHoverPosition] = useState(0);
 
@@ -772,7 +774,7 @@ export default function VideoPlayer({
               } ${horizontal === 'left' ? 'items-start' : horizontal === 'right' ? 'items-end' : 'items-center'}`}
             >
               {stripFormatting(text).trim() && (
-                <div className={`ss-script bg-black/70 text-white px-3 py-1 rounded-md text-[clamp(14px,1.6vw,22px)] font-medium max-w-[85%] leading-snug whitespace-pre-line [text-shadow:0_1px_2px_rgba(0,0,0,0.8)] ${
+                <div dir={cueDir(cueLang, text)} className={`ss-script bg-black/70 text-white px-3 py-1 rounded-md text-[clamp(14px,1.6vw,22px)] font-medium max-w-[85%] leading-snug whitespace-pre-line [text-shadow:0_1px_2px_rgba(0,0,0,0.8)] ${
                   horizontal === 'left' ? 'text-left' : horizontal === 'right' ? 'text-right' : 'text-center'
                 }`}>
                   {formattedRuns(text).map((r, i) => (

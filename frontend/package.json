@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "oxlint",
-    "test": "node --test src/components/subtitle/qcSafe.test.mjs src/components/subtitle/qcFixes.test.mjs src/components/subtitle/draftStorage.test.mjs src/components/transcribe/draftStore.test.mjs src/components/dubbing/editor/editModel.test.mjs src/components/dubbing/editor/audioModel.test.mjs src/components/dubbing/editor/videoModel.test.mjs src/components/linguist/reviewModel.test.mjs",
+    "test": "node --test src/utils/rtl.test.mjs src/components/subtitle/qcSafe.test.mjs src/components/subtitle/qcFixes.test.mjs src/components/subtitle/draftStorage.test.mjs src/components/transcribe/draftStore.test.mjs src/components/dubbing/editor/editModel.test.mjs src/components/dubbing/editor/audioModel.test.mjs src/components/dubbing/editor/videoModel.test.mjs src/components/linguist/reviewModel.test.mjs",
     "preview": "vite preview",
     "predev": "node scripts/copy-ffmpeg-core.mjs",
     "prebuild": "node scripts/copy-ffmpeg-core.mjs"

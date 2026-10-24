@@ -4,6 +4,7 @@
  * entirely inside the browser without requiring backend network calls.
  */
 
+import { isRtlLang } from './rtl';
 import { stripFormatting, getAlignment, alignmentParts } from '../components/subtitle/formatTags';
 
 const ALIGN_TAGS = /\{\\an[1-9]\}/g;
@@ -80,7 +81,7 @@ export function exportTtmlLocally(events, language = 'en') {
     `<tt xmlns="http://www.w3.org/ns/ttml" xmlns:tts="http://www.w3.org/ns/ttml#styling" xmlns:ttm="http://www.w3.org/ns/ttml#metadata" xmlns:ttp="http://www.w3.org/ns/ttml#parameter" xml:lang="${language}">`,
     '  <head>',
     '    <styling>',
-    '      <style xml:id="default" tts:color="white" tts:fontFamily="sansSerif" tts:fontSize="100%" tts:textAlign="center" tts:origin="10% 10%" tts:extent="80% 80%"/>',
+    `      <style xml:id="default" tts:color="white" tts:fontFamily="sansSerif" tts:fontSize="100%" tts:textAlign="center"${isRtlLang(language) ? ' tts:direction="rtl" tts:unicodeBidi="embed"' : ''} tts:origin="10% 10%" tts:extent="80% 80%"/>`,
     '    </styling>',
     '    <layout>',
     '      <region xml:id="bottomCenter" style="default" tts:origin="10% 80%" tts:extent="80% 10%"/>',

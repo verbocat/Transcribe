@@ -59,7 +59,7 @@ function ramp(base) {
 }
 
 // ------------------------------------------------------------------ fonts
-const SCRIPT_FALLBACK = "'Noto Sans Devanagari', 'Noto Sans Bengali', 'Noto Sans Tamil', 'Noto Sans Telugu', 'Noto Sans Gujarati', 'Noto Sans Kannada'";
+const SCRIPT_FALLBACK = "'Noto Sans Devanagari', 'Noto Sans Bengali', 'Noto Sans Tamil', 'Noto Sans Telugu', 'Noto Sans Gujarati', 'Noto Sans Kannada', 'Noto Naskh Arabic', 'Noto Sans Hebrew'";
 export const FONT_CHOICES = {
   ui: ['IBM Plex Sans', 'Inter', 'Source Sans 3', 'Noto Sans', 'Mukta', 'System UI'],
   script: ['Noto Sans', 'Mukta', 'Noto Serif Devanagari', 'Source Sans 3', 'IBM Plex Sans', 'Inter', 'System UI'],

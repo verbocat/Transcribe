@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { stripFormatting, toggleWrap, getAlignment, setAlignment, alignmentParts, alignmentFromParts, formattedRuns } from './formatTags';
 import { langName } from './languages';
+import { useCueLang, cueDirProps } from '../../utils/rtl';
 import { getPlayhead } from '../../utils/playheadBus';
 import { usePlayheadSelector } from '../../utils/usePlayheadSelector';
 import { confirmDialog } from '../ui/feedback';
@@ -185,9 +186,11 @@ const SubtitleRow = memo(function SubtitleRow({
   ev, pos, isActive, isPlaying, isSelected, prevEnd, nextStart,
   cpsLimit, cplLimit, minDuration, maxDuration,
   availableSpeakers, focusOnActivate, actions,
-  sourceText,
+  sourceText, sourceLang,
 }) {
   const comparing = sourceText !== undefined;
+  const cueLang = useCueLang();
+  const dirProps = cueDirProps(cueLang, ev.text);
   const id = idOf(ev);
   const m = getEventMetrics(ev, cpsLimit, cplLimit, minDuration, maxDuration);
   // Only the selected row watches the playhead, and only re-renders when it crosses this cue's start or end
@@ -328,7 +331,7 @@ const SubtitleRow = memo(function SubtitleRow({
 
         {/* While a translation is shown, the original-language text sits in its own column, read-only */}
         {comparing && (
-          <div className="min-w-0 pt-px ss-script text-[13px] leading-[1.45] whitespace-pre-wrap break-words text-[var(--ss-muted)]">
+          <div {...cueDirProps(sourceLang, sourceText)} className="min-w-0 pt-px ss-script text-[13px] leading-[1.45] whitespace-pre-wrap break-words text-[var(--ss-muted)]">
             {sourceText === null ? <span className="italic text-slate-600">No original here</span> : (stripTags(sourceText) || <span className="italic text-slate-600">Empty</span>)}
           </div>
         )}
@@ -340,6 +343,7 @@ const SubtitleRow = memo(function SubtitleRow({
               ref={textareaRef}
               rows={1}
               value={ev.text || ''}
+              {...dirProps}
               onChange={(e) => actions.updateText(id, e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === 'Escape') e.currentTarget.blur();
@@ -360,6 +364,7 @@ const SubtitleRow = memo(function SubtitleRow({
               m.hasCplErr ? 'underline decoration-wavy decoration-rose-400/70 underline-offset-2' : ''
             }`}
             title="Click to edit"
+            {...dirProps}
           >
             {stripTags(ev.text) ? <FormattedText text={ev.text} /> : <span className="italic text-slate-600">Empty subtitle</span>}
           </div>
@@ -750,6 +755,7 @@ export default function SubtitleTablePanel({
                 focusOnActivate={focusOnActivate}
                 actions={actions}
                 sourceText={comparing ? sourceTextById.get(id) : undefined}
+                sourceLang={sourceLang}
               />
             );
           })

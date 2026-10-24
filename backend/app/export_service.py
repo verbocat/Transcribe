@@ -401,8 +401,17 @@ def export_netflix_vtt(events: list) -> str:
     return "\n".join(lines)
 
 
+RTL_LANGUAGE_CODES = {"ar", "he", "fa", "ur", "ps", "ug", "yi"}
+
+
+def is_rtl_language(language: str) -> bool:
+    """True for a right-to-left language code such as 'ar' or 'ar-sa'."""
+    return str(language or "").lower().replace("_", "-").split("-")[0] in RTL_LANGUAGE_CODES
+
+
 def export_netflix_ttml(events: list, language: str = "en") -> str:
-    """Generate Netflix TTML/DFXP format."""
+    """Generate Netflix TTML/DFXP format. Right-to-left languages get tts:direction="rtl"; SRT and VTT stay plain text
+    (no embedded direction marks), so the player's own bidi handling lays the line out right-to-left."""
     events = _prepare_sorted_events(events)
     def format_time(seconds: float) -> str:
         hrs, mins, secs, millis = _clock_parts(seconds)
@@ -413,7 +422,8 @@ def export_netflix_ttml(events: list, language: str = "en") -> str:
     xml.append('<tt xmlns="http://www.w3.org/ns/ttml" xmlns:tts="http://www.w3.org/ns/ttml#styling" xmlns:ttm="http://www.w3.org/ns/ttml#metadata" xmlns:ttp="http://www.w3.org/ns/ttml#parameter" xml:lang="' + language + '">')
     xml.append('  <head>')
     xml.append('    <styling>')
-    xml.append('      <style xml:id="default" tts:color="white" tts:fontFamily="sansSerif" tts:fontSize="100%" tts:textAlign="center" tts:origin="10% 10%" tts:extent="80% 80%"/>')
+    direction = ' tts:direction="rtl" tts:unicodeBidi="embed"' if is_rtl_language(language) else ""
+    xml.append(f'      <style xml:id="default" tts:color="white" tts:fontFamily="sansSerif" tts:fontSize="100%" tts:textAlign="center"{direction} tts:origin="10% 10%" tts:extent="80% 80%"/>')
     xml.append('    </styling>')
     xml.append('    <layout>')
     xml.append('      <region xml:id="bottomCenter" style="default" tts:origin="10% 80%" tts:extent="80% 10%"/>')
