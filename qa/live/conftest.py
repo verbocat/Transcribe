@@ -18,6 +18,8 @@ import requests
 
 from catalog import BY_ID
 
+pytest_plugins = ["ui_fixtures"]
+
 HERE = Path(__file__).parent
 
 

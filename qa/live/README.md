@@ -25,7 +25,13 @@ copy .env.live.example .env.live                      # then fill it in
 | Own data (opt-in) | `.venv/Scripts/python -m pytest -m owndata` |
 | Email (opt-in, sends 2 emails to the test inbox) | `.venv/Scripts/python -m pytest -m email` |
 | Paid (opt-in, spends minutes and API credit) | `.venv/Scripts/python -m pytest -m paid --html=reports/paid.html --self-contained-html` |
+| UI, free (shell, auth screens, account) | `.venv/Scripts/python -m pytest -m "ui and not paid" --html=reports/ui.html --self-contained-html` |
+| UI studios (opt-in, uploads the test clip) | `.venv/Scripts/python -m pytest -m "ui and paid" --html=reports/ui_studios.html --self-contained-html` |
 | Remove leftover test data | `.venv/Scripts/python cleanup_qa.py` |
+
+UI tests in `ui/` start signed in: the run's API session token is placed in the browser's
+localStorage (`ui_fixtures.py`), so the password is only sent once, by the API login. Set
+`LIVE_HEADED=1` to watch the browser.
 
 The default run (no `-m`) is read-only; `owndata`, `paid`, `email` and `exposure` run only when named.
 
