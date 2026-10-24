@@ -20,3 +20,25 @@ def test_metered_call_sites_are_awaited_correctly():
             if isinstance(n, ast.Call) and getattr(n.func, "attr", "") == "reserve_async" and id(n) not in awaited:
                 problems.append(f"{path.name}:{n.lineno} reserve_async() is not awaited")
     assert not problems, problems
+
+
+def test_centroid_post_sends_end_user(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    from app import centroid_client as cc
+    sent = {}
+
+    class FakeClient:
+        def __init__(self, *a, **k): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def post(self, url, json=None, headers=None):
+            sent.update(json)
+            return SimpleNamespace(status_code=200, json=lambda: {"ok": True})
+
+    monkeypatch.setattr(cc, "CENTROID_API_URL", "http://x")
+    monkeypatch.setattr(cc, "CENTROID_API_KEY", "k")
+    monkeypatch.setattr(cc.httpx, "AsyncClient", FakeClient)
+    cc.set_end_user(SimpleNamespace(id="u1", email="a@b.c", name="Asha"))
+    asyncio.run(cc.post("/subtitles/analyze", {"cues": []}))
+    assert sent["end_user"] == {"id": "u1", "email": "a@b.c", "name": "Asha"}

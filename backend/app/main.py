@@ -2534,6 +2534,8 @@ def _resolve_auto_source(body: dict, texts: list, payload: dict) -> None:
 
 @app.post("/api/centroid/translate")
 async def centroid_translate(payload: dict, current_user: User = Depends(get_current_user_from_token)):
+    from app import centroid_client as _cc
+    _cc.set_end_user(current_user)
     """Send SRT/events to Centroid and return translated SRT(s) per target language."""
     from app import centroid_client
     if not (payload.get("srt") or payload.get("cues") or payload.get("events")):
@@ -2653,6 +2655,8 @@ async def _retry_untranslated(data: dict, body: dict) -> None:
 
 @app.post("/api/centroid/analyze")
 async def centroid_analyze(payload: dict, current_user: User = Depends(get_current_user_from_token)):
+    from app import centroid_client as _cc
+    _cc.set_end_user(current_user)
     """Ask Centroid to read the whole script and propose context, characters and a name glossary."""
     _ai_rate_limit(current_user.id)
     access_policy.require(current_user, "can_ai_optimize")
@@ -2690,6 +2694,8 @@ def _qc_prepare(payload: dict):
 
 @app.post("/api/centroid/qc")
 async def centroid_qc(payload: dict, current_user: User = Depends(get_current_user_from_token)):
+    from app import centroid_client as _cc
+    _cc.set_end_user(current_user)
     """
     Subtitle QC for source/target cue pairs: the AI review merged with local rule checks.
 

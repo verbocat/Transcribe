@@ -1,5 +1,6 @@
 """Thin async client for the Centroid public API (subtitle translation + linguistic QC)."""
-from typing import Any, Dict, List
+import contextvars
+from typing import Any, Dict, List, Optional
 
 import httpx
 from fastapi import HTTPException
@@ -23,8 +24,19 @@ def _headers() -> Dict[str, str]:
     return {"x-api-key": CENTROID_API_KEY, "Content-Type": "application/json"}
 
 
+# Who in Noun the current request is for; post() sends it so Centroid's admin usage can be shown per person.
+_end_user: "contextvars.ContextVar[Optional[Dict[str, str]]]" = contextvars.ContextVar("centroid_end_user", default=None)
+
+
+def set_end_user(user: Any) -> None:
+    _end_user.set({"id": str(user.id), "email": user.email, "name": user.name} if user is not None else None)
+
+
 async def post(path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     _require_config()
+    who = _end_user.get()
+    if who and isinstance(payload, dict) and "end_user" not in payload:
+        payload = {**payload, "end_user": who}
     try:
         async with httpx.AsyncClient(timeout=CENTROID_TIMEOUT_SEC) as client:
             res = await client.post(f"{CENTROID_API_URL}/api/v1{path}", json=payload, headers=_headers())
