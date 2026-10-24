@@ -78,6 +78,38 @@ def signed_in_context(browser, token, user):
     return ctx, pg
 
 
+ADMIN_EMAIL = os.environ.get("LIVE_ADMIN_EMAIL", "").strip()
+ADMIN_PASSWORD = os.environ.get("LIVE_ADMIN_PASSWORD", "").strip()
+# The built-in super admin is a real person's account: the suite refuses to sign in with it.
+PERSONAL_ADMINS = {"divyanshusinghchouhan@verbolabs.com"}
+
+
+@pytest.fixture(scope="session")
+def admin_session():
+    """Signs a dedicated admin TEST account in once (API), yields (token, user), signs out at the end."""
+    import requests
+    from conftest import API_BASE, detail
+    if not (ADMIN_EMAIL and ADMIN_PASSWORD):
+        pytest.skip("LIVE_ADMIN_EMAIL / LIVE_ADMIN_PASSWORD not set: admin UI tests skipped")
+    if ADMIN_EMAIL.lower() in PERSONAL_ADMINS:
+        pytest.exit("LIVE_ADMIN_EMAIL is a personal super-admin account. Use a dedicated admin test account.", returncode=4)
+    r = requests.post(f"{API_BASE}/api/auth/login", json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD}, timeout=30)
+    if r.status_code != 200:
+        pytest.exit(f"Admin test-account login failed (HTTP {r.status_code}: {detail(r)}); not retrying.", returncode=3)
+    data = r.json()
+    if not data["user"].get("is_admin"):
+        pytest.skip("LIVE_ADMIN_EMAIL is not an admin on this server (add it to ADMIN_EMAILS)")
+    yield data["token"], data["user"]
+    requests.post(f"{API_BASE}/api/auth/logout", headers={"Authorization": f"Bearer {data['token']}"}, timeout=30)
+
+
+@pytest.fixture
+def admin_page(browser, admin_session):
+    ctx, pg = signed_in_context(browser, *admin_session)
+    yield pg
+    ctx.close()
+
+
 @pytest.fixture
 def page(browser, client, session_user):
     """A signed-in page using the run's API session token; nothing is typed into the login form."""

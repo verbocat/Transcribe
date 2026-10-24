@@ -26,6 +26,7 @@ copy .env.live.example .env.live                      # then fill it in
 | Email (opt-in, sends 2 emails to the test inbox) | `.venv/Scripts/python -m pytest -m email` |
 | Paid (opt-in, spends minutes and API credit) | `.venv/Scripts/python -m pytest -m paid --html=reports/paid.html --self-contained-html` |
 | UI, free (shell, auth screens, account) | `.venv/Scripts/python -m pytest -m "ui and not paid" --html=reports/ui.html --self-contained-html` |
+| UI admin (needs LIVE_ADMIN_* for a test admin account) | `.venv/Scripts/python -m pytest -m ui ui/test_ui_40_admin.py --html=reports/ui_admin.html --self-contained-html` |
 | UI studios (opt-in, uploads the test clip) | `.venv/Scripts/python -m pytest -m "ui and paid" --html=reports/ui_studios.html --self-contained-html` |
 | Remove leftover test data | `.venv/Scripts/python cleanup_qa.py` |
 

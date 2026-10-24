@@ -50,14 +50,14 @@ def test_frontend_loads(page):
 
 def test_signed_out_home(page):
     page.goto(UI_BASE, wait_until="networkidle")
-    assert page.get_by_role("button", name="Sign in", exact=True).is_visible(), "'Sign in' button not visible"
+    assert page.get_by_role("button", name="Sign in", exact=True).first.is_visible(), "'Sign in' button not visible"
     for studio in ("Transcribe Studio", "Subtitle Studio", "Dubbing Studio"):
         assert page.get_by_role("button", name=studio).is_visible(), f"'{studio}' card not visible"
 
 
 def test_sign_in_button_opens_login(page):
     page.goto(UI_BASE, wait_until="networkidle")
-    page.get_by_role("button", name="Sign in", exact=True).click()
+    page.get_by_role("button", name="Sign in", exact=True).first.click()
     page.wait_for_url("**/login", timeout=10000)
     assert page.locator(EMAIL_INPUT).first.is_visible(), "email field not visible"
     assert page.locator(PASSWORD_INPUT).first.is_visible(), "password field not visible"

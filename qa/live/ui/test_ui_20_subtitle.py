@@ -24,6 +24,11 @@ def _rows(pg):
     return pg.locator("[data-event-id]")
 
 
+def _cards(pg):
+    # each card shows its text in a "Click to edit" cell; the text box only appears after a click
+    return pg.locator('[data-event-id] [title="Click to edit"]')
+
+
 def test_open_studio(st):
     goto(st, "/subtitle")
     assert shown(st.get_by_title("Open a video or audio file")), "media picker missing"
@@ -51,25 +56,34 @@ def test_generate(st):
     st.get_by_role("button", name="Generate").first.click()
     assert shown(st.locator('[role="progressbar"]'), 30000), "no progress shown after Generate"
     assert shown(_rows(st), SLOW), "no subtitle cards appeared"
-    text = " ".join(st.locator('textarea[aria-label="Subtitle text"]').evaluate_all("els => els.map(e => e.value)")).lower()
+    text = " ".join(_cards(st).all_inner_texts()).lower()
     assert re.search(r"quality|weather|noun|listening", text), f"subtitles do not match the clip: {text[:120]!r}"
     no_js_errors(st)
 
 
 def test_edit_card_and_undo(st):
-    box = st.locator('textarea[aria-label="Subtitle text"]').first
-    before = box.input_value()
+    rid = _rows(st).first.get_attribute("data-event-id")
+    row = st.locator(f'[data-event-id="{rid}"]')
+    cell = row.locator('[title="Click to edit"]')
+    before = cell.inner_text().strip()
+    cell.click()
+    box = row.locator("textarea")
+    assert shown(box), "clicking a card did not open its text box"
+    assert box.input_value().strip() == before, "text box does not hold the card text"
     box.click()
     st.keyboard.press("Control+End")
     st.keyboard.type(" QA", delay=120)
-    st.get_by_placeholder(re.compile("Search text")).click()
-    assert box.input_value() == before + " QA", f"typed text landed wrong: {box.input_value()[-30:]!r}"
-    undo = st.get_by_role("button", name="Undo (Ctrl+Z)")
-    if undo.is_disabled():
-        box.fill(before)
+    # a selected card stays in edit mode and saves every keystroke (updateText)
+    st.wait_for_timeout(500)
+    after = box.input_value().strip()
+    assert after == before + " QA", f"edit did not stick: ...{after[-30:]!r}"
+    undo = st.locator('button[aria-label="Undo (Ctrl+Z)"]:not([disabled])')  # header and toolbar both have one
+    if not shown(undo, 5000):
         raise AssertionError("Undo stays disabled after editing a subtitle")
-    undo.click()
-    assert st.locator('textarea[aria-label="Subtitle text"]').first.input_value() == before, "Undo did not restore the card"
+    undo.first.click()
+    st.wait_for_timeout(800)
+    restored = (box.input_value() if box.is_visible() else cell.inner_text()).strip()
+    assert restored == before, f"Undo did not restore the card: {restored[-30:]!r}"
 
 
 def test_search(st):
@@ -100,7 +114,7 @@ def test_settings_modal(st):
 
 
 def test_export_srt(st):
-    st.get_by_title(re.compile("Export subtitles")).first.click()
+    st.get_by_role("button", name="Export", exact=True).first.click()
     dlg = st.get_by_role("dialog", name="Export subtitles")
     assert shown(dlg), "export dialog did not open"
     for fmt in ("TTML", "SubRip", "WebVTT", "Plain Text"):
